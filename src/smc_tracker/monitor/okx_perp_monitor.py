@@ -55,6 +55,10 @@ class OKXPerpMonitor:
         self._latest: dict[str, dict[str, Any]] = {}
         # inst_id → 上次用于比较的 OI(币数)，算异动
         self._prev_oi: dict[str, float] = {}
+        # coin → 强平流向累计名义 USD（long=多头被平=抛压级联；short=空头被平=逼空）
+        self._liq: dict[str, dict[str, float]] = {}
+        # 待落库强平缓冲：row = (coin, pos_side, side, notional_usd, bk_px, ts)
+        self._liq_buffer: list[tuple] = []
         # 统计
         self.trades_seen = 0
         self.surges_seen = 0
@@ -67,7 +71,14 @@ class OKXPerpMonitor:
             self.ws.subscribe(OKXSub("open-interest", inst), self._on_oi)
             self.ws.subscribe(OKXSub("tickers", inst), self._on_ticker)
             self.ws.subscribe(OKXSub("funding-rate", inst), self._on_funding)
-        log.info("OKXPerpMonitor 已挂载 %d 个永续（trades+OI+tickers+funding-rate）", len(self.inst_ids))
+        # 强平 firehose：全市场 SWAP 强平流（按 instType 订一次，不在 inst 循环里），
+        # 推送 instId 自带，回调内按 inst_to_coin 过滤非监控币。
+        self.ws.subscribe(
+            OKXSub("liquidation-orders", inst_id="", inst_type="SWAP"),
+            self._on_liquidation,
+        )
+        log.info("OKXPerpMonitor 已挂载 %d 个永续（trades+OI+tickers+funding-rate）+ 全市场强平流",
+                 len(self.inst_ids))
 
     # ---- WS 回调 ----
     def _on_trades(self, arg: dict, data: list, recv_ns: int) -> None:
@@ -120,6 +131,35 @@ class OKXPerpMonitor:
                             log.exception("on_surge 回调出错")
             self._prev_oi[inst] = oi_ccy
 
+    def _on_liquidation(self, arg: dict, data: list, recv_ns: int) -> None:
+        """liquidation-orders firehose → per-coin 强平流向累计 + 缓冲落库。
+
+        语义：posSide==long(side=sell)=多头被强平=强制抛压级联（领先信号）；
+              posSide==short(side=buy)=空头被强平=逼空。
+        名义 USD = sz张 × ctVal × bkPx（与 trades 口径一致）。instId 不在 inst_to_coin 时跳过。
+        """
+        for d in data:
+            inst = d.get("instId", "")
+            coin = self.inst_to_coin.get(inst)
+            if coin is None:
+                continue  # 非监控币，过滤
+            ctv = self.ct_val.get(inst, 1.0)
+            for det in d.get("details") or []:
+                pos_side = det.get("posSide", "")
+                side = det.get("side", "")
+                sz = _f(det.get("sz"))
+                bk_px = _f(det.get("bkPx"))
+                if sz <= 0 or bk_px <= 0:
+                    continue
+                notional = sz * ctv * bk_px
+                ts = _i(det.get("ts"))
+                agg = self._liq.setdefault(coin, {"long_liq_usd": 0.0, "short_liq_usd": 0.0})
+                if pos_side == "long":
+                    agg["long_liq_usd"] += notional
+                elif pos_side == "short":
+                    agg["short_liq_usd"] += notional
+                self._liq_buffer.append((coin, pos_side, side, notional, bk_px, ts))
+
     def _on_funding(self, arg: dict, data: list, recv_ns: int) -> None:
         """funding-rate 推送 → 更新快照 funding 字段（字符串 fundingRate → float）。"""
         inst = arg.get("instId", "")
@@ -145,7 +185,11 @@ class OKXPerpMonitor:
         return 0
 
     def flush(self) -> int:
-        """缓冲批量落库，清空缓冲；返回落库行数。store=None 时仅清空缓冲。"""
+        """缓冲批量落库，清空缓冲；返回 okx_perp 落库行数。store=None 时仅清空缓冲。
+
+        附带 flush 强平缓冲（_liq_buffer → insert_okx_liquidations）。
+        """
+        self.flush_liquidations()
         if not self._buffer:
             return 0
         rows = self._buffer
@@ -154,12 +198,26 @@ class OKXPerpMonitor:
             self.store.insert_okx_perp(rows)
         return len(rows)
 
+    def flush_liquidations(self) -> int:
+        """强平缓冲批量落库，清空缓冲；返回落库行数。store=None 时仅清空缓冲。"""
+        if not self._liq_buffer:
+            return 0
+        rows = self._liq_buffer
+        self._liq_buffer = []
+        if self.store is not None:
+            self.store.insert_okx_liquidations(rows)
+        return len(rows)
+
     # ---- 查询 ----
     def net_flow(self, coin: str) -> float:
         return self._net_flow.get(coin, 0.0)
 
     def all_net_flows(self) -> dict[str, float]:
         return dict(self._net_flow)
+
+    def all_liquidations(self) -> dict[str, dict[str, float]]:
+        """返回 per-coin 强平流向累计拷贝：{coin: {long_liq_usd, short_liq_usd}}。"""
+        return {coin: dict(agg) for coin, agg in self._liq.items()}
 
     def latest(self, inst_id: str) -> dict[str, Any] | None:
         return self._latest.get(inst_id)

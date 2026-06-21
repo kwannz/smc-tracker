@@ -33,10 +33,17 @@ WS_URL = "wss://ws.okx.com:8443/ws/v5/public"
 @dataclass(frozen=True, slots=True)
 class OKXSub:
     channel: str                       # "trades" / "open-interest" / "mark-price" / "tickers" ...
-    inst_id: str                       # "BTC-USDT-SWAP"
+    inst_id: str                       # "BTC-USDT-SWAP"（单 inst 订阅）
+    inst_type: str = ""                # "SWAP" 等（firehose 全市场订阅，如 liquidation-orders）
 
     def to_arg(self) -> dict[str, str]:
-        return {"channel": self.channel, "instId": self.inst_id}
+        # inst_id 非空 → 单 inst 订阅 {channel, instId}（现状不变，向后兼容）；
+        # inst_id 为空且 inst_type 非空 → 全市场订阅 {channel, instType}（强平等 firehose 频道）。
+        if self.inst_id:
+            return {"channel": self.channel, "instId": self.inst_id}
+        if self.inst_type:
+            return {"channel": self.channel, "instType": self.inst_type}
+        return {"channel": self.channel}
 
 
 class OKXWSClient:

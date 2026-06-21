@@ -54,6 +54,16 @@ CREATE TABLE IF NOT EXISTS okx_perp (
 );
 CREATE INDEX IF NOT EXISTS ix_okx_perp_coin_ts ON okx_perp(coin, ts);
 
+CREATE TABLE IF NOT EXISTS okx_liquidations (
+    ts           INTEGER NOT NULL,
+    coin         TEXT    NOT NULL,
+    pos_side     TEXT    NOT NULL,   -- 'long'(多头被平=抛压级联) / 'short'(空头被平=逼空)
+    side         TEXT    NOT NULL,   -- 'sell'(多头平) / 'buy'(空头平)
+    notional_usd REAL,
+    bk_px        REAL
+);
+CREATE INDEX IF NOT EXISTS ix_okx_liq_coin_ts ON okx_liquidations(coin, ts);
+
 CREATE TABLE IF NOT EXISTS hl_meme_trades (
     coin       TEXT    NOT NULL,
     px         REAL    NOT NULL,
@@ -333,6 +343,21 @@ class Store:
         return self.conn.execute(
             "SELECT inst_id,coin,oi_ccy,oi_usd,mark_px,funding,net_flow,ts FROM okx_perp "
             "WHERE inst_id=? ORDER BY ts DESC LIMIT 1", (inst_id,)).fetchone()
+
+    # ---- OKX 强平 ----
+    def insert_okx_liquidations(self, rows: Iterable[tuple]) -> None:
+        """rows: (coin, pos_side, side, notional_usd, bk_px, ts)"""
+        self.conn.executemany(
+            "INSERT INTO okx_liquidations(coin,pos_side,side,notional_usd,bk_px,ts) "
+            "VALUES(?,?,?,?,?,?)", rows)
+
+    def recent_okx_liquidations(self, since_ms: int) -> list[tuple]:
+        """查询 since_ms 后所有强平行，按 ts ASC。
+        返回列：(ts, coin, pos_side, side, notional_usd, bk_px)。
+        """
+        return self.conn.execute(
+            "SELECT ts,coin,pos_side,side,notional_usd,bk_px FROM okx_liquidations "
+            "WHERE ts>=? ORDER BY ts ASC", (since_ms,)).fetchall()
 
     def oi_change(self, symbol: str, window_ms: int, now_ms: int) -> tuple | None:
         """返回 (最新oi, window 前最近一条 oi)，用于算 OI 变化。"""
