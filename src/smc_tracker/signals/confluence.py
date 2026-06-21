@@ -45,6 +45,8 @@ _SOURCES = [
     ("divergence", "背离", lambda d: "long" if d == "bullish" else "short"),
     # 前瞻是领先维度独立源(挂单意图先于成交)；direction 已是 long/short，直接透传
     ("flow_predictions", "前瞻", lambda d: d),
+    # OKX 资金费×净流向背离；direction 已归一为 long/short，直接透传
+    ("okx_signals", "OKX", lambda d: d),
 ]
 
 

@@ -237,12 +237,35 @@ async def run_okx_streaming(store: object, okx_cfg: object) -> None:
     monitor.attach()
 
     # 3. 周期 flush 落库 + WS 常驻（可被 cancel 打断）
+    import time  # noqa: PLC0415
+
     flush_interval: float = 5.0
+    # 去重：记录各 coin 上次落库的方向，方向不变则跳过（避免每 5s 重复刷）
+    last_sig: dict[str, str] = {}
     ws_task = asyncio.create_task(ws.run())
     try:
         while True:
             await asyncio.sleep(flush_interval)
             monitor.flush()
+            # 检测资金费×净流向背离并落库 okx_signals（仅方向变化时落库）
+            if store is not None and hasattr(store, "insert_okx_signal"):
+                divs = detect_divergences(
+                    monitor.all_latest(), dict(monitor.all_net_flows())
+                )
+                now_ms = int(time.time() * 1000)
+                for coin, sig in divs:
+                    direction = "long" if sig["direction"] == "bullish" else "short"
+                    if last_sig.get(coin) == direction:
+                        continue  # 方向未变，跳过去重
+                    last_sig[coin] = direction
+                    store.insert_okx_signal(
+                        now_ms,
+                        coin,
+                        direction,
+                        sig.get("kind", ""),
+                        float(sig.get("funding", 0.0)),
+                        float(sig.get("net_flow", 0.0)),
+                    )
     except asyncio.CancelledError:
         pass
     finally:

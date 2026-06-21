@@ -252,6 +252,16 @@ CREATE TABLE IF NOT EXISTS flow_predictions (
     book_imb  REAL                -- 订单簿失衡(挂单意图,先于成交)
 );
 CREATE INDEX IF NOT EXISTS ix_flowpred_coin_ts ON flow_predictions(coin, ts);
+
+CREATE TABLE IF NOT EXISTS okx_signals (
+    ts        INTEGER NOT NULL,
+    coin      TEXT    NOT NULL,
+    direction TEXT    NOT NULL,   -- 'long' / 'short'
+    kind      TEXT,               -- 'accumulation' / 'distribution'
+    funding   REAL,               -- OKX 资金费率（触发时快照）
+    net_flow  REAL                -- taker 净流向 USD
+);
+CREATE INDEX IF NOT EXISTS ix_okx_signals_coin_ts ON okx_signals(coin, ts);
 """
 
 
@@ -457,6 +467,31 @@ class Store:
         self.conn.execute(
             "INSERT INTO flow_predictions(ts,coin,direction,score,vel,accel,book_imb) "
             "VALUES(?,?,?,?,?,?,?)", row)
+
+    # ---- OKX 资金费×净流向背离信号 ----
+    def insert_okx_signal(
+        self,
+        ts: int,
+        coin: str,
+        direction: str,
+        kind: str,
+        funding: float,
+        net_flow: float,
+    ) -> None:
+        """落库 OKX 资金费×净流向背离信号。direction='long'|'short'。"""
+        self.conn.execute(
+            "INSERT INTO okx_signals(ts,coin,direction,kind,funding,net_flow) "
+            "VALUES(?,?,?,?,?,?)",
+            (ts, coin, direction, kind, funding, net_flow),
+        )
+
+    def recent_okx_signals(self, since_ms: int) -> list:
+        """查询 since_ms 后所有 OKX 信号行，按 ts ASC。"""
+        return self.conn.execute(
+            "SELECT ts,coin,direction,kind,funding,net_flow FROM okx_signals "
+            "WHERE ts>=? ORDER BY ts ASC",
+            (since_ms,),
+        ).fetchall()
 
     # ---- 聪明钱地址画像 ----
     def upsert_address_profile(self, p: dict[str, Any]) -> None:
