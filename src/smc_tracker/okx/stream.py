@@ -80,6 +80,22 @@ def detect_divergences(latest: dict, net_by_coin: dict) -> list[tuple[str, dict]
     return out
 
 
+def top_funding(latest: dict, n: int = 5) -> list[tuple[str, float]]:
+    """资金费拥挤榜：取各 inst 的 funding，按 abs 降序前 n（跳过缺失/0）。
+
+    funding 极值 = 杠杆方向拥挤（>0 多头付费拥挤 / <0 空头付费拥挤），潜在反转前瞻。
+    """
+    rows: list[tuple[str, float]] = []
+    for snap in latest.values():
+        coin = snap.get("coin", "")
+        fr = snap.get("funding")
+        if not coin or fr is None or fr == 0:
+            continue
+        rows.append((coin, float(fr)))
+    rows.sort(key=lambda kv: abs(kv[1]), reverse=True)
+    return rows[:n]
+
+
 async def run_stream(
     top_n: int = 10,
     secs: float = 15.0,
@@ -175,6 +191,14 @@ async def run_stream(
                    f"funding={sig['funding']*100:+.4f}% net=${sig['net_flow']:,.0f}")
             lines.append(row)
             print(row)
+
+    # 7. 资金费拥挤榜（杠杆方向拥挤 → 潜在反转前瞻）
+    crowd = top_funding(monitor.all_latest(), 5)
+    if crowd:
+        crowd_line = "funding 拥挤榜: " + " / ".join(
+            f"{coin} {fr*100:+.4f}%" for coin, fr in crowd)
+        lines.append(crowd_line)
+        print(crowd_line)
 
     return "\n".join(lines)
 
