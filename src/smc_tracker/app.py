@@ -292,10 +292,12 @@ class TradingSystem:
         print(f"\n{'='*60}\n{msg}\n{'='*60}\n")
         self._push(msg)
 
-    def _on_meme_trade(self, t) -> None:
-        # 大单 meme 成交（含主动方地址）
-        print(f"[{_hms()}] 🟡 [meme] {t.coin} {'买' if t.taker_side=='B' else '卖'} "
-              f"${t.notional:,.0f} taker={t.taker[:12]}…")
+    def _on_meme_trade(self, t: dict) -> None:
+        # 大单 meme 成交（含主动方地址）。t 是 MemeTradeMonitor on_trade 传入的 record dict
+        # （键 coin/taker_side/notional/taker，见 meme_trade_monitor.py:28,100-108），
+        # 须按 dict 取键——此前误用属性访问导致 AttributeError 被回调 try/except 吞掉、告警静默失效。
+        print(f"[{_hms()}] 🟡 [meme] {t['coin']} {'买' if t['taker_side']=='B' else '卖'} "
+              f"${t['notional']:,.0f} taker={t['taker'][:12]}…")
 
     def _on_structure(self, coin: str, e: StructureEvent) -> None:
         arrow = "↑" if e.direction == "bull" else "↓"
