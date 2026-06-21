@@ -160,6 +160,63 @@ def test_okx_client_all_open_interest_maps_by_instid():
     assert out["BTC-USDT-SWAP"]["oi_usd"] == 1945451154.0
 
 
+# ---- OKXWSClient（消息分发逻辑，不连真实 WS）----
+
+def test_okx_sub_to_arg():
+    """OKXSub → {channel, instId}（OKX 订阅 arg 无 instType，区别于 Bitget）。"""
+    from smc_tracker.okx.ws_client import OKXSub
+    assert OKXSub("trades", "BTC-USDT-SWAP").to_arg() == {
+        "channel": "trades", "instId": "BTC-USDT-SWAP"}
+
+
+def test_okx_ws_dispatch_routes_to_channel_handler():
+    """data 推送按 arg.channel 路由到对应 handler。"""
+    from smc_tracker.okx.ws_client import OKXSub, OKXWSClient
+    received: list = []
+    c = OKXWSClient()
+    c.subscribe(OKXSub("trades", "BTC-USDT-SWAP"),
+                lambda arg, data, ns: received.append((arg, data)))
+    raw = orjson.dumps({"arg": {"channel": "trades", "instId": "BTC-USDT-SWAP"},
+                        "data": [{"px": "64000", "sz": "1", "side": "buy"}]})
+    asyncio.run(c._handle_raw(raw, 123))
+    assert len(received) == 1
+    assert received[0][1][0]["side"] == "buy"
+
+
+def test_okx_ws_pong_feeds_watchdog():
+    """文本 pong → 喂看门狗(_last_pong_ns)，不当数据处理。"""
+    from smc_tracker.okx.ws_client import OKXWSClient
+    c = OKXWSClient()
+    asyncio.run(c._handle_raw("pong", 999))
+    assert c._last_pong_ns == 999
+
+
+def test_okx_ws_event_ack_not_dispatched():
+    """{event:subscribe} 订阅确认 → 不触发 handler。"""
+    from smc_tracker.okx.ws_client import OKXSub, OKXWSClient
+    received: list = []
+    c = OKXWSClient()
+    c.subscribe(OKXSub("trades", "X"), lambda a, d, n: received.append(1))
+    asyncio.run(c._handle_raw(orjson.dumps({"event": "subscribe", "arg": {"channel": "trades"}}), 1))
+    assert received == []
+
+
+def test_okx_ws_async_handler_awaited():
+    """async handler 返回 Awaitable → _handle_raw 会 await 它。"""
+    from smc_tracker.okx.ws_client import OKXSub, OKXWSClient
+    seen: list = []
+
+    async def ah(arg: dict, data: list, ns: int) -> None:
+        seen.append(data)
+
+    c = OKXWSClient()
+    c.subscribe(OKXSub("open-interest", "BTC-USDT-SWAP"), ah)
+    raw = orjson.dumps({"arg": {"channel": "open-interest", "instId": "BTC-USDT-SWAP"},
+                        "data": [{"oiUsd": "1e9"}]})
+    asyncio.run(c._handle_raw(raw, 5))
+    assert len(seen) == 1
+
+
 if __name__ == "__main__":
     for name, fn in list(globals().items()):
         if name.startswith("test_") and callable(fn):
