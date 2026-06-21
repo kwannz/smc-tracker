@@ -115,6 +115,7 @@ def diff_config(old: "Config", new: "Config") -> list[str]:
       output.console / webhook_url
       telegram.bot_token / chat_id
       llm.enabled / model / interval_sec
+      watchlist（仅检测新增地址 → 运行时订阅；移除不退订以保留累计状态）
 
     无变更返回 []。纯函数，无副作用，确定性可测。
     """
@@ -140,6 +141,13 @@ def diff_config(old: "Config", new: "Config") -> list[str]:
     _cmp(changes, "llm.enabled", old.llm.enabled, new.llm.enabled)
     _cmp(changes, "llm.model", old.llm.model, new.llm.model)
     _cmp(changes, "llm.interval_sec", old.llm.interval_sec, new.llm.interval_sec)
+
+    # watchlist：按地址集合比较，仅报告新增（移除不退订，保留累计仓位/流向状态）
+    old_addrs = {w.address.lower() for w in old.watchlist}
+    added = [w.address for w in new.watchlist if w.address.lower() not in old_addrs]
+    if added:
+        preview = ", ".join(a[:10] + "…" for a in added[:3])
+        changes.append(f"watchlist 新增 {len(added)} 个: {preview}")
 
     return changes
 

@@ -37,6 +37,34 @@ def test_seed_prev_detects_reversal():
     assert len(out) == 1 and out[0].kind == "reversal"
 
 
+def test_merge_watchlist_appends_and_dedups():
+    """_merge_watchlist：config.watchlist 显式追踪地址并入排行榜庄列表(去重，追加在后)。
+
+    小账户/非排行榜级地址经 config 声明后，cron 轮询路径也纳入监控集(否则 run_once
+    只追排行榜 top_n，watchlist 永远抓不到)。庄在前、追踪地址追加在后、按地址去重(大小写不敏感)。
+    """
+    from smc_tracker.config import WatchAddress
+    from smc_tracker.monitor.poll_monitor import _merge_watchlist
+
+    whales = [WatchAddress("0xAAA", "庄#1"), WatchAddress("0xBBB", "庄#2")]
+    wl = [WatchAddress("0xCCC", "追踪"), WatchAddress("0xaaa", "大小写重复")]
+    out = _merge_watchlist(whales, wl)
+    addrs = [w.address.lower() for w in out]
+    assert addrs == ["0xaaa", "0xbbb", "0xccc"]   # 庄在前，追踪追加，0xaaa 去重
+    assert out[2].label == "追踪"                  # 新追踪地址保留其 label
+    assert len(out) == 3
+
+
+def test_merge_watchlist_empty_is_noop():
+    """watchlist 为空 → 原庄列表原样返回(向后兼容现状)。"""
+    from smc_tracker.config import WatchAddress
+    from smc_tracker.monitor.poll_monitor import _merge_watchlist
+
+    whales = [WatchAddress("0xAAA", "庄#1")]
+    out = _merge_watchlist(whales, [])
+    assert [w.address for w in out] == ["0xAAA"]
+
+
 def test_poll_records_and_evaluates_predictions():
     """轮询正确性闭环：前瞻信号落 predictions（含 normalize 容错），到期按真实价核对方向对错。
 

@@ -99,6 +99,27 @@ def test_diff_config_multiple_fields():
     assert "llm.model" in changed_keys
 
 
+def test_diff_config_watchlist_addition():
+    """config.watchlist 新增地址 → diff_config 报告 watchlist 变更(触发热加载订阅)。"""
+    from smc_tracker.config import WatchAddress
+    old = Config()
+    new = Config()
+    new.watchlist = [WatchAddress("0x5078C2fBeA2b2aD61bc840Bc023E35Fce56BeDb6", "追踪")]
+    changes = diff_config(old, new)
+    assert any("watchlist" in c for c in changes)
+
+
+def test_diff_config_watchlist_unchanged():
+    """同一份 watchlist → 不报告变更(不误触发)。"""
+    from smc_tracker.config import WatchAddress
+    addr = WatchAddress("0x5078C2fBeA2b2aD61bc840Bc023E35Fce56BeDb6", "追踪")
+    old = Config()
+    old.watchlist = [addr]
+    new = Config()
+    new.watchlist = [WatchAddress("0x5078C2fBeA2b2aD61bc840Bc023E35Fce56BeDb6", "追踪")]
+    assert not any("watchlist" in c for c in diff_config(old, new))
+
+
 def test_diff_config_position_change_pct():
     """修改 position_change_pct → 检测到变更。"""
     old = Config()
@@ -182,6 +203,15 @@ def _apply_config(app: MagicMock, new_cfg: Config) -> list[str]:
         app.cfg.llm.interval_sec = new_cfg.llm.interval_sec
         app.analyst = build_analyst(new_cfg)
 
+    # watchlist 新增地址 → 运行时订阅(热加载即时追踪)；移除不退订(保留累计状态)。
+    # 镜像 TradingSystem._apply_config，须与 app.py 同步维护。
+    import time as _time
+    old_wl = {w.address.lower() for w in app.cfg.watchlist}
+    now_ms = int(_time.time() * 1000)
+    for w in new_cfg.watchlist:
+        if w.address.lower() not in old_wl and app.address_monitor.subscribe_address(w):
+            app.store.upsert_wallet(w.address, w.label, "manual", now_ms)
+
     app.cfg = new_cfg
     return changes
 
@@ -222,6 +252,32 @@ def test_apply_config_no_change_returns_empty():
     changes = _apply_config(app, Config())
     assert changes == []
     assert app.address_monitor.large_fill_notional_usd == original_threshold
+
+
+def test_apply_config_subscribes_new_watchlist_address():
+    """_apply_config：watchlist 新增地址 → 运行时订阅(subscribe_address) + 落库(热加载即时追踪)。"""
+    from smc_tracker.config import WatchAddress
+    old_cfg = Config()
+    app = _make_mock_app(old_cfg)
+    app.address_monitor.subscribe_address.return_value = True
+    new_cfg = Config()
+    new_cfg.watchlist = [WatchAddress("0x5078C2fBeA2b2aD61bc840Bc023E35Fce56BeDb6", "追踪")]
+
+    changes = _apply_config(app, new_cfg)
+    assert changes
+    app.address_monitor.subscribe_address.assert_called_once()
+    app.store.upsert_wallet.assert_called_once()
+
+
+def test_apply_config_no_new_watchlist_no_subscribe():
+    """watchlist 无新增（仅改阈值）→ 不调 subscribe_address。"""
+    old_cfg = Config()
+    app = _make_mock_app(old_cfg)
+    new_cfg = Config()
+    new_cfg.detection.large_fill_notional_usd = 88_000.0
+
+    _apply_config(app, new_cfg)
+    app.address_monitor.subscribe_address.assert_not_called()
 
 
 if __name__ == "__main__":

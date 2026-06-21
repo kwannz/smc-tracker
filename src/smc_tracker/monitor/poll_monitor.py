@@ -13,7 +13,7 @@ from collections import defaultdict
 from typing import Any
 
 from ..bitget import BitgetREST
-from ..config import Config
+from ..config import Config, WatchAddress
 from ..hyperliquid import HyperliquidInfo
 from ..memecoins import normalize
 from ..models import Side
@@ -55,6 +55,26 @@ def _make_price_of(prices: dict[str, float]):
     return price_of
 
 
+def _merge_watchlist(
+    whales: list[WatchAddress], watchlist: list[WatchAddress],
+) -> list[WatchAddress]:
+    """把 config.watchlist 显式追踪地址并入排行榜庄列表(去重，watchlist 追加在后)。
+
+    小账户/非排行榜级地址(自动发现 min_account_value/min_alltime_pnl 门槛抓不到)经 config
+    手动声明后，cron 轮询路径也能完整追踪其持仓/成交流/换仓 diff(此前 run_once 只追排行榜
+    top_n，watchlist 永远抓不到)。whales[:N] 仍取排行榜真庄(追踪地址追加在末尾，不挤占庄画像
+    Top3)。按地址大小写不敏感去重。
+    """
+    seen = {w.address.lower() for w in whales}
+    out = list(whales)
+    for w in watchlist:
+        a = w.address.lower()
+        if a not in seen:
+            seen.add(a)
+            out.append(w)
+    return out
+
+
 class PollMonitor:
     def __init__(self, cfg: Config, store: Store, top_n: int = 15,
                  min_change_usd: float = 1_000_000.0,
@@ -81,6 +101,8 @@ class PollMonitor:
         # 单次拉取排行榜(~16.8MB)：选庄排名 + PnL 动量共用，避免每轮重复下载(低延迟)
         lb_rows = await fetch_leaderboard_rows()
         whales = rank_smart_money(lb_rows, top_n=self.top_n)
+        # 并入 config.watchlist 显式追踪地址(小账户/非排行榜级，自动发现抓不到 → 手动纳入)
+        whales = _merge_watchlist(whales, self.cfg.watchlist)
         labels: dict[str, str] = {}
         positions: dict[tuple[str, str], float] = {}
         flow: dict[str, float] = defaultdict(float)   # coin -> 庄群近 Nh 净流向 USD

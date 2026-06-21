@@ -926,6 +926,15 @@ class TradingSystem:
             self.cfg.llm.interval_sec = new_cfg.llm.interval_sec
             self.analyst = build_analyst(new_cfg)
 
+        # watchlist 新增地址 → 运行时订阅(热加载即时追踪)；移除不退订(保留累计仓位/流向状态)。
+        # 持仓由订阅后 webData2 snapshot 自动播种，无需在此同步发 REST(不阻塞热路径)。
+        old_wl = {w.address.lower() for w in self.cfg.watchlist}
+        now_ms = int(time.time() * 1000)
+        for w in new_cfg.watchlist:
+            if w.address.lower() not in old_wl and self.address_monitor.subscribe_address(w):
+                self.store.upsert_wallet(w.address, w.label, "manual", now_ms)
+                log.info("watchlist 热加载新增并订阅 %s %s", w.address[:10], w.label)
+
         # 最终同步 cfg 引用（使新 cfg 对象其余字段也可用）
         self.cfg = new_cfg
         return changes
