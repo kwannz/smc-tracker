@@ -17,3 +17,13 @@
 
 ## 执行: builder-agent(Sonnet)，Opus 审核 + git show --stat 核验真实落盘
 ## 结果: (待回填)
+
+## 结果: KEEP
+- okx_signals 表 + insert/recent + confluence._SOURCES 加 OKX 源 + run_okx_streaming 落库背离
+- 独立核验: 全量 618 passed, confluence 聚合 OKX 测试 6 passed, _SOURCES:49 真加, 落库去重逻辑正确
+- commit 已核验四文件落盘(db+35/stream+23/confluence+2/test+119)
+
+## round-002 实证(可行, 待开发): OKX 强平监控
+- liquidation-orders 频道 keyless 可用(本会话 probe: ACK ok + 2 真实强平事件)
+- 数据 details[{posSide,side,sz张,bkPx强平价,ts}]; 名义=sz×ctVal×bkPx; 多头被平=抛压级联
+- 设计要点: OKXSub 需支持 instType=SWAP 订阅(非per-instId), _on_liquidation 按监控集过滤聚合
