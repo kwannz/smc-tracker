@@ -1,0 +1,53 @@
+# SMC 聪明钱追踪系统配置示例
+# 复制为 config/config.yaml 后修改
+
+hyperliquid:
+  # 主网；测试网用 https://api.hyperliquid-testnet.xyz 与 wss://api.hyperliquid-testnet.xyz/ws
+  rest_url: "https://api.hyperliquid.xyz"
+  ws_url: "wss://api.hyperliquid.xyz/ws"
+  ping_interval_sec: 50        # WS 保活心跳（Hyperliquid 要求 <60s）
+  reconnect_max_backoff_sec: 30
+
+# 监控的市场（perp coin 名称）
+markets:
+  - BTC
+  - ETH
+  - SOL
+
+# 聪明钱地址监控列表（巨鲸/高胜率地址）
+watchlist:
+  - address: "0x0000000000000000000000000000000000000000"
+    label: "示例地址-填真实地址"
+    # 该地址单笔名义价值告警阈值（USD）
+    notional_alert_usd: 100000
+
+# 异动检测阈值
+detection:
+  large_fill_notional_usd: 50000     # 单笔大单阈值
+  position_change_pct: 0.10          # 持仓变动 >10% 视为加/减仓事件
+  poll_interval_sec: 2.0             # clearinghouseState 兜底轮询间隔
+  require_sweep: false               # 信号硬门槛：true=只出有流动性扫荡确认的信号
+                                     # （回测显示扫荡确认是唯一正期望过滤，但会大幅减少信号数）
+
+# SMC 引擎参数
+smc:
+  candle_interval: "5m"              # 结构分析所用 K 线周期
+  swing_lookback: 3                  # 摆动高低点左右各 N 根确认
+  fvg_min_gap_pct: 0.0005            # FVG 最小缺口（相对价格）
+  history_bars: 500                  # 启动时回填的历史 K 线数
+
+# 输出
+output:
+  console: true
+  jsonl_path: "data/signals.jsonl"
+  webhook_url: ""                    # 留空则不推送
+
+# LLM 前瞻研判（Codex OAuth GPT-5.4，无需 apikey；需本机 `codex login`）
+# 周期把双所态势摘要喂给模型 → 抓庄研判 → 推送。失败优雅降级，不影响监控。
+llm:
+  enabled: false                     # 默认关闭；已 codex login 的环境改 true 即用
+  command: ["codex", "exec", "--skip-git-repo-check"]   # 非交互调用模板（可按环境调 flag）
+  model: ""                          # 形如 "gpt-5.4"；留空=用 codex 默认/配置档
+  timeout_sec: 90                    # 单次研判硬超时（超时杀进程并跳过）
+  interval_sec: 3600                 # 研判频率（秒）
+  max_input_chars: 6000              # 喂入摘要的截断上限（控延迟/token）

@@ -1,0 +1,26 @@
+# 自动生成：scripts/build_meme_list.py
+# meme 永续清单 = Bitget USDT-M 永续 ∩ Hyperliquid 永续 ∩ 内置 meme 集
+# 数据源实时拉取，需定期重跑刷新（新 meme 上线）
+meme_markets:
+  - AIXBT
+  - BOME
+  - BRETT
+  - DOGE
+  - FARTCOIN
+  - GOAT
+  - GRIFFAIN
+  - MELANIA
+  - MEME
+  - MOODENG
+  - PENGU
+  - PNUT
+  - POPCAT
+  - PUMP
+  - SPX
+  - TRUMP
+  - TURBO
+  - WIF
+  - kBONK
+  - kFLOKI
+  - kPEPE
+  - kSHIB

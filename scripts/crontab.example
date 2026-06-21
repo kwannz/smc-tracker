@@ -1,0 +1,23 @@
+# SMC 抓庄系统 crontab 示例
+# 安装方法：crontab -e，将以下条目粘贴保存即可。
+# 健康检查排查：PYTHONPATH=src ./.venv/bin/python -m smc_tracker health
+# 查看实时日志：tail -f data/cycle.log
+#
+# 注意：
+#   1. 请将路径替换为实际部署路径（示例用 /Volumes/ROG ESD-S1C Media/smc）。
+#   2. --push 需在 config/config.yaml 中配置 output.webhook_url（Discord/Slack）
+#      或 telegram.bot_token + telegram.chat_id。
+#   3. data/ 目录须可写：mkdir -p "/Volumes/ROG ESD-S1C Media/smc/data"
+#   4. Python venv 须已安装依赖：cd <项目根> && ./.venv/bin/pip install -e .
+
+# ── 主闭环：每 15 分钟采集+评估+推送（数据新鲜+4h/24h 样本积累） ──────────────
+*/15 * * * * cd "/Volumes/ROG ESD-S1C Media/smc" && PYTHONPATH=src ./.venv/bin/python -m smc_tracker cycle --push >> data/cycle.log 2>&1
+
+# ── 更高频补评到期预测（每 5 分钟仅运行评估，解决 stale 问题） ─────────────────
+*/5 * * * * cd "/Volumes/ROG ESD-S1C Media/smc" && PYTHONPATH=src ./.venv/bin/python -m smc_tracker evaluate >> data/evaluate.log 2>&1
+
+# ── 健康检查：每小时检查数据新鲜度+验证闭环积压（失败返回码 2，便于监控告警） ──
+0 * * * * cd "/Volumes/ROG ESD-S1C Media/smc" && PYTHONPATH=src ./.venv/bin/python -m smc_tracker health >> data/health.log 2>&1
+
+# ── 日报汇总：每天早 8 点生成近 24h 摘要（可选） ────────────────────────────────
+0 8 * * * cd "/Volumes/ROG ESD-S1C Media/smc" && PYTHONPATH=src ./.venv/bin/python -m smc_tracker report --hours 24 >> data/report.log 2>&1
