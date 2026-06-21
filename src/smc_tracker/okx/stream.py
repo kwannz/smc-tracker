@@ -27,6 +27,59 @@ async def select_top_insts(
     return insts, ct_val
 
 
+def fmt_flow_signals(signals: list[dict]) -> str:
+    """格式化 OKX 净流向抓庄信号为文本。long→🟢 short→🔴；空列表 → "无"。"""
+    if not signals:
+        return "无"
+    parts: list[str] = []
+    for s in signals:
+        coin = s.get("coin", "")
+        direction = s.get("direction", "")
+        net = s.get("net_flow", 0.0)
+        mark = "🟢" if direction == "long" else "🔴"
+        parts.append(f"{coin} {mark}{direction} ${abs(net):,.0f}")
+    return " / ".join(parts)
+
+
+def funding_flow_divergence(
+    funding: float,
+    net_flow: float,
+    funding_th: float = 0.0001,
+    flow_th: float = 300_000.0,
+) -> dict | None:
+    """资金费(杠杆拥挤) × taker 净流向(实际方向) 背离判定。
+
+    多头拥挤(funding≥th) 但 taker 净卖(net≤-th) → bearish/distribution(分销)；
+    空头拥挤(funding≤-th) 但 taker 净买(net≥th) → bullish/accumulation(吸筹)；
+    其余(同向/量级不足) → None。
+    """
+    if funding >= funding_th and net_flow <= -flow_th:
+        return {"direction": "bearish", "kind": "distribution",
+                "funding": funding, "net_flow": net_flow}
+    if funding <= -funding_th and net_flow >= flow_th:
+        return {"direction": "bullish", "kind": "accumulation",
+                "funding": funding, "net_flow": net_flow}
+    return None
+
+
+def detect_divergences(latest: dict, net_by_coin: dict) -> list[tuple[str, dict]]:
+    """遍历各 inst 的 funding × net_flow 检测背离，返回 [(coin, sig), ...]。
+
+    latest      : monitor.all_latest() → {inst_id: {coin, funding, ...}}
+    net_by_coin : monitor.all_net_flows() → {coin: net_flow_usd}
+    """
+    out: list[tuple[str, dict]] = []
+    for snap in latest.values():
+        coin = snap.get("coin", "")
+        fr = snap.get("funding")
+        if fr is None or not coin:
+            continue
+        sig = funding_flow_divergence(float(fr), net_by_coin.get(coin, 0.0))
+        if sig:
+            out.append((coin, sig))
+    return out
+
+
 async def run_stream(
     top_n: int = 10,
     secs: float = 15.0,

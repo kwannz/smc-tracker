@@ -61,12 +61,13 @@ class OKXPerpMonitor:
 
     # ---- 挂载 ----
     def attach(self) -> None:
-        """为每个 inst 订阅 trades + open-interest + tickers。ws.run() 前后调用均可。"""
+        """为每个 inst 订阅 trades + open-interest + tickers + funding-rate。ws.run() 前后调用均可。"""
         for inst in self.inst_ids:
             self.ws.subscribe(OKXSub("trades", inst), self._on_trades)
             self.ws.subscribe(OKXSub("open-interest", inst), self._on_oi)
             self.ws.subscribe(OKXSub("tickers", inst), self._on_ticker)
-        log.info("OKXPerpMonitor 已挂载 %d 个永续（trades+OI+tickers）", len(self.inst_ids))
+            self.ws.subscribe(OKXSub("funding-rate", inst), self._on_funding)
+        log.info("OKXPerpMonitor 已挂载 %d 个永续（trades+OI+tickers+funding-rate）", len(self.inst_ids))
 
     # ---- WS 回调 ----
     def _on_trades(self, arg: dict, data: list, recv_ns: int) -> None:
@@ -118,6 +119,14 @@ class OKXPerpMonitor:
                         except Exception:  # noqa: BLE001 — 回调异常不影响接收
                             log.exception("on_surge 回调出错")
             self._prev_oi[inst] = oi_ccy
+
+    def _on_funding(self, arg: dict, data: list, recv_ns: int) -> None:
+        """funding-rate 推送 → 更新快照 funding 字段（字符串 fundingRate → float）。"""
+        inst = arg.get("instId", "")
+        for d in data:
+            rate = _f(d.get("fundingRate"))
+            snap = self._latest.setdefault(inst, {})
+            snap["funding"] = rate
 
     def _on_ticker(self, arg: dict, data: list, recv_ns: int) -> None:
         """tickers 推送 → 维护最新价快照（OKX tickers 字段 last）。"""
