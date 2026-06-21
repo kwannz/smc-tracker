@@ -59,17 +59,6 @@ class BitgetREST:
         rows = await self._get("/api/v2/mix/market/tickers", productType=USDT_FUTURES)
         return {r["symbol"]: r for r in rows}
 
-    async def ticker(self, symbol: str) -> dict:
-        rows = await self._get("/api/v2/mix/market/ticker",
-                               symbol=symbol, productType=USDT_FUTURES)
-        return rows[0] if rows else {}
-
-    async def open_interest(self, symbol: str) -> float:
-        d = await self._get("/api/v2/mix/market/open-interest",
-                            symbol=symbol, productType=USDT_FUTURES)
-        lst = d.get("openInterestList", []) if isinstance(d, dict) else []
-        return _f(lst[0]["size"]) if lst else 0.0
-
     @staticmethod
     def parse_oi_row(symbol: str, coin: str, tk: dict, ts: int) -> tuple:
         """从 ticker dict 解析出 bitget_oi 表的一行。

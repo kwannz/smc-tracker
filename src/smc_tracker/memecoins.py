@@ -45,11 +45,6 @@ def normalize(symbol: str) -> str:
     return s
 
 
-def is_meme(symbol: str) -> bool:
-    """该交易所币名是否为 meme（归一化后命中 MEME_BASES）。"""
-    return normalize(symbol) in MEME_BASES
-
-
 def build_meme_markets(hl_perp_coins: list[str], bitget_bases: set[str]) -> list[str]:
     """求交集，返回需在 Hyperliquid 监控的 meme 永续币名（HL 命名）。
 

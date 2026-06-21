@@ -147,16 +147,6 @@ class OKXClient:
         rows = await self._get("/api/v5/public/open-interest", instType=inst_type)
         return {r["instId"]: parse_oi(r) for r in rows if r.get("instId")}
 
-    async def all_mark_price(self, inst_type: str = "SWAP") -> dict[str, dict]:
-        """一次拉全市场标记价，返回 {inst_id: parsed_mark}。"""
-        rows = await self._get("/api/v5/public/mark-price", instType=inst_type)
-        return {r["instId"]: parse_mark(r) for r in rows if r.get("instId")}
-
-    async def swap_instruments(self, inst_type: str = "SWAP") -> list[str]:
-        """全市场永续 instId 列表（仅 USDT 本位 -USDT-SWAP）。"""
-        rows = await self._get("/api/v5/public/instruments", instType=inst_type)
-        return [r["instId"] for r in rows if r.get("instId", "").endswith("-USDT-SWAP")]
-
     async def swap_meta(self, inst_type: str = "SWAP") -> dict[str, dict]:
         """全市场永续元数据 {inst_id: {ct_val(合约面值,币), ct_val_ccy}}（仅 USDT 本位）。
 

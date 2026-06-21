@@ -8,7 +8,7 @@ from .address_analyzer import AddressAnalyzer
 from .address_correlation import AddressCorrelation
 from .address_dossier import build_dossier, fmt_dossier
 from .whale_discovery import discover_smart_money, fetch_leaderboard_rows, rank_smart_money
-from .whale_momentum import WhaleMomentum, fetch_pnl_rows, pnl_rows_from
+from .whale_momentum import WhaleMomentum, pnl_rows_from
 from .wallet_portfolio import WalletPortfolio, WalletSnapshot
 from .position_lifecycle import PositionLifecycle, reconstruct as reconstruct_lifecycle, fmt_hold
 from .trader_classify import classify_trader, fmt_classify
@@ -20,7 +20,7 @@ __all__ = [
     "HLOrderbookMonitor", "detect_walls",
     "AddressAnalyzer", "AddressCorrelation", "build_dossier", "fmt_dossier",
     "discover_smart_money", "rank_smart_money", "fetch_leaderboard_rows",
-    "WhaleMomentum", "fetch_pnl_rows", "pnl_rows_from",
+    "WhaleMomentum", "pnl_rows_from",
     "WalletPortfolio", "WalletSnapshot",
     "PositionLifecycle", "reconstruct_lifecycle", "fmt_hold",
     "classify_trader", "fmt_classify",

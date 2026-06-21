@@ -11,7 +11,7 @@ import logging
 from dataclasses import dataclass
 from typing import Any
 
-from .whale_discovery import _window, fetch_leaderboard_rows
+from .whale_discovery import _window
 
 log = logging.getLogger("momentum")
 
@@ -60,11 +60,6 @@ def pnl_rows_from(leaderboard_rows: list[dict], top_n: int = 30,
         rows.append((addr.lower(), "", day, week, month, at, acct))
     rows.sort(key=lambda x: x[5], reverse=True)
     return rows[:top_n]
-
-
-async def fetch_pnl_rows(top_n: int = 30, min_account: float = 300_000.0) -> list[tuple]:
-    """拉排行榜并解析 PnL（薄封装：fetch_leaderboard_rows + pnl_rows_from）。"""
-    return pnl_rows_from(await fetch_leaderboard_rows(), top_n=top_n, min_account=min_account)
 
 
 class WhaleMomentum:
