@@ -306,6 +306,23 @@ def test_okx_perp_attach_subscribes_channels():
     assert {"trades", "open-interest", "tickers"} <= channels
 
 
+def test_okx_perp_funding_into_snapshot():
+    """_on_funding 解析 fundingRate 字符串 → latest(inst)["funding"] 浮点值。"""
+    m, _ = _make_perp_monitor()
+    m._on_funding({"instId": "BTC-USDT-SWAP"}, [{"fundingRate": "-0.0001"}], 1)
+    snap = m.latest("BTC-USDT-SWAP")
+    assert snap is not None
+    assert abs(snap["funding"] - (-0.0001)) < 1e-10
+
+
+def test_okx_perp_attach_includes_funding():
+    """attach 后 ws.subs 中含 funding-rate channel。"""
+    m, ws = _make_perp_monitor()
+    m.attach()
+    channels = {c for c, _, _ in ws.subs}
+    assert "funding-rate" in channels
+
+
 def test_okx_perp_db_roundtrip():
     """okx_perp 表真实 roundtrip：insert_okx_perp → 查回。"""
     import tempfile
