@@ -217,6 +217,119 @@ def test_okx_ws_async_handler_awaited():
     assert len(seen) == 1
 
 
+# ---- OKXClient.swap_meta（ctVal 合约面值映射）----
+
+def test_okx_swap_meta_ctval_usdt_only():
+    """swap_meta → {inst_id: {ct_val, ct_val_ccy}}，仅保留 USDT 本位(过滤币本位)。"""
+    from smc_tracker.okx.client import OKXClient
+    payload = {"code": "0", "data": [
+        {"instId": "BTC-USDT-SWAP", "ctVal": "0.01", "ctValCcy": "BTC"},
+        {"instId": "DOGE-USDT-SWAP", "ctVal": "1000", "ctValCcy": "DOGE"},
+        {"instId": "BTC-USD-SWAP", "ctVal": "100", "ctValCcy": "USD"}]}
+
+    async def run() -> dict:
+        c = OKXClient()
+        c._session = _FakeSession(payload)  # type: ignore[assignment]
+        return await c.swap_meta()
+
+    out = asyncio.run(run())
+    assert out["BTC-USDT-SWAP"]["ct_val"] == 0.01
+    assert out["DOGE-USDT-SWAP"]["ct_val"] == 1000.0
+    assert "BTC-USD-SWAP" not in out   # 币本位被过滤
+
+
+# ---- OKXPerpMonitor（注入 fake ws/store，不连网）----
+
+class _FakeWS:
+    def __init__(self) -> None:
+        self.subs: list = []
+
+    def subscribe(self, sub: object, handler: object) -> None:
+        self.subs.append((sub.channel, sub.inst_id, handler))  # type: ignore[attr-defined]
+
+
+class _FakeStore:
+    def __init__(self) -> None:
+        self.rows: list = []
+
+    def insert_okx_perp(self, rows: object) -> None:
+        self.rows.extend(rows)  # type: ignore[arg-type]
+
+
+def _make_perp_monitor(store: object = None, on_surge: object = None):
+    from smc_tracker.monitor.okx_perp_monitor import OKXPerpMonitor
+    ws = _FakeWS()
+    m = OKXPerpMonitor(
+        inst_ids=["BTC-USDT-SWAP"], inst_to_coin={"BTC-USDT-SWAP": "BTC"},
+        ct_val={"BTC-USDT-SWAP": 0.01}, ws=ws, store=store,
+        surge_pct=0.05, on_surge=on_surge)
+    return m, ws
+
+
+def test_okx_perp_net_flow_signed_by_ctval():
+    """trades 净流向：名义 = sz张 × ctVal × px，buy 正/sell 负。"""
+    m, _ = _make_perp_monitor()
+    arg = {"channel": "trades", "instId": "BTC-USDT-SWAP"}
+    m._on_trades(arg, [{"side": "buy", "sz": "100", "px": "64000"}], 1)   # 100×0.01×64000=$64000
+    m._on_trades(arg, [{"side": "sell", "sz": "50", "px": "64000"}], 2)   # 50×0.01×64000=$32000
+    assert abs(m.net_flow("BTC") - 32000.0) < 1e-6
+
+
+def test_okx_perp_oi_surge_triggers_callback():
+    """OI(oiCcy) 相对变化越 surge_pct → on_surge 触发，evt 带 coin/change。"""
+    seen: list = []
+    m, _ = _make_perp_monitor(on_surge=lambda e: seen.append(e))
+    arg = {"channel": "open-interest", "instId": "BTC-USDT-SWAP"}
+    m._on_oi(arg, [{"oiCcy": "1000", "oiUsd": "64000000", "ts": "1"}], 1)   # 基线
+    m._on_oi(arg, [{"oiCcy": "1100", "oiUsd": "70400000", "ts": "2"}], 2)   # +10% > 5%
+    assert len(seen) == 1
+    assert seen[0]["coin"] == "BTC"
+    assert abs(seen[0]["change"] - 0.1) < 1e-6
+
+
+def test_okx_perp_flush_inserts_rows():
+    """flush → store.insert_okx_perp(rows)；row 首列 inst_id/coin。"""
+    store = _FakeStore()
+    m, _ = _make_perp_monitor(store=store)
+    arg = {"channel": "open-interest", "instId": "BTC-USDT-SWAP"}
+    m._on_oi(arg, [{"oiCcy": "1000", "oiUsd": "64000000", "ts": "5"}], 1)
+    n = m.flush()
+    assert n == 1 and len(store.rows) == 1
+    assert store.rows[0][0] == "BTC-USDT-SWAP" and store.rows[0][1] == "BTC"
+
+
+def test_okx_perp_attach_subscribes_channels():
+    """attach 为每个 inst 订阅 trades + open-interest + tickers。"""
+    m, ws = _make_perp_monitor()
+    m.attach()
+    channels = {c for c, _, _ in ws.subs}
+    assert {"trades", "open-interest", "tickers"} <= channels
+
+
+def test_okx_perp_db_roundtrip():
+    """okx_perp 表真实 roundtrip：insert_okx_perp → 查回。"""
+    import tempfile
+    from smc_tracker.storage import Store
+    s = Store(Path(tempfile.mkdtemp()) / "okx.db")
+    s.insert_okx_perp([("BTC-USDT-SWAP", "BTC", 30000.0, 1.9e9, 64000.0, -0.0001, 50000.0, 100)])
+    row = s.conn.execute(
+        "SELECT inst_id,coin,oi_ccy,oi_usd,net_flow,ts FROM okx_perp").fetchone()
+    assert row[0] == "BTC-USDT-SWAP" and row[1] == "BTC" and row[5] == 100
+    s.close()
+
+
+# ---- CLI okx 子命令解析（不联网）----
+
+def test_cli_okx_subcommand_parser():
+    """parse_args(['okx','--top','5','--secs','8']) → top==5, secs==8.0, handler 存在。"""
+    from smc_tracker.cli import build_parser
+    ap = build_parser()
+    args = ap.parse_args(["okx", "--top", "5", "--secs", "8"])
+    assert args.top == 5
+    assert args.secs == 8.0
+    assert callable(getattr(args, "handler", None)), "okx 子命令应设置 handler"
+
+
 if __name__ == "__main__":
     for name, fn in list(globals().items()):
         if name.startswith("test_") and callable(fn):

@@ -156,3 +156,14 @@ class OKXClient:
         """全市场永续 instId 列表（仅 USDT 本位 -USDT-SWAP）。"""
         rows = await self._get("/api/v5/public/instruments", instType=inst_type)
         return [r["instId"] for r in rows if r.get("instId", "").endswith("-USDT-SWAP")]
+
+    async def swap_meta(self, inst_type: str = "SWAP") -> dict[str, dict]:
+        """全市场永续元数据 {inst_id: {ct_val(合约面值,币), ct_val_ccy}}（仅 USDT 本位）。
+
+        OKX SWAP 的 trades.sz 单位是合约张数，名义须乘 ct_val（BTC=0.01/ETH=0.1/DOGE=1000）。
+        """
+        rows = await self._get("/api/v5/public/instruments", instType=inst_type)
+        return {
+            r["instId"]: {"ct_val": _f(r.get("ctVal")), "ct_val_ccy": r.get("ctValCcy", "")}
+            for r in rows if r.get("instId", "").endswith("-USDT-SWAP")
+        }

@@ -41,6 +41,19 @@ CREATE TABLE IF NOT EXISTS bitget_oi (
 );
 CREATE INDEX IF NOT EXISTS ix_bitget_oi_coin_ts ON bitget_oi(coin, ts);
 
+CREATE TABLE IF NOT EXISTS okx_perp (
+    inst_id  TEXT    NOT NULL,
+    coin     TEXT    NOT NULL,
+    oi_ccy   REAL,
+    oi_usd   REAL,
+    mark_px  REAL,
+    funding  REAL,
+    net_flow REAL,
+    ts       INTEGER NOT NULL,
+    PRIMARY KEY (inst_id, ts)
+);
+CREATE INDEX IF NOT EXISTS ix_okx_perp_coin_ts ON okx_perp(coin, ts);
+
 CREATE TABLE IF NOT EXISTS hl_meme_trades (
     coin       TEXT    NOT NULL,
     px         REAL    NOT NULL,
@@ -297,6 +310,19 @@ class Store:
         return self.conn.execute(
             "SELECT symbol,coin,oi_size,oi_usd,mark_px,funding,ts FROM bitget_oi "
             "WHERE symbol=? ORDER BY ts DESC LIMIT 1", (symbol,)).fetchone()
+
+    # ---- OKX 永续 ----
+    def insert_okx_perp(self, rows: Iterable[tuple]) -> None:
+        """rows: (inst_id, coin, oi_ccy, oi_usd, mark_px, funding, net_flow, ts)"""
+        self.conn.executemany(
+            "INSERT OR REPLACE INTO okx_perp"
+            "(inst_id,coin,oi_ccy,oi_usd,mark_px,funding,net_flow,ts) "
+            "VALUES(?,?,?,?,?,?,?,?)", rows)
+
+    def latest_okx_perp(self, inst_id: str) -> tuple | None:
+        return self.conn.execute(
+            "SELECT inst_id,coin,oi_ccy,oi_usd,mark_px,funding,net_flow,ts FROM okx_perp "
+            "WHERE inst_id=? ORDER BY ts DESC LIMIT 1", (inst_id,)).fetchone()
 
     def oi_change(self, symbol: str, window_ms: int, now_ms: int) -> tuple | None:
         """返回 (最新oi, window 前最近一条 oi)，用于算 OI 变化。"""

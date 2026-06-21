@@ -79,6 +79,17 @@ class ReviewCfg:
 
 
 @dataclass(slots=True)
+class OKXCfg:
+    """OKX 永续 streaming 监控配置。默认关闭(避免无脑新增 WS 连接)。"""
+    enabled: bool = False
+    ws_url: str = "wss://ws.okx.com:8443/ws/v5/public"
+    rest_url: str = "https://www.okx.com"
+    top_n: int = 20                  # 监控按 OI 排名前 N 个永续(symbols 为空时)
+    surge_pct: float = 0.05          # OI 异动阈值
+    symbols: list[str] = field(default_factory=list)   # 指定监控的 coin(空=top_n)
+
+
+@dataclass(slots=True)
 class Config:
     hyperliquid: HyperliquidCfg = field(default_factory=HyperliquidCfg)
     markets: list[str] = field(default_factory=lambda: ["BTC", "ETH"])
@@ -89,6 +100,7 @@ class Config:
     telegram: TelegramCfg = field(default_factory=TelegramCfg)
     llm: LLMCfg = field(default_factory=LLMCfg)
     review: ReviewCfg = field(default_factory=ReviewCfg)
+    okx: OKXCfg = field(default_factory=OKXCfg)
 
     @classmethod
     def load(cls, path: str | Path) -> "Config":
@@ -104,6 +116,7 @@ class Config:
             telegram=TelegramCfg(**(raw.get("telegram") or {})),
             llm=LLMCfg(**(raw.get("llm") or {})),
             review=ReviewCfg(**(raw.get("review") or {})),
+            okx=OKXCfg(**(raw.get("okx") or {})),
         )
 
 

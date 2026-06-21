@@ -599,6 +599,18 @@ def _cmd_cycle(args: argparse.Namespace) -> None:
         sys.exit(1)
 
 
+def _cmd_okx(args: argparse.Namespace) -> None:
+    """OKX 永续实时 streaming：按 OI 排名选 top_n 永续，订阅 trades/OI → 打印净流向。"""
+    try:
+        from .okx.stream import run_stream
+        asyncio.run(run_stream(args.top, args.secs))
+    except KeyboardInterrupt:
+        pass
+    except Exception as exc:
+        print(f"[okx] 出错：{type(exc).__name__}: {exc}", file=sys.stderr)
+        sys.exit(1)
+
+
 def _cmd_health(args: argparse.Namespace) -> None:
     """打印系统健康快照（数据新鲜度 + 验证闭环积压，纯 DB 无网络）。"""
     try:
@@ -778,6 +790,14 @@ def build_parser() -> argparse.ArgumentParser:
     p_cycle.add_argument("--push", action="store_true",
                          help="若配置了推送渠道，推送 poll digest + 准确率摘要合并消息")
     p_cycle.set_defaults(handler=_cmd_cycle)
+
+    # ---- okx ----
+    p_okx = sub.add_parser("okx", help="OKX 永续实时 streaming：净流向 + OI 异动")
+    p_okx.add_argument("--top", type=int, default=10, metavar="N",
+                       help="按 OI 排名监控前 N 个永续（默认 10）")
+    p_okx.add_argument("--secs", type=float, default=15.0, metavar="S",
+                       help="订阅持续秒数（默认 15）")
+    p_okx.set_defaults(handler=_cmd_okx)
 
     return ap
 

@@ -3,6 +3,7 @@ from .events import EventType, SmartMoneyEvent
 from .address_monitor import AddressMonitor
 from .meme_trade_monitor import MemeTradeMonitor
 from .bitget_oi_monitor import BitgetOIMonitor
+from .okx_perp_monitor import OKXPerpMonitor
 from .address_analyzer import AddressAnalyzer
 from .address_correlation import AddressCorrelation
 from .address_dossier import build_dossier, fmt_dossier
@@ -14,7 +15,7 @@ from .trader_classify import classify_trader, fmt_classify
 
 __all__ = [
     "EventType", "SmartMoneyEvent", "AddressMonitor",
-    "MemeTradeMonitor", "BitgetOIMonitor",
+    "MemeTradeMonitor", "BitgetOIMonitor", "OKXPerpMonitor",
     "AddressAnalyzer", "AddressCorrelation", "build_dossier", "fmt_dossier",
     "discover_smart_money", "rank_smart_money", "fetch_leaderboard_rows",
     "WhaleMomentum", "fetch_pnl_rows", "pnl_rows_from",
