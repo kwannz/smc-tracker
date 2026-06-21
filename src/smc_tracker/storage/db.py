@@ -272,6 +272,16 @@ CREATE TABLE IF NOT EXISTS okx_signals (
     net_flow  REAL                -- taker 净流向 USD
 );
 CREATE INDEX IF NOT EXISTS ix_okx_signals_coin_ts ON okx_signals(coin, ts);
+
+CREATE TABLE IF NOT EXISTS hl_orderbook_walls (
+    ts       INTEGER NOT NULL,
+    coin     TEXT    NOT NULL,
+    side     TEXT    NOT NULL,    -- 'bid'(支撑/吸筹意图) / 'ask'(压制/分销意图)
+    kind     TEXT    NOT NULL,    -- 'build'(墙出现) / 'pull'(抽单)
+    px       REAL,
+    notional REAL                 -- 墙名义 USD = px × sz
+);
+CREATE INDEX IF NOT EXISTS ix_hl_obwalls_coin_ts ON hl_orderbook_walls(coin, ts);
 """
 
 
@@ -517,6 +527,23 @@ class Store:
             "WHERE ts>=? ORDER BY ts ASC",
             (since_ms,),
         ).fetchall()
+
+    # ---- HL 挂单墙动态（领先信号：未成交意图，先于成交）----
+    def insert_orderbook_walls(self, rows: Iterable[tuple]) -> None:
+        """批量落库挂单墙事件。rows: (ts, coin, side, kind, px, notional)。
+        side='bid'|'ask'；kind='build'(出现)|'pull'(抽单)。空输入安全（executemany 自处理）。
+        """
+        self.conn.executemany(
+            "INSERT INTO hl_orderbook_walls(ts,coin,side,kind,px,notional) "
+            "VALUES(?,?,?,?,?,?)", rows)
+
+    def recent_orderbook_walls(self, since_ms: int) -> list[tuple]:
+        """查询 since_ms 后所有挂单墙事件，按 ts ASC。
+        返回列：(ts, coin, side, kind, px, notional)。
+        """
+        return self.conn.execute(
+            "SELECT ts,coin,side,kind,px,notional FROM hl_orderbook_walls "
+            "WHERE ts>=? ORDER BY ts ASC", (since_ms,)).fetchall()
 
     # ---- 聪明钱地址画像 ----
     def upsert_address_profile(self, p: dict[str, Any]) -> None:

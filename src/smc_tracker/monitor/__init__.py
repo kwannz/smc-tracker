@@ -12,10 +12,12 @@ from .whale_momentum import WhaleMomentum, fetch_pnl_rows, pnl_rows_from
 from .wallet_portfolio import WalletPortfolio, WalletSnapshot
 from .position_lifecycle import PositionLifecycle, reconstruct as reconstruct_lifecycle, fmt_hold
 from .trader_classify import classify_trader, fmt_classify
+from .orderbook_monitor import HLOrderbookMonitor, detect_walls
 
 __all__ = [
     "EventType", "SmartMoneyEvent", "AddressMonitor",
     "MemeTradeMonitor", "BitgetOIMonitor", "OKXPerpMonitor",
+    "HLOrderbookMonitor", "detect_walls",
     "AddressAnalyzer", "AddressCorrelation", "build_dossier", "fmt_dossier",
     "discover_smart_money", "rank_smart_money", "fetch_leaderboard_rows",
     "WhaleMomentum", "fetch_pnl_rows", "pnl_rows_from",
