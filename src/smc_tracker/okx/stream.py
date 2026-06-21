@@ -155,6 +155,27 @@ async def run_stream(
             lines.append(row)
             print(row)
 
+    # 5. 抓庄信号：大额 taker 净流向（方向性建仓）
+    flow_signals = [
+        {"coin": coin, "direction": "long" if nf > 0 else "short", "net_flow": nf}
+        for coin, nf in flows if abs(nf) >= 300_000.0
+    ]
+    sig_line = f"OKX 抓庄信号: {fmt_flow_signals(flow_signals)}"
+    lines.append(sig_line)
+    print(sig_line)
+
+    # 6. 资金费 × 净流向背离（散户杠杆拥挤 vs taker 实际方向）
+    divs = detect_divergences(monitor.all_latest(), dict(monitor.all_net_flows()))
+    if divs:
+        div_hdr = f"funding×flow 背离 {len(divs)}:"
+        lines.append(div_hdr)
+        print(div_hdr)
+        for coin, sig in divs:
+            row = (f"  {coin:<8} {sig['direction']}/{sig['kind']} "
+                   f"funding={sig['funding']*100:+.4f}% net=${sig['net_flow']:,.0f}")
+            lines.append(row)
+            print(row)
+
     return "\n".join(lines)
 
 
