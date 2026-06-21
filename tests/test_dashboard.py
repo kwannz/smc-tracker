@@ -574,6 +574,99 @@ def test_render_html_contains_exchange_flows():
     assert "交易所资金流" in html, "render_html 应含「交易所资金流」字样"
 
 
+# ---------------------------------------------------------------------------
+# 测试：inline SVG 图表（svgBars / svgSpark，无 CDN/无依赖）
+# ---------------------------------------------------------------------------
+
+def test_render_html_contains_svg():
+    """render_html（含 whale_flows 数据）输出应内联 <svg（聪明钱净流向条形图）。"""
+    s, now_ms = _store_with_data()
+    state = build_dashboard_state(s, now_ms)
+    s.close()
+
+    # 前置：whale_flows 必须非空，否则图不渲染（svgBars 空数据返回空串）
+    assert state["whale_flows"], "测试前置：whale_flows 应有数据"
+
+    html = render_html(state)
+    assert "<svg" in html, "render_html 应内联 <svg 图表"
+    # 发散条形图的核心 SVG 图元应出现在模板中
+    assert "<rect" in html and "<polyline" in html, "应含 <rect（条形）与 <polyline（sparkline）图元定义"
+
+
+def test_render_html_no_residual_open_double_braces():
+    """转义正确性回归：紧凑 JSON 永不含 `{{`（每个 { 后必跟 " 或 }），故输出残留 `{{`
+    即模板转义不完整 / JS 语法错误。
+
+    注意：`}}` 会合法出现于 JSON 嵌套对象闭合（如 {"meta":{}}），不可笼统断言其不存在；
+    畸形转义标记由 test_render_html_braces_unescaped 用 `${{`/`:root{{` 等精确检测。
+    """
+    s, now_ms = _store_with_data()
+    state = build_dashboard_state(s, now_ms)
+    s.close()
+
+    html = render_html(state)
+    assert "{{" not in html, "残留 {{ → 模板转义不完整 / JS 语法错误"
+
+
+def test_render_html_preserves_braced_data_values():
+    """数据值含字面 {{/}}（如信号 reason）必须原样保留——render_html 不得改写 JSON 括号。
+
+    回归：曾用 while 循环把 JSON 相邻括号拆成 `} }`/`{ {` 以满足"输出无 }}"，腐蚀了
+    含双括号的数据值（edge}}case{{x → edge} }case{ {x）。注入须在模板解转义之后，
+    JSON 原样保留。
+    """
+    import json as _json
+    import re as _re
+    state = {"whale_flows": [{"coin": "BTC", "net": 100.0}],
+             "signals": [{"reason": "edge}}case{{x", "coin": "ETH", "direction": "long",
+                          "score": 1, "entry": 1, "stop": 1, "target": 1, "rr": 1}],
+             "generated": "now", "window_min": 60, "meta": {}}
+    html = render_html(state)
+    m = _re.search(r"const S\s*=\s*(\{.*?\});", html, _re.S)
+    assert m, "未找到注入的 const S"
+    parsed = _json.loads(m.group(1))
+    assert parsed["signals"][0]["reason"] == "edge}}case{{x", "数据值被腐蚀"
+
+
+def test_render_html_svg_with_bitget_oi_state():
+    """用另一套构造方式（含 bitget_oi 行情数据）的 state 同样无残留双括号且含 SVG。"""
+    s, now_ms = _store_with_bitget_oi()
+    state = build_dashboard_state(s, now_ms)
+    s.close()
+
+    html = render_html(state)
+    assert "<svg" in html
+    assert "{{" not in html  # `}}` 会合法出现于 JSON 嵌套闭合，仅查 `{{`
+
+
+def test_svg_functions_defined_in_template():
+    """svgBars / svgSpark / svgEsc 三个纯 JS 函数应被定义在模板 <script> 中（供前端调用）。"""
+    state = build_dashboard_state(_store_empty(), 1_700_000_000_000)
+    html = render_html(state)
+    # 解转义后函数定义应为良构的 `function svgBars(` 等
+    assert "function svgBars(" in html
+    assert "function svgSpark(" in html
+    assert "function svgEsc(" in html
+
+
+def test_render_html_no_cdn_after_svg_addition():
+    """加入 SVG 后仍保持纯自包含：无任何外部 CDN/资源链接。"""
+    s, now_ms = _store_with_data()
+    state = build_dashboard_state(s, now_ms)
+    s.close()
+    html = render_html(state)
+    for kw in ("cdn.", "unpkg.com", "jsdelivr", "googleapis", "http://", "https://"):
+        # 例外：SVG 命名空间 xmlns 用的 www.w3.org/2000/svg 是标准声明，非外部加载
+        if kw in ("http://", "https://"):
+            # 只允许 w3.org SVG 命名空间，不允许其它外链
+            import re
+            bad = [m for m in re.findall(r'https?://[^\s"\'<>]+', html)
+                   if "w3.org/2000/svg" not in m]
+            assert not bad, f"不应含外部链接: {bad[:3]}"
+        else:
+            assert kw not in html, f"HTML 不应含外部资源: {kw}"
+
+
 if __name__ == "__main__":
     for name, fn in list(globals().items()):
         if name.startswith("test_") and callable(fn):

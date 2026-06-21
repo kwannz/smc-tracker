@@ -367,6 +367,87 @@ function dirTag(d){{
 }}
 function none(){{ return'<span class="none">（无）</span>'; }}
 
+// ---------- 纯 inline SVG 图表（无 CDN/无依赖）----------
+// XML 转义：防止标签文本里的 < > & 破坏 SVG 结构
+function svgEsc(s){{
+  return String(s==null?'':s)
+    .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}}
+// 发散横向条形图：每项一行，标签在左，横条从中线向右(正/绿)或向左(负/红)，数值在右
+//   items: 数据数组；getLabel(item)->标签字符串；getVal(item)->数值
+//   opts: {{fmt: 数值->显示文本; width: viewBox 宽; labelW: 标签列宽; valW: 数值列宽}}
+//   无数据返回空串。
+function svgBars(items, getLabel, getVal, opts){{
+  if(!items||!items.length)return'';
+  opts=opts||{{}};
+  const width=opts.width||460;
+  const labelW=opts.labelW||96;
+  const valW=opts.valW||78;
+  const fmt=opts.fmt||(v=>fmtUsd(v));
+  const rowH=22, padT=6, padB=6;
+  // 归一化：取所有 |值| 的最大值（>0 防除零）
+  let maxAbs=0;
+  items.forEach(it=>{{ const v=Math.abs(parseFloat(getVal(it))||0); if(v>maxAbs)maxAbs=v; }});
+  if(maxAbs<=0)maxAbs=1;
+  // 绘图区：中线两侧各占一半（barArea 为单侧最大像素长度）
+  const x0=labelW;                       // 条形区左起点
+  const x1=width-valW;                   // 条形区右终点
+  const mid=(x0+x1)/2;                   // 中线（0 值）
+  const half=(x1-x0)/2-2;                // 单侧最大长度
+  const h=items.length*rowH+padT+padB;
+  let s=`<svg viewBox="0 0 ${{width}} ${{h}}" width="100%" height="${{h}}" `
+       +`xmlns="http://www.w3.org/2000/svg" style="display:block">`;
+  // 中线（0 轴）
+  s+=`<line x1="${{mid}}" y1="${{padT}}" x2="${{mid}}" y2="${{h-padB}}" `
+    +`stroke="#30363d" stroke-width="1"/>`;
+  items.forEach((it,i)=>{{
+    const v=parseFloat(getVal(it))||0;
+    const y=padT+i*rowH;
+    const cy=y+rowH/2;
+    const len=Math.abs(v)/maxAbs*half;
+    const color=v>=0?'#3fb950':'#f85149';   // 正绿/负红（与 --pos/--red 一致）
+    // 条形：正值从中线向右，负值从中线向左
+    const bx=v>=0?mid:(mid-len);
+    s+=`<rect x="${{bx}}" y="${{y+4}}" width="${{Math.max(len,0.5)}}" height="${{rowH-8}}" `
+      +`fill="${{color}}" rx="2"/>`;
+    // 左侧标签
+    s+=`<text x="4" y="${{cy+4}}" fill="#8b949e" font-size="11">`
+      +`${{svgEsc(getLabel(it))}}</text>`;
+    // 右侧数值（按符号着色）
+    s+=`<text x="${{width-4}}" y="${{cy+4}}" fill="${{color}}" font-size="11" `
+      +`text-anchor="end">${{svgEsc(fmt(v))}}</text>`;
+  }});
+  s+=`</svg>`;
+  return s;
+}}
+// 折线 sparkline：points=数值数组，返回 inline SVG <polyline>；无/单点安全返回空串
+function svgSpark(points, opts){{
+  if(!points||points.length<2)return'';
+  opts=opts||{{}};
+  const width=opts.width||160;
+  const height=opts.height||32;
+  const pad=2;
+  let lo=Infinity, hi=-Infinity;
+  points.forEach(p=>{{ const v=parseFloat(p); if(!isNaN(v)){{ if(v<lo)lo=v; if(v>hi)hi=v; }} }});
+  if(!isFinite(lo)||!isFinite(hi))return'';
+  const span=(hi-lo)||1;                 // 防除零（全平时 span=1）
+  const n=points.length;
+  const dx=(width-2*pad)/(n-1);
+  const color=opts.color||'#58a6ff';
+  let pts='';
+  points.forEach((p,i)=>{{
+    const v=parseFloat(p)||0;
+    const x=pad+i*dx;
+    // y 翻转（SVG 原点左上：高值在上）
+    const y=height-pad-((v-lo)/span)*(height-2*pad);
+    pts+=`${{x.toFixed(1)}},${{y.toFixed(1)}} `;
+  }});
+  return`<svg viewBox="0 0 ${{width}} ${{height}}" width="${{width}}" height="${{height}}" `
+       +`xmlns="http://www.w3.org/2000/svg" style="display:block">`
+       +`<polyline points="${{pts.trim()}}" fill="none" stroke="${{color}}" `
+       +`stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round"/></svg>`;
+}}
+
 // ---------- 各 section 渲染 ----------
 function renderSignals(rows){{
   if(!rows||!rows.length)return none();
@@ -406,6 +487,14 @@ function renderDivergence(rows){{
 
 function renderWhaleFlows(rows){{
   if(!rows||!rows.length)return none();
+  // 图在上：净流向发散条形图（净买绿向右 / 净卖红向左），数值用美元格式
+  const chart=svgBars(
+    rows,
+    r=>r.coin||'',
+    r=>parseFloat(r.net)||0,
+    {{fmt:v=>(v>=0?'净买 ':'净卖 ')+fmtUsd(Math.abs(v))}}
+  );
+  // 表在下：原始明细表
   let h='<table><tr><th>标的</th><th>净主动流向</th><th>方向</th></tr>';
   rows.forEach(r=>{{
     const n=parseFloat(r.net)||0;
@@ -417,7 +506,7 @@ function renderWhaleFlows(rows){{
       <td class="${{cls}}">${{arrow}}</td>
     </tr>`;
   }});
-  return h+'</table>';
+  return chart+h+'</table>';
 }}
 
 function renderTopAddresses(rows){{
@@ -660,6 +749,15 @@ function renderAccuracy(a){{
   }}
   if(hzKeys.length){{
     html+='<div style="margin-top:8px;font-weight:600">MTF alpha 诊断（各时间段命中率）：</div>';
+    // 图在上：各 TF 命中率发散条形图（以 50% 随机基线为中心，>50% 绿/<50% 红）
+    const hrItems=hzKeys.map(hz=>({{hz:hz, hr:bh[hz].hit_rate}}));
+    const hrChart=svgBars(
+      hrItems,
+      it=>tfLabel(it.hz),
+      it=>(parseFloat(it.hr)||0)-0.5,   // 相对 50% 随机基线的偏移（正=有边际）
+      {{fmt:it=>((parseFloat(it)+0.5)*100).toFixed(0)+'%'}}
+    );
+    html+=hrChart;
     html+='<table><tr><th>TF</th><th>命中</th><th>命中率</th><th>边际</th><th>均按向收益</th><th>中性alpha边际</th><th>样本</th></tr>';
     hzKeys.forEach(hz=>{{
       const d=bh[hz];
@@ -733,6 +831,10 @@ def render_html(state: dict) -> str:
     """
     # 序列化注入的 initial state（ensure_ascii=False 支持中文，indent=None 省体积）
     state_json = json.dumps(state, ensure_ascii=False, default=str)
+    # 先对模板解转义（{{→{、}}→}），再注入 JSON：注入发生在解转义之后，JSON 自身的
+    # 括号（含嵌套对象闭合产生的 `}}`）不经过 .replace，故数据值原样保留。
+    # ⚠️ 不可对 state_json 改写括号——含字面 {{/}} 的数据值（如信号 reason）会被腐蚀。
+    # 注：紧凑 JSON 永不含 `{{`（每个 { 后必跟 " 或 }），但会含 `}}`（嵌套闭合，合法无害）。
     html = _HTML_TEMPLATE.replace("{{", "{").replace("}}", "}")
     return html.replace("__INITIAL_STATE__", state_json)
 
