@@ -667,6 +667,156 @@ def test_render_html_no_cdn_after_svg_addition():
             assert kw not in html, f"HTML 不应含外部资源: {kw}"
 
 
+# ---------------------------------------------------------------------------
+# 测试：OKX/HL section（okx_liquidations / okx_signals / okx_walls 卡片）
+# ---------------------------------------------------------------------------
+
+def _store_with_okx_hl() -> tuple:
+    """建含 OKX 强平 / OKX 信号 / HL 挂单墙合成数据的临时 Store。"""
+    d = __import__("tempfile").mkdtemp()
+    s = Store(__import__("pathlib").Path(d) / "t.db")
+    now_ms = 1_700_000_000_000
+
+    # ---- OKX 强平（insert_okx_liquidations rows: coin,pos_side,side,notional_usd,bk_px,ts）----
+    # BTC 多头被平 5M（抛压级联）+ BTC 再 2M；ETH 空头被平 3M（逼空）
+    s.insert_okx_liquidations([
+        ("BTC", "long", "sell", 5_000_000.0, 65000.0, now_ms - 120_000),
+        ("BTC", "long", "sell", 2_000_000.0, 64800.0, now_ms - 90_000),
+        ("ETH", "short", "buy", 3_000_000.0, 3500.0, now_ms - 60_000),
+    ])
+
+    # ---- OKX 信号（insert_okx_signal: ts,coin,direction,kind,funding,net_flow，单条接口）----
+    s.insert_okx_signal(now_ms - 300_000, "SOL", "long", "accumulation", 0.0001, 1_200_000.0)
+    s.insert_okx_signal(now_ms - 200_000, "DOGE", "short", "distribution", -0.0003, -800_000.0)
+
+    # ---- HL 挂单墙（insert_orderbook_walls rows: ts,coin,side,kind,px,notional）----
+    s.insert_orderbook_walls([
+        (now_ms - 150_000, "BTC", "bid", "build", 64000.0, 4_000_000.0),
+        (now_ms - 100_000, "BTC", "ask", "pull", 66000.0, 2_500_000.0),
+        (now_ms - 50_000, "ETH", "bid", "build", 3400.0, 1_500_000.0),
+    ])
+
+    s.conn.commit()
+    return s, now_ms
+
+
+def test_okx_hl_keys_present_empty_store():
+    """空库时 build_dashboard_state 应含 okx_signals/okx_liquidations/okx_walls 键且为 []。"""
+    s = _store_empty()
+    state = build_dashboard_state(s, 1_700_000_000_000)
+    s.close()
+
+    for key in ("okx_signals", "okx_liquidations", "okx_walls"):
+        assert key in state, f"state 应含 {key} 键"
+        assert isinstance(state[key], list), f"{key} 应为 list，实际 {type(state[key])}"
+        assert state[key] == [], f"{key} 空库下应为 []，实际 {state[key]}"
+
+
+def test_okx_liquidations_section_has_data():
+    """okx_liquidations section：插入 3 行强平后结构正确，notional 取 notional_usd。"""
+    s, now_ms = _store_with_okx_hl()
+    state = build_dashboard_state(s, now_ms, window_ms=3_600_000)
+    s.close()
+
+    liq = state["okx_liquidations"]
+    assert len(liq) == 3, f"应有 3 行强平，实得 {len(liq)}"
+    btc = next((r for r in liq if r["coin"] == "BTC" and r["notional"] == 5_000_000.0), None)
+    assert btc is not None, "应含 BTC 5M 强平行"
+    assert btc["pos_side"] == "long"
+    assert btc["side"] == "sell"
+    for field in ("ts", "coin", "pos_side", "side", "notional"):
+        assert field in btc
+
+
+def test_okx_signals_section_has_data():
+    """okx_signals section：含 SOL accumulation long + DOGE distribution short。"""
+    s, now_ms = _store_with_okx_hl()
+    state = build_dashboard_state(s, now_ms, window_ms=3_600_000)
+    s.close()
+
+    sigs = state["okx_signals"]
+    assert len(sigs) == 2, f"应有 2 条 OKX 信号，实得 {len(sigs)}"
+    sol = next((r for r in sigs if r["coin"] == "SOL"), None)
+    assert sol is not None
+    assert sol["direction"] == "long"
+    assert sol["kind"] == "accumulation"
+    assert abs(sol["net_flow"] - 1_200_000.0) < 1e-6
+    for field in ("coin", "direction", "kind", "net_flow"):
+        assert field in sol
+
+
+def test_okx_walls_section_has_data():
+    """okx_walls section：含 BTC 买墙出现 + BTC 卖墙抽单 + ETH 买墙。"""
+    s, now_ms = _store_with_okx_hl()
+    state = build_dashboard_state(s, now_ms, window_ms=3_600_000)
+    s.close()
+
+    walls = state["okx_walls"]
+    assert len(walls) == 3, f"应有 3 行挂单墙，实得 {len(walls)}"
+    bid = next((r for r in walls if r["coin"] == "BTC" and r["side"] == "bid"), None)
+    assert bid is not None, "应含 BTC 买墙行"
+    assert bid["kind"] == "build"
+    assert abs(bid["notional"] - 4_000_000.0) < 1e-6
+    for field in ("ts", "coin", "side", "kind", "px", "notional"):
+        assert field in bid
+
+
+def test_okx_hl_window_filter():
+    """窗口过滤：window_ms=1ms 时 OKX/HL section 应全为空（数据全在过去）。"""
+    s, now_ms = _store_with_okx_hl()
+    state = build_dashboard_state(s, now_ms, window_ms=1)
+    s.close()
+    assert state["okx_liquidations"] == []
+    assert state["okx_signals"] == []
+    assert state["okx_walls"] == []
+
+
+def test_render_html_contains_okx_hl_titles_and_svg():
+    """render_html（含 OKX/HL 数据）应含三个中文标题且内联 <svg（强平/挂单墙按 coin 聚合图）。"""
+    s, now_ms = _store_with_okx_hl()
+    state = build_dashboard_state(s, now_ms)
+    s.close()
+
+    html = render_html(state)
+    assert "OKX 强平级联" in html, "应含「OKX 强平级联」标题"
+    assert "OKX 跨所信号" in html, "应含「OKX 跨所信号」标题"
+    assert "HL 挂单墙" in html, "应含「HL 挂单墙」标题"
+    assert "<svg" in html, "应内联 <svg（强平/挂单墙聚合条形图）"
+    # 转义完整性：紧凑 JSON 永不含 `{{`，残留即模板转义不完整（不断言 `}}`，其合法出现于嵌套闭合）
+    assert "{{" not in html, "残留 {{ → 模板转义不完整 / JS 语法错误"
+
+
+def test_render_html_okx_signal_braced_value_integrity():
+    """数据完整性：OKX 信号字段含字面 {{/}}（如 reason='a}}b{{c'）经 render_html 回环不变。
+
+    用直接构造的 state（含畸形 coin/kind），验证 JSON 注入不腐蚀含双括号的数据值。
+    """
+    import json as _json
+    import re as _re
+
+    state = {
+        "okx_signals": [{"coin": "X}}b{{c", "direction": "long",
+                          "kind": "k}}q{{z", "net_flow": 1.0}],
+        "okx_liquidations": [], "okx_walls": [], "whale_flows": [],
+        "meta": {"generated": "now", "window_min": 60},
+    }
+    html = render_html(state)
+    m = _re.search(r"const S\s*=\s*(\{.*?\});", html, _re.S)
+    assert m, "未找到注入的 const S"
+    parsed = _json.loads(m.group(1))
+    assert parsed["okx_signals"][0]["coin"] == "X}}b{{c", "okx coin 被腐蚀"
+    assert parsed["okx_signals"][0]["kind"] == "k}}q{{z", "okx kind 被腐蚀"
+
+
+def test_render_okx_hl_functions_defined():
+    """renderOkxLiquidations / renderOkxSignals / renderHlWalls 三函数应被定义在模板 <script> 中。"""
+    state = build_dashboard_state(_store_empty(), 1_700_000_000_000)
+    html = render_html(state)
+    assert "function renderOkxLiquidations(" in html
+    assert "function renderOkxSignals(" in html
+    assert "function renderHlWalls(" in html
+
+
 if __name__ == "__main__":
     for name, fn in list(globals().items()):
         if name.startswith("test_") and callable(fn):

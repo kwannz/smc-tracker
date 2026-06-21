@@ -255,6 +255,53 @@ def build_dashboard_state(store: Any, now_ms: int, window_ms: int = 3_600_000) -
     except Exception:  # noqa: BLE001 — 表不存在/结构不对时返回 []
         wallet_portfolio = []
 
+    # ---- OKX 跨所信号（okx_signals 表：资金费×净流向背离）----
+    # recent_okx_signals 返回列：(ts, coin, direction, kind, funding, net_flow)，按 ts ASC。
+    # dashboard 只展示 coin/direction/kind/net_flow（funding 不入卡，保持表精简）。
+    okx_signals: list[dict] = []
+    try:
+        for r in store.recent_okx_signals(since_ms):
+            okx_signals.append({
+                "coin": r[1],
+                "direction": r[2],
+                "kind": r[3],
+                "net_flow": r[5],
+            })
+    except Exception:  # noqa: BLE001 — 表不存在/为空时返回 []
+        okx_signals = []
+
+    # ---- OKX 强平级联（okx_liquidations 表）----
+    # recent_okx_liquidations 返回列：(ts, coin, pos_side, side, notional_usd, bk_px)，按 ts ASC。
+    # notional 取 notional_usd（第 4 列）；前端按 coin 聚合规模成条形图 + 明细表。
+    okx_liquidations: list[dict] = []
+    try:
+        for r in store.recent_okx_liquidations(since_ms):
+            okx_liquidations.append({
+                "ts": r[0],
+                "coin": r[1],
+                "pos_side": r[2],
+                "side": r[3],
+                "notional": r[4],   # notional_usd
+            })
+    except Exception:  # noqa: BLE001 — 表不存在/为空时返回 []
+        okx_liquidations = []
+
+    # ---- HL 挂单墙（hl_orderbook_walls 表：领先意图，可能 spoof）----
+    # recent_orderbook_walls 返回列：(ts, coin, side, kind, px, notional)，按 ts ASC。
+    okx_walls: list[dict] = []
+    try:
+        for r in store.recent_orderbook_walls(since_ms):
+            okx_walls.append({
+                "ts": r[0],
+                "coin": r[1],
+                "side": r[2],
+                "kind": r[3],
+                "px": r[4],
+                "notional": r[5],
+            })
+    except Exception:  # noqa: BLE001 — 表不存在/为空时返回 []
+        okx_walls = []
+
     return {
         "meta": meta,
         "health": health,
@@ -271,6 +318,9 @@ def build_dashboard_state(store: Any, now_ms: int, window_ms: int = 3_600_000) -
         "ticker_board": ticker_board,
         "exchange_flows": ef_rows,
         "wallet_portfolio": wallet_portfolio,
+        "okx_signals": okx_signals,
+        "okx_liquidations": okx_liquidations,
+        "okx_walls": okx_walls,
     }
 
 
@@ -698,6 +748,103 @@ function renderExchangeFlows(rows){{
   return h+'</table>';
 }}
 
+function renderOkxLiquidations(rows){{
+  if(!rows||!rows.length)return none();
+  // 先按 coin 聚合强平名义总额 → 条形图（强平规模 by coin，全部为正→统一红色告警语义）
+  const agg={{}};
+  rows.forEach(r=>{{
+    const c=r.coin||'?';
+    agg[c]=(agg[c]||0)+(parseFloat(r.notional)||0);
+  }});
+  const items=Object.keys(agg)
+    .map(c=>({{coin:c, total:agg[c]}}))
+    .sort((a,b)=>b.total-a.total)
+    .slice(0,12);
+  const chart=svgBars(
+    items,
+    it=>it.coin,
+    it=>parseFloat(it.total)||0,
+    {{fmt:v=>'💥 '+fmtUsd(Math.abs(v))}}
+  );
+  // 表在下：时间/coin/被平方向/名义（pos_side='long'=多头被平→抛压级联；'short'=空头被平→逼空）
+  let h='<div style="color:var(--muted);font-size:11px;margin-bottom:6px">'
+       +'诚实标注：强平=已发生告警（多头被平🔴抛压级联 / 空头被平🟢逼空）</div>';
+  h+='<table><tr><th>时间</th><th>标的</th><th>被平方向</th><th>名义(USD)</th></tr>';
+  rows.slice().reverse().forEach(r=>{{   // reverse：最新在前（底层按 ts ASC）
+    const ps=r.pos_side;
+    const psLbl=ps==='long'?'多头被平🔴':(ps==='short'?'空头被平🟢':(ps||'--'));
+    const psCls=ps==='long'?'neg':(ps==='short'?'pos':'');
+    h+=`<tr>
+      <td>${{fmtTime(r.ts)}}</td>
+      <td class="coin">${{r.coin||''}}</td>
+      <td class="${{psCls}}">${{psLbl}}</td>
+      <td>${{fmtUsd(r.notional)}}</td>
+    </tr>`;
+  }});
+  return chart+h+'</table>';
+}}
+
+function renderOkxSignals(rows){{
+  if(!rows||!rows.length)return none();
+  // 表：coin/方向/类型/净流向（kind: accumulation=吸筹 / distribution=分销）
+  let h='<table><tr><th>标的</th><th>方向</th><th>类型</th><th>净流向(USD)</th></tr>';
+  rows.slice().reverse().forEach(r=>{{   // reverse：最新在前（底层按 ts ASC）
+    const k=r.kind;
+    const kLbl=k==='accumulation'?'吸筹↑':(k==='distribution'?'分销↓':(k||'--'));
+    const n=parseFloat(r.net_flow)||0;
+    const nCls=n>=0?'pos':'neg';
+    h+=`<tr>
+      <td class="coin">${{r.coin||''}}</td>
+      <td>${{dirTag(r.direction)}}</td>
+      <td>${{kLbl}}</td>
+      <td class="${{nCls}}">${{(n>=0?'净买 ':'净卖 ')+fmtUsd(Math.abs(n))}}</td>
+    </tr>`;
+  }});
+  return h+'</table>';
+}}
+
+function renderHlWalls(rows){{
+  if(!rows||!rows.length)return none();
+  // 可选图：按 coin 聚合墙名义总额（spoof 风险高，仅作意图体量参考）
+  const agg={{}};
+  rows.forEach(r=>{{
+    const c=r.coin||'?';
+    agg[c]=(agg[c]||0)+(parseFloat(r.notional)||0);
+  }});
+  const items=Object.keys(agg)
+    .map(c=>({{coin:c, total:agg[c]}}))
+    .sort((a,b)=>b.total-a.total)
+    .slice(0,12);
+  const chart=svgBars(
+    items,
+    it=>it.coin,
+    it=>parseFloat(it.total)||0,
+    {{fmt:v=>'🧱 '+fmtUsd(Math.abs(v))}}
+  );
+  // 诚实标注：挂单墙=未成交意图（可能 spoof 诱多/诱空），非已实现
+  let h='<div style="color:var(--muted);font-size:11px;margin-bottom:6px">'
+       +'诚实标注：挂单墙=未成交意图（领先信号，但可能 spoof 诱单）</div>';
+  h+='<table><tr><th>时间</th><th>标的</th><th>墙向</th><th>动作</th><th>价</th><th>名义(USD)</th></tr>';
+  rows.slice().reverse().forEach(r=>{{   // reverse：最新在前（底层按 ts ASC）
+    // side: 'bid'=买墙(支撑/吸筹意图) / 'ask'=卖墙(压制/分销意图)
+    const sd=r.side;
+    const sdLbl=sd==='bid'?'买墙🟢':(sd==='ask'?'卖墙🔴':(sd||'--'));
+    const sdCls=sd==='bid'?'pos':(sd==='ask'?'neg':'');
+    // kind: 'build'=墙出现 / 'pull'=抽单（撤墙，意图反转/诱单兑现）
+    const k=r.kind;
+    const kLbl=k==='build'?'出现':(k==='pull'?'抽单':(k||'--'));
+    h+=`<tr>
+      <td>${{fmtTime(r.ts)}}</td>
+      <td class="coin">${{r.coin||''}}</td>
+      <td class="${{sdCls}}">${{sdLbl}}</td>
+      <td>${{kLbl}}</td>
+      <td>${{r.px!=null?fmtNum(r.px,4):'--'}}</td>
+      <td>${{fmtUsd(r.notional)}}</td>
+    </tr>`;
+  }});
+  return chart+h+'</table>';
+}}
+
 function renderHealth(h){{
   if(!h||!h.freshness||!h.freshness.length)return none();
   const ok=h.ok?'<span class="pos">✅ 健康</span>':'<span class="neg">⚠️ 告警</span>';
@@ -795,6 +942,9 @@ function renderAll(state){{
     ['庄家集团 🕸️','clusters',renderClusters],
     ['Bitget OI 动向 📊','oi_surges',renderOiSurges],
     ['链上大额转账 ⛓️','onchain',renderOnchain],
+    ['OKX 强平级联 💥','okx_liquidations',renderOkxLiquidations],
+    ['OKX 跨所信号 🌐','okx_signals',renderOkxSignals],
+    ['HL 挂单墙 🧱','okx_walls',renderHlWalls],
   ];
 
   document.getElementById('main').innerHTML=sections.map(([title,key,fn])=>
