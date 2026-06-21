@@ -103,3 +103,54 @@ async def run_stream(
             print(row)
 
     return "\n".join(lines)
+
+
+async def run_okx_streaming(store: object, okx_cfg: object) -> None:
+    """常驻 OKX streaming 任务：按 OI 排名选 top_n 永续 → 实时落库 okx_perp。
+
+    供 TradingSystem.run() 作为独立 asyncio.Task 运行，可通过 cancel() 优雅退出。
+    store    : smc_tracker.storage.Store 实例（落库 okx_perp）。
+    okx_cfg  : smc_tracker.config.OKXCfg 实例（ws_url/rest_url/top_n/surge_pct）。
+    """
+    from smc_tracker.monitor.okx_perp_monitor import OKXPerpMonitor  # noqa: PLC0415
+
+    # 1. REST 查询 top_n 永续元数据
+    top_n: int = getattr(okx_cfg, "top_n", 20)
+    rest_url: str = getattr(okx_cfg, "rest_url", "https://www.okx.com")
+    ws_url: str = getattr(okx_cfg, "ws_url", "wss://ws.okx.com:8443/ws/v5/public")
+    surge_pct: float = getattr(okx_cfg, "surge_pct", 0.05)
+
+    async with OKXClient(base=rest_url) as client:
+        insts, ct_val = await select_top_insts(client, top_n)
+
+    inst_to_coin: dict[str, str] = {i: i.split("-")[0] for i in insts}
+
+    # 2. 构建 WS + Monitor
+    ws = OKXWSClient(ws_url=ws_url)
+    monitor = OKXPerpMonitor(
+        inst_ids=insts,
+        inst_to_coin=inst_to_coin,
+        ct_val=ct_val,
+        ws=ws,
+        store=store,
+        surge_pct=surge_pct,
+        on_surge=None,  # app 层不需要回调；OI 异动已由 monitor 内部落库
+    )
+    monitor.attach()
+
+    # 3. 周期 flush 落库 + WS 常驻（可被 cancel 打断）
+    flush_interval: float = 5.0
+    ws_task = asyncio.create_task(ws.run())
+    try:
+        while True:
+            await asyncio.sleep(flush_interval)
+            monitor.flush()
+    except asyncio.CancelledError:
+        pass
+    finally:
+        await ws.stop()
+        ws_task.cancel()
+        try:
+            await ws_task
+        except asyncio.CancelledError:
+            pass

@@ -159,6 +159,7 @@ class TradingSystem:
         self.sol_monitor = SolanaSupplyMonitor(store)   # SOL meme 供应量(mint/burn)监控
         self._stopping = False
         self._bg_tasks: set[asyncio.Task] = set()       # 持有 _push 后台任务引用，防 GC
+        self._okx_task: asyncio.Task | None = None      # OKX streaming 任务（仅 enabled 时创建）
 
         # ---- 钱包持仓画像管理器 ----
         self.wallet_portfolio = WalletPortfolio(store, cfg.hyperliquid.rest_url)
@@ -1091,6 +1092,14 @@ class TradingSystem:
         # 挂载 System 2
         if self.oi_monitor:
             self.oi_monitor.attach()
+        # 挂载 System 3（OKX，默认 enabled=False，不影响现有路径）
+        if self.cfg.okx.enabled:
+            from .okx.stream import run_okx_streaming  # noqa: PLC0415
+            self._okx_task = asyncio.create_task(
+                run_okx_streaming(self.store, self.cfg.okx),
+                name="okx_streaming",
+            )
+            log.info("OKX streaming 已启动 (top_n=%d)", self.cfg.okx.top_n)
         log.info("双所系统启动：watchlist=%d meme=%d markets=%s",
                  len(self.cfg.watchlist), len(self.meme_markets), self.cfg.markets)
         await asyncio.gather(
@@ -1120,6 +1129,9 @@ class TradingSystem:
         self.meme_monitor.flush()
         if self.oi_monitor:
             self.oi_monitor.flush()
+        # OKX streaming 任务：优雅取消（仅 enabled=True 时存在）
+        if self._okx_task is not None and not self._okx_task.done():
+            self._okx_task.cancel()
         await self.hl_ws.stop()
         await self.bg_ws.stop()
 

@@ -330,6 +330,22 @@ def test_cli_okx_subcommand_parser():
     assert callable(getattr(args, "handler", None)), "okx 子命令应设置 handler"
 
 
+# ---- OKX 接入默认关闭 + run_okx_streaming 可引用 ----
+
+def test_okx_cfg_disabled_by_default():
+    """Config().okx.enabled 默认 False（不影响现有路径）。"""
+    from smc_tracker.config import Config
+    cfg = Config()
+    assert cfg.okx.enabled is False
+
+
+def test_run_okx_streaming_importable():
+    """run_okx_streaming 可从 okx 包引入（import 即可，不联网不实跑 WS）。"""
+    from smc_tracker.okx.stream import run_okx_streaming
+    import asyncio
+    assert asyncio.iscoroutinefunction(run_okx_streaming)
+
+
 if __name__ == "__main__":
     for name, fn in list(globals().items()):
         if name.startswith("test_") and callable(fn):
