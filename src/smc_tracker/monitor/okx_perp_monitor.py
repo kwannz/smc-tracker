@@ -91,7 +91,12 @@ class OKXPerpMonitor:
     def _on_trades(self, arg: dict, data: list, recv_ns: int) -> None:
         """逐笔成交 → per-coin 净主动流向（名义 = sz张 × ctVal × px）。"""
         inst = arg.get("instId", "")
-        coin = self.inst_to_coin.get(inst, inst)
+        # 只处理本 monitor 监控的永续 inst：trades 频道是共享的（同一 WS 上若另订了现货
+        # <COIN>-USDT 的 trades，推送也走此频道），非监控 inst 不得污染 net_flow
+        # （否则会产生假键如 "BTC-USDT" 且 ctVal 错为 1.0）。
+        if inst not in self.inst_to_coin:
+            return
+        coin = self.inst_to_coin[inst]
         ctv = self.ct_val.get(inst, 1.0)
         for t in data:
             sz = _f(t.get("sz"))

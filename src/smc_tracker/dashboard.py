@@ -206,52 +206,17 @@ def build_dashboard_state(store: Any, now_ms: int, window_ms: int = 3_600_000) -
     except Exception:  # noqa: BLE001 — 回顾失败不影响其余面板
         accuracy = {}
 
-    # ---- 钱包持仓画像（watched_wallets + wallet_positions_full）----
+    # ---- 钱包持仓画像（去重：复用 WalletPortfolio.snapshot_rows，零重复 SQL）----
+    # 地址集与排序沿用 store.load_wallets()（watched_wallets 按 account_value DESC NULLS
+    # LAST），snapshot_rows 内部用 load_wallets() 取元数据 + latest_wallet_positions() 取
+    # 最新持仓——与原内联 SQL 等价（仅 positions LIMIT 100 vs 旧 50，形状不变）。
+    # snapshot_rows 不产出 source 字段，但前端 renderWalletPortfolio 未使用 source，安全。
     wallet_portfolio: list[dict] = []
     try:
-        ww_rows = _safe_rows(
-            conn,
-            "SELECT address,label,source,first_seen_ms,last_seen_ms,"
-            "account_value,total_ntl_pos,n_positions FROM watched_wallets "
-            "ORDER BY account_value DESC NULLS LAST",
-        )
-        for ww in ww_rows:
-            # ww: (address,label,source,first_seen_ms,last_seen_ms,
-            #       account_value,total_ntl_pos,n_positions)
-            addr = ww[0]
-            pos_rows = _safe_rows(
-                conn,
-                "SELECT coin,direction,szi,entry_px,position_value,"
-                "unrealized_pnl,leverage,liquidation_px,open_ms,last_close_ms,hold_sec "
-                "FROM wallet_positions_full "
-                "WHERE address=? AND ts=(SELECT MAX(ts) FROM wallet_positions_full WHERE address=?) "
-                "ORDER BY ABS(position_value) DESC LIMIT 50",
-                (addr, addr),
-            )
-            positions = [
-                {
-                    "coin": r[0],
-                    "direction": r[1],
-                    "position_value": r[4],
-                    "entry_px": r[3],
-                    "unrealized_pnl": r[5],
-                    "leverage": r[6],
-                    "liquidation_px": r[7],
-                    "open_ms": r[8] if len(r) > 8 else None,
-                    "last_close_ms": r[9] if len(r) > 9 else None,
-                    "hold_sec": r[10] if len(r) > 10 else None,
-                }
-                for r in pos_rows
-            ]
-            wallet_portfolio.append({
-                "address": addr,
-                "label": ww[1] or "",
-                "source": ww[2] or "",
-                "account_value": ww[5],
-                "total_ntl_pos": ww[6],
-                "n_positions": ww[7] or 0,
-                "positions": positions,
-            })
+        from .monitor.wallet_portfolio import WalletPortfolio
+        # snapshot_rows 仅依赖 store（不发网络），rest_url 传空串占位
+        addresses = [row[0] for row in store.load_wallets()]
+        wallet_portfolio = WalletPortfolio(store, "").snapshot_rows(addresses, now_ms)
     except Exception:  # noqa: BLE001 — 表不存在/结构不对时返回 []
         wallet_portfolio = []
 

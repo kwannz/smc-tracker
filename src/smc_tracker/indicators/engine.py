@@ -4,7 +4,7 @@ from __future__ import annotations
 from typing import Any
 
 from .combo import combo_consensus, combo_signals
-from .fibonacci import fib_levels, in_golden_pocket
+from .fibonacci import fib_levels, in_golden_pocket, nearest_fib
 from .knn import KNNPredictor
 from .levels import nearest_levels, support_resistance
 from .price_action import detect_patterns, pa_bias
@@ -31,6 +31,7 @@ def analyze(candles: list[Any], now_ms: int = 0, knn: KNNPredictor | None = None
     direction = "up" if candles[-1].c >= (hi + lo) / 2 else "down"
     fib = fib_levels(hi, lo, direction)
     in_ote = in_golden_pocket(price, hi, lo, direction)
+    near_fib = nearest_fib(price, hi, lo, direction)  # (名称, 价格)|None：离价最近的斐波那契位
 
     sr = support_resistance(candles, lookback=3)
     near = nearest_levels(price, sr)
@@ -50,7 +51,7 @@ def analyze(candles: list[Any], now_ms: int = 0, knn: KNNPredictor | None = None
         "indicators": ind,
         "combos": combos, "combo_dir": combo_dir, "combo_score": combo_score,
         "patterns": patterns, "pa_bias": pa,
-        "fib": fib, "in_ote": in_ote,
+        "fib": fib, "in_ote": in_ote, "near_fib": near_fib,
         "support": near["support"], "resistance": near["resistance"],
         "knn": knn_pred,
         "session": current_session(now_ms) if now_ms else None,
@@ -69,8 +70,10 @@ def fmt_analysis(coin: str, a: dict[str, Any]) -> str:
     knn_s = (f" KNN={knn['direction']}({knn['confidence']*100:.0f}%)" if knn else "")
     pats = ("|" + ",".join(a["patterns"])) if a["patterns"] else ""
     kz = f" ⏰{a['killzone']}" if a.get("killzone") else ""
+    nf = a.get("near_fib")
+    nf_s = f" 贴近{nf[0]}位" if nf else ""
     return (f"📊 {coin} 价={a['price']:g} 偏向={a['bias_label']}({a['bias']:+.2f}){knn_s}\n"
             f"   RSI={ind.get('rsi14') or 0:.0f} ADX={ind.get('adx14') or 0:.0f} "
             f"MACD={'+' if (ind.get('macd_hist') or 0) > 0 else '-'} "
             f"combo={a['combo_dir']} 支撑={a['support'] or '-'} 压力={a['resistance'] or '-'}"
-            f"{' OTE' if a['in_ote'] else ''}{pats}{kz}")
+            f"{' OTE' if a['in_ote'] else ''}{nf_s}{pats}{kz}")

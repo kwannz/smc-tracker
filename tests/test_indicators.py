@@ -327,6 +327,19 @@ def test_analyze_returns_full_dict(patch_adx):
     assert -1.0 <= a["bias"] <= 1.0
 
 
+def test_analyze_includes_near_fib(patch_adx):
+    """analyze 输出含 'near_fib' 键：(名称, 价格) 元组或 None。"""
+    cs = _uptrend_candles(80)
+    a = analyze(cs, now_ms=0)
+    assert "near_fib" in a
+    nf = a["near_fib"]
+    # 有界波动的上升趋势 swing 必非零跨度 → nearest_fib 命中
+    assert nf is not None
+    name, lvl = nf
+    assert isinstance(name, str)
+    assert np.isfinite(lvl)
+
+
 def test_analyze_insufficient_candles():
     """K 线不足时返回 error。"""
     cs = _uptrend_candles(10)

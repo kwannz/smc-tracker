@@ -28,8 +28,8 @@ from .indicators import VolumeMonitor, analyze as ta_analyze, fmt_analysis
 from .hyperliquid import HyperliquidInfo, HyperliquidWSClient, Subscription
 from .llm import build_analyst
 from .memecoins import normalize
-from .monitor import (AddressMonitor, BitgetOIMonitor, EventType, MemeTradeMonitor,
-                      SmartMoneyEvent)
+from .monitor import (AddressMonitor, BitgetOIMonitor, EventType, HLOrderbookMonitor,
+                      MemeTradeMonitor, SmartMoneyEvent)
 from .monitor.whale_discovery import discover_smart_money
 from .monitor.address_correlation import AddressCorrelation
 from .monitor.wallet_portfolio import WalletPortfolio
@@ -112,6 +112,12 @@ class TradingSystem:
             on_trade=self._on_meme_trade,
             on_suspicious=self._on_suspicious,
             suspicious_notional=cfg.detection.large_fill_notional_usd * 2)
+        # 挂单墙动态监控（l2Book 领先意图：大额挂单出现/抽单 = 资金就位/收网）。
+        # 币集用主流币 cfg.markets（BTC/ETH 等），控制 l2Book 负载——不订阅全 meme，
+        # 因 l2Book 逐档高频推送，仅主流币深度足够大且墙信号有意义。
+        self.orderbook_monitor = HLOrderbookMonitor(
+            list(cfg.markets), self.hl_ws, store=store,
+            on_wall_signal=self._on_wall_signal)
         self.structure = StructureFeed(cfg.smc.swing_lookback, on_event=self._on_structure,
                                        on_closed=self._on_closed_candle)
         self.zones: dict[str, ZoneEngine] = {}   # 每 coin 一个 FVG/OB 引擎
@@ -141,6 +147,7 @@ class TradingSystem:
         self._candles: dict[str, list] = {}            # 每 coin 近 K 线缓冲
         self._pump_seen: dict[str, int] = {}           # coin -> 上次预警 ts(冷却)
         self._ta_seen: dict[str, int] = {}             # coin -> 上次 TA 信号 ts(冷却)
+        self._wall_seen: dict[tuple[str, str], int] = {}  # (coin,side) -> 上次墙告警 ts(冷却)
         self._mids: dict[str, float] = {}     # 全市场中间价（allMids），共识估值用
         self.notifier = build_notifier(cfg)   # webhook + Telegram 多渠道推送
         self.analyst = build_analyst(cfg)     # LLM(Codex GPT-5.4) 前瞻研判，未配置则 None
@@ -290,6 +297,32 @@ class TradingSystem:
                f"${abs(net):,.0f}(3min累积) → 已升级全量追踪"
                + self._price_tag(coin))
         print(f"\n{'='*60}\n{msg}\n{'='*60}\n")
+        self._push(msg)
+
+    def _on_wall_signal(self, ev: dict) -> None:
+        """l2Book 大额挂单墙动态（领先意图）→ 仅对新出现的大墙(build)节流推送。
+
+        诚实定位：挂单墙是「尚未成交的意图」，先于成交，但可能 spoof（虚挂诱导）/冰山，
+        非确定方向，须与成交/OI 交叉验证。落库由 monitor.flush() 负责，此回调仅做告警。
+        kind="build"(出现)/"pull"(抽单)；side="bid"(支撑/吸筹意图)/"ask"(压制/分销意图)。
+        """
+        if ev.get("kind") != "build":
+            return  # 仅前瞻性的「墙出现」推送；抽单(pull)仅落库供 dashboard 复盘
+        coin, side = ev.get("coin", ""), ev.get("side", "")
+        ntl = _f(ev.get("notional"))
+        # 仅推送显著大墙（≥2× 默认大单阈值），且同币同侧 5 分钟冷却，避免高频刷屏
+        if ntl < self.cfg.detection.large_fill_notional_usd * 2:
+            return
+        now = int(ev.get("ts") or time.time() * 1000)
+        key = (coin, side)
+        if now - self._wall_seen.get(key, 0) < 300_000:
+            return
+        self._wall_seen[key] = now
+        side_tag = "🟢bid墙(支撑/吸筹意图)" if side == "bid" else "🔴ask墙(压制/分销意图)"
+        msg = (f"[{_ts(now)}] 🧱挂单墙 {coin} {side_tag} @ {_fmt_px(ev.get('px', 0.0))} "
+               f"${ntl:,.0f}(领先意图·可能spoof，须与成交/OI 交叉验证)"
+               + self._price_tag(coin))
+        print(f"[{_hms(now)}] {msg}")
         self._push(msg)
 
     def _on_meme_trade(self, t: dict) -> None:
@@ -569,6 +602,7 @@ class TradingSystem:
         while not self._stopping:
             await asyncio.sleep(every)
             self.meme_monitor.flush()
+            self.orderbook_monitor.flush()   # 挂单墙事件批量落库（dashboard 消费）
             if self.oi_monitor:
                 self.oi_monitor.flush()
 
@@ -1086,6 +1120,7 @@ class TradingSystem:
         # 挂载 System 1
         self.address_monitor.attach()
         self.meme_monitor.attach()
+        self.orderbook_monitor.attach()   # l2Book 挂单墙动态（主流币领先意图）
         self.hl_ws.subscribe(Subscription(type="allMids"), self._on_all_mids)
         for coin in self.signal_universe:
             self.hl_ws.subscribe(
@@ -1129,6 +1164,7 @@ class TradingSystem:
     async def stop(self) -> None:
         self._stopping = True
         self.meme_monitor.flush()
+        self.orderbook_monitor.flush()   # 退出前冲刷剩余挂单墙事件
         if self.oi_monitor:
             self.oi_monitor.flush()
         # OKX streaming 任务：优雅取消（仅 enabled=True 时存在）

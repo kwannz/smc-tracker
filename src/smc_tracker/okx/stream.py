@@ -12,10 +12,85 @@ from __future__ import annotations
 import asyncio
 import logging
 
+from ..monitor.spot_flow import is_significant_flow, spot_taker_flow
 from .client import OKXClient
-from .ws_client import OKXWSClient
+from .ws_client import OKXSub, OKXWSClient
 
 log = logging.getLogger("okx.stream")
+
+
+class SpotTakerCollector:
+    """OKX 现货 trades 主动流向收集器（接入 monitor.spot_flow 纯函数到运行时）。
+
+    三所主体皆永续，现货 taker 净压力是独立前瞻维度（现货买盘=真实资金进场，
+    无杠杆/无资金费噪声）。本收集器订阅 top 币的**现货 instId**（去掉 -SWAP），
+    按 coin 缓冲近窗成交，周期调 spot_taker_flow → is_significant_flow 显著则 log.info。
+
+    设计要点
+    --------
+    - OKXWSClient 按 channel 路由 handler，现货/永续同走 "trades" 频道，故本 handler
+      以 spot_insts 白名单严格过滤，只认现货 instId（如 BTC-USDT），忽略永续推送。
+    - 缓冲有上限（每 coin 保留近 max_trades 笔，环形截断）防内存膨胀；flush() 后清空，
+      只统计上一周期窗口内的主动流向（窗口净压力而非自启动累计）。
+    """
+
+    __slots__ = ("spot_insts", "threshold_usd", "max_trades", "_buf", "flows_seen")
+
+    def __init__(
+        self,
+        spot_insts: list[str],
+        threshold_usd: float = 500_000.0,
+        max_trades: int = 5000,
+    ) -> None:
+        # 白名单：仅这些现货 instId 的 trades 才入缓冲（其余永续推送忽略）
+        self.spot_insts: set[str] = set(spot_insts)
+        self.threshold_usd = threshold_usd
+        self.max_trades = max_trades
+        # inst_id(现货) → 近窗成交缓冲 [{px, sz, side}, ...]
+        self._buf: dict[str, list[dict]] = {i: [] for i in spot_insts}
+        self.flows_seen = 0
+
+    def attach(self, ws: OKXWSClient) -> None:
+        """为每个现货 instId 订阅 trades 频道（复用永续同一 OKXWSClient）。"""
+        for inst in self.spot_insts:
+            ws.subscribe(OKXSub("trades", inst), self._on_spot_trades)
+        log.info("SpotTakerCollector 已挂载 %d 个现货 trades", len(self.spot_insts))
+
+    def _on_spot_trades(self, arg: dict, data: list, recv_ns: int) -> None:
+        """现货逐笔成交 → 按 inst 缓冲（白名单过滤，环形截断防膨胀）。"""
+        inst = arg.get("instId", "")
+        if inst not in self.spot_insts:
+            return  # 非现货白名单（永续推送）→ 忽略
+        buf = self._buf[inst]
+        for t in data:
+            buf.append({"px": t.get("px"), "sz": t.get("sz"), "side": t.get("side")})
+        # 环形截断：每 coin 仅保留近 max_trades 笔，防极端高频币缓冲膨胀
+        if len(buf) > self.max_trades:
+            del buf[: len(buf) - self.max_trades]
+
+    def flush(self) -> list[dict]:
+        """对每个现货 inst 调 spot_taker_flow → is_significant_flow，显著则 log.info；
+        清空缓冲（窗口口径）。返回本周期显著流向列表 [{coin, flow}, ...] 供测试/上层用。"""
+        out: list[dict] = []
+        for inst, buf in self._buf.items():
+            if not buf:
+                continue
+            flow = spot_taker_flow(buf)
+            buf.clear()  # 窗口口径：每周期清空，只统计本窗主动流向
+            if is_significant_flow(flow, self.threshold_usd):
+                coin = inst.split("-")[0]
+                net = flow["net_usd"]
+                self.flows_seen += 1
+                log.info(
+                    "OKX 现货主动流向 %s %s 净$%s (买$%s/卖$%s)",
+                    coin,
+                    "🟢买盘" if flow["flow_dir"] == "long" else "🔴卖盘",
+                    f"{abs(net):,.0f}",
+                    f"{flow['buy_usd']:,.0f}",
+                    f"{flow['sell_usd']:,.0f}",
+                )
+                out.append({"coin": coin, "flow": flow})
+        return out
 
 
 async def select_top_insts(
@@ -274,6 +349,19 @@ async def run_okx_streaming(store: object, okx_cfg: object) -> None:
     )
     monitor.attach()
 
+    # 2b. 现货 taker 主动流向收集器：把 monitor.spot_flow 纯函数接入运行时（非孤儿）。
+    # 仅接 BTC/ETH 现货（最小可达、主流深度足、控制 blast radius）：现货 instId = 去掉 -SWAP，
+    # 且仅在监控的永续币集内才订（保证有现货对盘）。复用同一 OKXWSClient，flush 循环周期统计。
+    _spot_coins = {"BTC", "ETH"}
+    spot_insts = [
+        i.replace("-SWAP", "")
+        for i in insts
+        if inst_to_coin.get(i) in _spot_coins and i.endswith("-SWAP")
+    ]
+    spot_collector = SpotTakerCollector(spot_insts) if spot_insts else None
+    if spot_collector is not None:
+        spot_collector.attach(ws)
+
     # 3. 周期 flush 落库 + WS 常驻（可被 cancel 打断）
     import time  # noqa: PLC0415
 
@@ -285,6 +373,9 @@ async def run_okx_streaming(store: object, okx_cfg: object) -> None:
         while True:
             await asyncio.sleep(flush_interval)
             monitor.flush()
+            # 现货 taker 主动流向（窗口口径，显著则内部 log.info）
+            if spot_collector is not None:
+                spot_collector.flush()
             # 检测资金费×净流向背离并落库 okx_signals（仅方向变化时落库）
             if store is not None and hasattr(store, "insert_okx_signal"):
                 divs = detect_divergences(
