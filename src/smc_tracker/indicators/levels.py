@@ -38,7 +38,9 @@ def support_resistance(candles: list[Any], lookback: int = 3, tol_pct: float = 0
         prices = sorted(prices)
         zones: list[list[float]] = []
         for p in prices:
-            if zones and abs(p - zones[-1][-1]) <= tol_pct * p:
+            # 与簇锚点(zones[-1][0]，升序下为簇内最小价)比较，避免单链聚类(用上一个价)
+            # 在价位渐变时链式漂移、单簇跨度远超 tol_pct，违背「一个 S/R 区在 tol_pct 内」的契约。
+            if zones and abs(p - zones[-1][0]) <= tol_pct * p:
                 zones[-1].append(p)
             else:
                 zones.append([p])

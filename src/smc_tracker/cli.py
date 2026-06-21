@@ -17,6 +17,7 @@ import asyncio
 import sys
 import time
 from pathlib import Path
+from typing import Any
 
 # 项目根：src/smc_tracker/cli.py → parents[2] = repo 根
 _ROOT = Path(__file__).resolve().parents[2]
