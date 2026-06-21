@@ -37,6 +37,8 @@ class OKXPerpMonitor:
         surge_pct: float = 0.05,
         on_surge: SurgeCallback | None = None,
         flush_threshold: int = 100,
+        on_liquidation_signal: Callable[[dict[str, Any]], Any] | None = None,
+        liq_signal_usd: float = 1_000_000.0,
     ) -> None:
         self.inst_ids = list(inst_ids)
         self.inst_to_coin = dict(inst_to_coin)
@@ -46,6 +48,9 @@ class OKXPerpMonitor:
         self.surge_pct = surge_pct
         self.on_surge = on_surge
         self.flush_threshold = flush_threshold
+        # 强平级联告警回调（某向累计被平名义跨过整数倍阈值即触发，去重）
+        self.on_liquidation_signal = on_liquidation_signal
+        self.liq_signal_usd = liq_signal_usd
 
         # 待落库缓冲：row = (inst_id, coin, oi_ccy, oi_usd, mark_px, funding, net_flow, ts)
         self._buffer: list[tuple] = []
@@ -59,6 +64,8 @@ class OKXPerpMonitor:
         self._liq: dict[str, dict[str, float]] = {}
         # 待落库强平缓冲：row = (coin, pos_side, side, notional_usd, bk_px, ts)
         self._liq_buffer: list[tuple] = []
+        # (coin, side) → 上次触发级联告警的阈值整数倍（int），用于去重不重复触发
+        self._liq_signaled: dict[tuple[str, str], int] = {}
         # 统计
         self.trades_seen = 0
         self.surges_seen = 0
@@ -159,6 +166,23 @@ class OKXPerpMonitor:
                 elif pos_side == "short":
                     agg["short_liq_usd"] += notional
                 self._liq_buffer.append((coin, pos_side, side, notional, bk_px, ts))
+                # 强平级联告警：对该 coin 两个方向各检测，累计名义跨过 liq_signal_usd
+                # 的整数倍即触发一次（去重，仅当跨到更高倍数才再次触发）。
+                if self.on_liquidation_signal is not None:
+                    for _side in ("long", "short"):
+                        amount = agg[_side + "_liq_usd"]
+                        level = int(amount // self.liq_signal_usd)
+                        if level > 0 and level > self._liq_signaled.get((coin, _side), 0):
+                            self._liq_signaled[(coin, _side)] = level
+                            try:
+                                self.on_liquidation_signal({
+                                    "coin": coin,
+                                    "liquidated_side": _side,
+                                    "notional": amount,
+                                    "ts": ts,
+                                })
+                            except Exception:  # noqa: BLE001 — 回调异常不影响接收
+                                log.exception("on_liquidation_signal 回调出错")
 
     def _on_funding(self, arg: dict, data: list, recv_ns: int) -> None:
         """funding-rate 推送 → 更新快照 funding 字段（字符串 fundingRate → float）。"""

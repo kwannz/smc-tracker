@@ -10,9 +10,12 @@ trades/OI/mark → 实时净主动流向 + OI 异动。返回摘要文本供 CLI
 from __future__ import annotations
 
 import asyncio
+import logging
 
 from .client import OKXClient
 from .ws_client import OKXWSClient
+
+log = logging.getLogger("okx.stream")
 
 
 async def select_top_insts(
@@ -38,6 +41,23 @@ def fmt_flow_signals(signals: list[dict]) -> str:
         net = s.get("net_flow", 0.0)
         mark = "🟢" if direction == "long" else "🔴"
         parts.append(f"{coin} {mark}{direction} ${abs(net):,.0f}")
+    return " / ".join(parts)
+
+
+def fmt_liquidation_signals(signals: list[dict]) -> str:
+    """格式化 OKX 强平级联告警为文本。空列表 → "无"；否则每条
+    形如 "BTC 多头被平 $1,200,000"，各条用 " / " 连接。
+
+    liquidated_side==long → 多头被平（强制抛压级联）；short → 空头被平（逼空）。
+    """
+    if not signals:
+        return "无"
+    parts: list[str] = []
+    for s in signals:
+        coin = s.get("coin", "")
+        side_txt = "多头" if s.get("liquidated_side") == "long" else "空头"
+        notional = s.get("notional", 0.0)
+        parts.append(f"{coin} {side_txt}被平 ${notional:,.0f}")
     return " / ".join(parts)
 
 
@@ -123,6 +143,7 @@ async def run_stream(
     from smc_tracker.monitor.okx_perp_monitor import OKXPerpMonitor  # noqa: PLC0415
     ws = OKXWSClient()
     surges: list[dict] = []
+    liq_signals: list[dict] = []
     monitor = OKXPerpMonitor(
         inst_ids=insts,
         inst_to_coin=inst_to_coin,
@@ -131,6 +152,7 @@ async def run_stream(
         store=None,
         surge_pct=0.02,
         on_surge=surges.append,
+        on_liquidation_signal=liq_signals.append,
     )
     monitor.attach()
 
@@ -200,6 +222,11 @@ async def run_stream(
         lines.append(crowd_line)
         print(crowd_line)
 
+    # 8. 强平级联告警（某向被强制平仓累计跨阈值 → 强制流向/潜在局部极值，非方向预测）
+    liq_line = "强平级联: " + fmt_liquidation_signals(liq_signals)
+    lines.append(liq_line)
+    print(liq_line)
+
     return "\n".join(lines)
 
 
@@ -223,6 +250,16 @@ async def run_okx_streaming(store: object, okx_cfg: object) -> None:
 
     inst_to_coin: dict[str, str] = {i: i.split("-")[0] for i in insts}
 
+    # 强平级联告警回调：跨阈值即 log.info 打印（强制流向/潜在局部极值）
+    def _on_liq_signal(sig: dict) -> None:
+        side_txt = "多头" if sig.get("liquidated_side") == "long" else "空头"
+        log.info(
+            "OKX 强平级联 %s %s被平 ≈$%s",
+            sig.get("coin", ""),
+            side_txt,
+            f"{float(sig.get('notional', 0.0)):,.0f}",
+        )
+
     # 2. 构建 WS + Monitor
     ws = OKXWSClient(ws_url=ws_url)
     monitor = OKXPerpMonitor(
@@ -233,6 +270,7 @@ async def run_okx_streaming(store: object, okx_cfg: object) -> None:
         store=store,
         surge_pct=surge_pct,
         on_surge=None,  # app 层不需要回调；OI 异动已由 monitor 内部落库
+        on_liquidation_signal=_on_liq_signal,
     )
     monitor.attach()
 

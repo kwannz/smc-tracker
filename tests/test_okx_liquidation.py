@@ -115,6 +115,58 @@ def test_attach_subscribes_liquidation_firehose():
     assert liq == [("liquidation-orders", "")]
 
 
+# ---- 强平级联告警（on_liquidation_signal）----
+
+def test_liquidation_cascade_signal_triggers_once_per_level():
+    """累计跨 liq_signal_usd 整数倍触发一次；同向不跨新倍数不重复触发。
+
+    ct_val=1.0、liq_signal_usd=10万：sz=2,bkPx=60000 → long 累计 12万（跨 1 倍）触发；
+    再喂小量（sz=1,bkPx=10000 → +1万=13万，仍在 1 倍内）不重复触发。
+    """
+    from smc_tracker.monitor.okx_perp_monitor import OKXPerpMonitor
+    fired: list = []
+    ws = _FakeWS()
+    m = OKXPerpMonitor(
+        inst_ids=["BTC-USDT-SWAP"], inst_to_coin={"BTC-USDT-SWAP": "BTC"},
+        ct_val={"BTC-USDT-SWAP": 1.0}, ws=ws, store=None,
+        liq_signal_usd=100000, on_liquidation_signal=fired.append)
+    data = [{"instId": "BTC-USDT-SWAP", "details": [
+        {"posSide": "long", "side": "sell", "sz": "2", "bkPx": "60000", "ts": "1"}]}]
+    m._on_liquidation({"channel": "liquidation-orders"}, data, 1)
+    assert len(fired) == 1
+    assert fired[0]["coin"] == "BTC"
+    assert fired[0]["liquidated_side"] == "long"
+    assert abs(fired[0]["notional"] - 120000.0) < 1e-6
+    # 再喂小量，累计 13万 仍在第 1 倍内 → 不重复触发
+    data2 = [{"instId": "BTC-USDT-SWAP", "details": [
+        {"posSide": "long", "side": "sell", "sz": "1", "bkPx": "10000", "ts": "2"}]}]
+    m._on_liquidation({"channel": "liquidation-orders"}, data2, 1)
+    assert len(fired) == 1
+
+
+def test_liquidation_cascade_no_signal_when_callback_none():
+    """on_liquidation_signal=None 时即使跨阈值也不触发（不报错）。"""
+    from smc_tracker.monitor.okx_perp_monitor import OKXPerpMonitor
+    ws = _FakeWS()
+    m = OKXPerpMonitor(
+        inst_ids=["BTC-USDT-SWAP"], inst_to_coin={"BTC-USDT-SWAP": "BTC"},
+        ct_val={"BTC-USDT-SWAP": 1.0}, ws=ws, store=None,
+        liq_signal_usd=100000, on_liquidation_signal=None)
+    data = [{"instId": "BTC-USDT-SWAP", "details": [
+        {"posSide": "long", "side": "sell", "sz": "2", "bkPx": "60000", "ts": "1"}]}]
+    m._on_liquidation({"channel": "liquidation-orders"}, data, 1)
+    assert abs(m.all_liquidations()["BTC"]["long_liq_usd"] - 120000.0) < 1e-6
+
+
+def test_fmt_liquidation_signals():
+    """单条 long 1200000 含 BTC 与 多头；空列表 → "无"。"""
+    from smc_tracker.okx.stream import fmt_liquidation_signals
+    s = fmt_liquidation_signals(
+        [{"coin": "BTC", "liquidated_side": "long", "notional": 1200000.0}])
+    assert "BTC" in s and "多头" in s and "1,200,000" in s
+    assert fmt_liquidation_signals([]) == "无"
+
+
 # ---- okx_liquidations 表 roundtrip ----
 
 def test_okx_liquidations_db_roundtrip():
