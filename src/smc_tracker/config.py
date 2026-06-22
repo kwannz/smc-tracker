@@ -86,6 +86,20 @@ class FeishuCfg:
 
 
 @dataclass(slots=True)
+class DigestCfg:
+    """HL 事件分类汇总推送。零散 HL 事件按分类聚合，周期推**一张**分类汇总卡片（降噪去刷屏）。
+
+    enabled=True 时：跟庄/共振/背离/共识/挂单墙/暴涨/TA/持仓 等事件进汇总缓冲，按 interval_sec
+    周期推一张分类汇总卡片；urgent_instant=True 时核心前瞻信号（超级共振/可疑地址）仍即时单独推。
+    enabled=False 回退为旧行为（每条事件即时推）。
+    """
+    enabled: bool = True
+    interval_sec: float = 300.0      # 汇总卡片推送周期（默认 5 分钟一张）
+    max_per_cat: int = 8             # 每个分类卡片内最多明细行数（超出显示最新+省略计数）
+    urgent_instant: bool = True      # 超级共振/可疑地址 是否仍即时单独推（核心前瞻不延迟）
+
+
+@dataclass(slots=True)
 class OKXCfg:
     """OKX 永续 streaming 监控配置。默认关闭(避免无脑新增 WS 连接)。"""
     enabled: bool = False
@@ -109,6 +123,7 @@ class Config:
     review: ReviewCfg = field(default_factory=ReviewCfg)
     okx: OKXCfg = field(default_factory=OKXCfg)
     feishu: FeishuCfg = field(default_factory=FeishuCfg)
+    digest: DigestCfg = field(default_factory=DigestCfg)
 
     @classmethod
     def load(cls, path: str | Path) -> "Config":
@@ -126,6 +141,7 @@ class Config:
             review=ReviewCfg(**(raw.get("review") or {})),
             okx=OKXCfg(**(raw.get("okx") or {})),
             feishu=FeishuCfg(**(raw.get("feishu") or {})),
+            digest=DigestCfg(**(raw.get("digest") or {})),
         )
 
 

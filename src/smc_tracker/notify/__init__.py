@@ -1,10 +1,11 @@
-"""输出层：Webhook + Telegram + 飞书 推送 + 摘要日报。"""
+"""输出层：Webhook + Telegram + 飞书 推送 + 摘要日报 + HL 分类汇总。"""
 from .webhook import WebhookNotifier
 from .telegram import TelegramNotifier
 from .feishu import FeishuNotifier
 from .multi import MultiNotifier
 from .report import build_report
 from .chunk import split_message
+from .digest import HLDigest
 
 
 def build_notifier(cfg: object) -> MultiNotifier:
@@ -22,4 +23,4 @@ def build_notifier(cfg: object) -> MultiNotifier:
 
 
 __all__ = ["WebhookNotifier", "TelegramNotifier", "FeishuNotifier", "MultiNotifier",
-           "build_notifier", "build_report", "split_message"]
+           "build_notifier", "build_report", "split_message", "HLDigest"]

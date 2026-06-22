@@ -33,7 +33,7 @@ from .monitor import (AddressMonitor, BitgetOIMonitor, EventType, HLOrderbookMon
 from .monitor.whale_discovery import discover_smart_money
 from .monitor.address_correlation import AddressCorrelation
 from .monitor.wallet_portfolio import WalletPortfolio
-from .notify import build_notifier, build_report
+from .notify import HLDigest, build_notifier, build_report
 from .onchain import (ExchangeFlowMonitor, OnchainMemeMonitor, SolanaSupplyMonitor,
                       fmt_flow_alert)
 from .health import HealthMonitor
@@ -144,6 +144,8 @@ class TradingSystem:
         self._wall_seen: dict[tuple[str, str], int] = {}  # (coin,side) -> 上次墙告警 ts(冷却)
         self._mids: dict[str, float] = {}     # 全市场中间价（allMids），共识估值用
         self.notifier = build_notifier(cfg)   # webhook + Telegram 多渠道推送
+        # HL 事件分类汇总：零散事件按分类聚合，_periodic_hl_digest 周期推一张汇总卡片（降噪去刷屏）
+        self.hl_digest = HLDigest(cfg.digest.max_per_cat)
         self.analyst = build_analyst(cfg)     # LLM(Codex GPT-5.4) 前瞻研判，未配置则 None
         self.latency = LatencyTracker()       # 热路径「接收→信号」延迟埋点(实证低延迟)
         self.coin_to_symbol: dict[str, str] = {}              # canonical -> bitget symbol
@@ -272,7 +274,7 @@ class TradingSystem:
                        + self._price_tag(evt.coin)
                        + self.efficacy.label_of("跟庄"))
                 print(f"\n{'='*60}\n{msg}\n{'='*60}\n")
-                self._push(msg)
+                self._emit("whale", msg)
                 self._record_pred(evt.coin, "跟庄", direction)
                 acc[2] = evt.time_ms
                 acc[0] = 0.0
@@ -296,7 +298,7 @@ class TradingSystem:
                f"${abs(net):,.0f}(3min累积) → 已升级全量追踪"
                + self._price_tag(coin))
         print(f"\n{'='*60}\n{msg}\n{'='*60}\n")
-        self._push(msg)
+        self._emit("suspicious", msg, urgent=True)
 
     def _on_wall_signal(self, ev: dict) -> None:
         """l2Book 大额挂单墙动态（领先意图）→ 仅对新出现的大墙(build)节流推送。
@@ -322,7 +324,7 @@ class TradingSystem:
                f"${ntl:,.0f}(领先意图·可能spoof，须与成交/OI 交叉验证)"
                + self._price_tag(coin))
         print(f"[{_hms(now)}] {msg}")
-        self._push(msg)
+        self._emit("wall", msg)
 
     def _on_meme_trade(self, t: dict) -> None:
         # 大单 meme 成交（含主动方地址）。t 是 MemeTradeMonitor on_trade 传入的 record dict
@@ -381,7 +383,7 @@ class TradingSystem:
                 ctx = fmt_analysis(coin, ta_analyze(buf, now))   # 附 TA 全景上下文
                 msg = f"[{_ts(now)}] {alert.fmt()}{self._price_tag(coin)}\n{ctx}"
                 print(f"\n{'='*60}\n{msg}\n{'='*60}\n")
-                self._push(msg)
+                self._emit("pump", msg)
                 self._record_pred(coin, "暴涨", "up" if alert.kind == "pump" else "down")
         # 放量监控(成交量异动)
         vev = self.volume_monitor.update(coin, candle)
@@ -393,7 +395,7 @@ class TradingSystem:
             if sig is not None:
                 self._ta_seen[coin] = now
                 print(f"[{_ts(now)}] 📐 {self.ta_signal.fmt(sig)}{self._price_tag(coin)}")
-                self._push(f"[{_ts(now)}] {self.ta_signal.fmt(sig)}{self._price_tag(coin)}")
+                self._emit("ta", f"[{_ts(now)}] {self.ta_signal.fmt(sig)}{self._price_tag(coin)}")
         ze = self.zones.get(coin)
         if ze is None:
             ze = ZoneEngine(min_gap_pct=self.cfg.smc.fvg_min_gap_pct)
@@ -451,17 +453,27 @@ class TradingSystem:
             self._bg_tasks.add(t)
             t.add_done_callback(self._bg_tasks.discard)
 
+    def _emit(self, category: str, text: str, urgent: bool = False) -> None:
+        """HL 事件出口：digest 开启则按分类入汇总缓冲（周期合并成一张分类卡片，降噪去刷屏）；
+        关闭则回退旧行为（每条即时推）。urgent 且配置允许 → 核心前瞻信号仍即时单独推（不延迟）。"""
+        if not self.cfg.digest.enabled:
+            self._push(text)
+            return
+        self.hl_digest.add(category, text)
+        if urgent and self.cfg.digest.urgent_instant:
+            self._push(text)
+
     def _on_signal(self, sig: Signal) -> None:
         msg = f"[{_ts(sig.ts)}] {sig.fmt()}" + self.efficacy.label_of("SMC")
         print(f"\n{'='*60}\n{msg}\n{'='*60}\n")
-        self._push(msg)
+        self._emit("signal", msg)
         self._record_pred(sig.coin, "SMC", sig.direction)   # 进回顾闭环(事后评估命中率→efficacy 加权)
 
     def _on_divergence(self, sig: DivergenceSignal) -> None:
         msg = (f"[{_ts(sig.ts)}] {sig.fmt()}{self._price_tag(sig.coin)}"
                + self.efficacy.label_of("背离"))
         print(msg)
-        self._push(msg)
+        self._emit("divergence", msg)
         self._record_pred(
             sig.coin, "背离", "up" if sig.direction == "bullish" else "down"
         )
@@ -470,18 +482,18 @@ class TradingSystem:
         msg = (f"[{_ts(sig.ts)}] {sig.fmt()}{self._price_tag(sig.coin)}"
                + self.efficacy.label_of("共识"))
         print(f"\n{'='*60}\n{msg}\n{'='*60}\n")
-        self._push(msg)
+        self._emit("consensus", msg)
         self._record_pred(sig.coin, "共识", sig.direction)
 
     def _on_pos_change(self, pc: PositionChange) -> None:
         msg = f"[{_ts(pc.ts)}] {pc.fmt()}"
         print(f"\n{'='*60}\n{msg}\n{'='*60}\n")
-        self._push(msg)
+        self._emit("position", msg)
 
     def _on_confluence(self, sig: ConfluenceSignal) -> None:
         msg = f"[{_ts(sig.ts)}] {sig.fmt()}" + self.efficacy.label_of("超级")
         print(f"\n{'🌟'*30}\n{msg}\n{'🌟'*30}\n")
-        self._push(msg)
+        self._emit("super", msg, urgent=True)
         self._record_pred(sig.coin, "超级", sig.direction)   # 进回顾闭环
 
     def _on_candle_ws(self, data, recv_ns: int = 0) -> None:
@@ -1028,6 +1040,22 @@ class TradingSystem:
             except Exception as exc:  # noqa: BLE001 — 健康检查失败不影响监控
                 log.warning("健康检查任务失败: %s", exc)
 
+    async def _periodic_hl_digest(self, every: float = 0.0) -> None:
+        """周期推送 **HL 抓庄分类汇总卡片**：把窗内零散 HL 事件按分类合并成一张卡片（降噪去刷屏）。
+
+        digest 关闭则不启用（事件已即时推，见 _emit）。无事件时不空推；周期取自 cfg.digest.interval_sec。
+        紧急信号（超级共振/可疑地址）已在 _emit 即时单独推过，此处汇总仍会再列出（便于完整复盘）。
+        """
+        if not self.cfg.digest.enabled:
+            return
+        period = every or self.cfg.digest.interval_sec
+        while not self._stopping:
+            await asyncio.sleep(period)
+            card = self.hl_digest.render(int(time.time() * 1000))
+            if card:
+                print(card)
+                self._push(card)
+
     async def _periodic_ticker_board(self, every: float = 300.0) -> None:
         """周期推送行情监控板：显示所有监控币种的价格/涨跌幅/资金费率/OI（每 5 分钟）。
 
@@ -1155,6 +1183,7 @@ class TradingSystem:
             self._periodic_efficacy(),
             self._periodic_health(),
             self._periodic_ticker_board(),
+            self._periodic_hl_digest(),
             self._periodic_exchange_flow(),
             self._periodic_wallet_portfolio(),
             self._periodic_config_reload(),
@@ -1164,6 +1193,9 @@ class TradingSystem:
         self._stopping = True
         self.meme_monitor.flush()
         self.orderbook_monitor.flush()   # 退出前冲刷剩余挂单墙事件
+        card = self.hl_digest.render(int(time.time() * 1000))   # 退出前冲刷剩余 HL 分类汇总，不丢事件
+        if card:
+            self._push(card)
         if self.oi_monitor:
             self.oi_monitor.flush()
         # OKX streaming 任务：优雅取消（仅 enabled=True 时存在）
