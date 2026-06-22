@@ -380,6 +380,15 @@ async def run_okx_streaming(store: object, okx_cfg: object) -> None:
     # 背离用「窗口净流向」(本 flush 周期增量)，而非 monitor._net_flow 的自启动累积值——
     # 否则常驻运行后累积值单调增长，背离会基于陈旧 lifetime 数据而非当下 positioning。
     prev_net: dict[str, float] = {}
+    # OKX 背离信号同时记入 predictions(kind="OKX")，让 efficacy 学到 OKX 源命中率、
+    # confluence 据此加权（此前 weight_of("OKX") 因 OKX 从不进 predictions 恒为中性 1.0）。
+    review = None
+    hzs_ms: list[int] = []
+    if store is not None and hasattr(store, "insert_okx_signal"):
+        from ..config import ReviewCfg  # noqa: PLC0415
+        from ..review import PredictionReview  # noqa: PLC0415
+        review = PredictionReview(store)
+        hzs_ms = [h * 60_000 for h in ReviewCfg().horizons_min]
     ws_task = asyncio.create_task(ws.run())
     try:
         while True:
@@ -390,11 +399,15 @@ async def run_okx_streaming(store: object, okx_cfg: object) -> None:
                 spot_collector.flush()
             # 检测资金费×净流向背离并落库 okx_signals（仅方向变化时落库）
             if store is not None and hasattr(store, "insert_okx_signal"):
+                latest = monitor.all_latest()
                 cur_net = dict(monitor.all_net_flows())
                 win_net = windowed_net_flow(cur_net, prev_net)
                 prev_net = cur_net
-                divs = detect_divergences(monitor.all_latest(), win_net)
+                divs = detect_divergences(latest, win_net)
                 now_ms = int(time.time() * 1000)
+                # coin→当前标记价，用于把 OKX 背离记入 predictions(efficacy 闭环)
+                price_by_coin = {s["coin"]: float(s.get("mark_px") or 0.0)
+                                 for s in latest.values() if s.get("coin")}
                 for coin, sig in divs:
                     direction = "long" if sig["direction"] == "bullish" else "short"
                     if last_sig.get(coin) == direction:
@@ -408,6 +421,13 @@ async def run_okx_streaming(store: object, okx_cfg: object) -> None:
                         float(sig.get("funding", 0.0)),
                         float(sig.get("net_flow", 0.0)),
                     )
+                    # 同时记入 predictions(kind="OKX")，闭合 efficacy 学习环
+                    if review is not None:
+                        review.record_mtf(
+                            ts=now_ms, coin=coin, kind="OKX", direction=direction,
+                            hl_px=price_by_coin.get(coin, 0.0), bg_px=0.0,
+                            horizons_ms=hzs_ms,
+                        )
     except asyncio.CancelledError:
         pass
     finally:
