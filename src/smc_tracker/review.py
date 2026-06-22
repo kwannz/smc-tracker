@@ -9,6 +9,9 @@ from typing import Any, Callable
 
 from .util import fmt_ts, to_float
 
+# realized_ret 离群阈值：|ret|>10(=1000%) 几乎必为 emit/eval 单位错配/陈旧价，非真实行情（#98）。
+_RET_OUTLIER = 10.0
+
 
 # ---- 纯函数：市场中性命中率（横截面去均值，剔除趋势 beta） ----
 
@@ -133,17 +136,22 @@ class PredictionReview:
     ) -> None:
         """记录一条前瞻预测到 predictions 表。
 
-        px_emit：bg_px > 0 时用 bg_px，否则 hl_px；两者都 <= 0 则跳过，不记录。
+        px_emit：hl_px > 0 时用 hl_px，否则 bg_px；两者都 <= 0 则跳过，不记录。
         px_gap_pct：两源都 > 0 时计算 |hl-bg|/mid，否则 NULL（数据质量指标）。
+
+        #98 关键修复：px_emit **必须与 evaluate_due 的 price_of「HL 优先」同源同单位**。
+        此前 px_emit 优先 Bitget，而 price_of 优先 HL —— 对 HL 千倍计价币（kSHIB/kFLOKI 等，
+        HL 价≈Bitget 原始价×1000）造成 emit/eval 单位错配，realized_ret 爆炸成 +1000(+10万%)，
+        污染命中率统计（实测 SMC 平均 ret +347）。改 HL 优先后两端同源，realized_ret 正确。
         """
         hl = to_float(hl_px, 0.0)
         bg = to_float(bg_px, 0.0)
 
-        # 发出时参考价：优先 Bitget，回退 HL；两者都无效则跳过
-        if bg > 0:
-            px_emit = bg
-        elif hl > 0:
+        # 发出时参考价：优先 HL（与 evaluate_due price_of 同源，保证 emit/eval 单位一致），回退 Bitget
+        if hl > 0:
             px_emit = hl
+        elif bg > 0:
+            px_emit = bg
         else:
             return  # 无有效价格，不落库
 
@@ -291,10 +299,16 @@ class PredictionReview:
         n_long = 0                 # 看多/看涨方向数
         n_short = 0                # 看空/看跌方向数
         gap_warn_count = 0
+        outlier_count = 0          # |realized_ret|>1000% 的离群行(几乎必为单位错配/陈旧价)，剔除不计
         # 市场中性计算所需 records
         mn_records: list[tuple[int, str, float]] = []
 
         for ts_row, kind, correct, realized_ret, px_gap_pct, dt, coin, direction, horizon_ms in rows:
+            # 数据质量守卫(#98)：|realized_ret|>1000% 几乎必是 emit/eval 单位错配（k 计价币历史脏数据）
+            # 或陈旧价，绝非真实行情 → 剔除，避免污染命中率/avg_ret（真实 meme 极端波动远不及 10 倍）。
+            if abs(to_float(realized_ret, 0.0)) > _RET_OUTLIER:
+                outlier_count += 1
+                continue
             total_n += 1
             if correct == 1:
                 total_hits += 1
@@ -415,6 +429,7 @@ class PredictionReview:
             "by_horizon": by_horizon_out,
             "by_horizon_market_neutral": by_horizon_mn_out,  # 各 TF 市场中性命中率（纯 alpha）
             "gap_warn_count": gap_warn_count,
+            "outlier_count": outlier_count,   # 剔除的单位错配/陈旧离群行数（数据质量）
             "recent": recent,
             "market_neutral": mn_stats,    # 市场中性命中率（剔除趋势 beta 的纯 alpha）
         }

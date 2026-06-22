@@ -35,8 +35,9 @@ def rev(store: _FakeStore) -> PredictionReview:
 # ---- record() 测试 ----
 
 class TestRecord:
-    def test_record_bg_preferred_over_hl(self, rev: PredictionReview) -> None:
-        """bg_px > 0 时 px_emit 应等于 bg_px。"""
+    def test_record_hl_preferred_over_bg(self, rev: PredictionReview) -> None:
+        """hl_px > 0 时 px_emit 应等于 hl_px（#98 修复：与 evaluate_due 的 price_of「HL 优先」同源，
+        避免 k 计价币 emit/eval 单位错配导致 realized_ret 爆炸）。"""
         now = int(time.time() * 1000)
         rev.record(ts=now, coin="DOGE", kind="跟庄", direction="long",
                    hl_px=0.1, bg_px=0.12)
@@ -44,9 +45,27 @@ class TestRecord:
             "SELECT px_emit, hl_px, bg_px FROM predictions WHERE coin='DOGE'"
         ).fetchone()
         assert row is not None
-        assert row[0] == pytest.approx(0.12)
+        assert row[0] == pytest.approx(0.1)   # HL 优先（与评估价源一致）
         assert row[1] == pytest.approx(0.1)
         assert row[2] == pytest.approx(0.12)
+
+    def test_record_eval_consistent_units_for_k_coin(self, rev: PredictionReview) -> None:
+        """真实病例(kSHIB)：HL 千倍计价(0.0047) vs Bitget 原始(4.694e-06)。px_emit 取 HL，
+        evaluate_due 的 price_of 也取 HL → realized_ret 合理(~ +2%)，**不再爆炸成 +1000(+10万%)**。"""
+        now = int(time.time() * 1000)
+        hz = 300_000
+        rev.record(ts=now, coin="kSHIB", kind="SMC", direction="long",
+                   hl_px=0.004694, bg_px=4.694e-06, horizon_ms=hz)
+        # 评估：HL 价 price_of 返回 0.004788（涨 ~2%）
+        rev.evaluate_due(lambda c: 0.004788 if c == "kSHIB" else None, now + hz + 1)
+        row = rev.store.conn.execute(
+            "SELECT px_emit, px_eval, realized_ret, correct FROM predictions WHERE coin='kSHIB'"
+        ).fetchone()
+        assert row is not None
+        assert row[0] == pytest.approx(0.004694)            # px_emit 用 HL（非 Bitget 原始）
+        assert abs(row[2]) < 0.1, f"realized_ret 应合理(~2%)，实际 {row[2]}（单位错配则会 ~+1000）"
+        assert row[2] == pytest.approx((0.004788 - 0.004694) / 0.004694, rel=1e-3)
+        assert row[3] == 1                                  # long + 上涨 → 命中
 
     def test_record_fallback_to_hl(self, rev: PredictionReview) -> None:
         """bg_px <= 0 且 hl_px > 0 时 px_emit 应等于 hl_px。"""
