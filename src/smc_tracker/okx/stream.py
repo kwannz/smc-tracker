@@ -175,6 +175,15 @@ def detect_divergences(latest: dict, net_by_coin: dict) -> list[tuple[str, dict]
     return out
 
 
+def windowed_net_flow(cur_net: dict, prev_net: dict) -> dict[str, float]:
+    """本窗口净流向 = 当前累积 − 上窗累积。
+
+    OKXPerpMonitor._net_flow 是自启动单调累积值；常驻背离判定须用「当下窗口」增量，
+    否则长时间运行后累积值持续超阈值 → 背离基于陈旧 lifetime 数据而非当下 positioning。
+    """
+    return {c: cur_net[c] - prev_net.get(c, 0.0) for c in cur_net}
+
+
 def top_funding(latest: dict, n: int = 5) -> list[tuple[str, float]]:
     """资金费拥挤榜：取各 inst 的 funding，按 abs 降序前 n（跳过缺失/0）。
 
@@ -368,6 +377,9 @@ async def run_okx_streaming(store: object, okx_cfg: object) -> None:
     flush_interval: float = 5.0
     # 去重：记录各 coin 上次落库的方向，方向不变则跳过（避免每 5s 重复刷）
     last_sig: dict[str, str] = {}
+    # 背离用「窗口净流向」(本 flush 周期增量)，而非 monitor._net_flow 的自启动累积值——
+    # 否则常驻运行后累积值单调增长，背离会基于陈旧 lifetime 数据而非当下 positioning。
+    prev_net: dict[str, float] = {}
     ws_task = asyncio.create_task(ws.run())
     try:
         while True:
@@ -378,9 +390,10 @@ async def run_okx_streaming(store: object, okx_cfg: object) -> None:
                 spot_collector.flush()
             # 检测资金费×净流向背离并落库 okx_signals（仅方向变化时落库）
             if store is not None and hasattr(store, "insert_okx_signal"):
-                divs = detect_divergences(
-                    monitor.all_latest(), dict(monitor.all_net_flows())
-                )
+                cur_net = dict(monitor.all_net_flows())
+                win_net = windowed_net_flow(cur_net, prev_net)
+                prev_net = cur_net
+                divs = detect_divergences(monitor.all_latest(), win_net)
                 now_ms = int(time.time() * 1000)
                 for coin, sig in divs:
                     direction = "long" if sig["direction"] == "bullish" else "short"

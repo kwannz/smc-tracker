@@ -166,10 +166,13 @@ class OKXPerpMonitor:
                 notional = sz * ctv * bk_px
                 ts = _i(det.get("ts"))
                 agg = self._liq.setdefault(coin, {"long_liq_usd": 0.0, "short_liq_usd": 0.0})
-                if pos_side == "long":
-                    agg["long_liq_usd"] += notional
-                elif pos_side == "short":
-                    agg["short_liq_usd"] += notional
+                # posSide 为 long/short 直接用；net(OKX 单向持仓模式)或缺失时由 side 推导被平方向：
+                # side=sell=多头被强平(强制卖出=抛压级联)、side=buy=空头被强平(强制买入=逼空)。
+                liq_side = (pos_side if pos_side in ("long", "short")
+                            else "long" if side == "sell"
+                            else "short" if side == "buy" else None)
+                if liq_side:
+                    agg[liq_side + "_liq_usd"] += notional
                 self._liq_buffer.append((coin, pos_side, side, notional, bk_px, ts))
                 # 强平级联告警：对该 coin 两个方向各检测，累计名义跨过 liq_signal_usd
                 # 的整数倍即触发一次（去重，仅当跨到更高倍数才再次触发）。
