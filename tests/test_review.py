@@ -100,8 +100,31 @@ class TestRecord:
         ).fetchone()
         assert row is not None
         mid = (hl + bg) / 2  # 101.0
-        expected = abs(hl - bg) / mid  # 2/101 ≈ 0.0198
+        expected = abs(hl - bg) / mid  # 2/101 ≈ 0.0198（比例~1，不归一）
         assert row[0] == pytest.approx(expected, rel=1e-6)
+
+    def test_record_px_gap_normalizes_k_coin_unit(self, rev: PredictionReview) -> None:
+        """k 计价币(HL kSHIB ≈ Bitget SHIB×1000)：px_gap_pct 消除 1000× 单位差 → ≈0（#100），
+        不再假性 199% 污染数据质量告警（gap_warn_count）。"""
+        now = int(time.time() * 1000)
+        rev.record(ts=now, coin="kSHIB", kind="SMC", direction="long",
+                   hl_px=0.004694, bg_px=4.694e-06)
+        row = rev.store.conn.execute(
+            "SELECT px_gap_pct FROM predictions WHERE coin='kSHIB'"
+        ).fetchone()
+        assert row is not None
+        assert row[0] < 0.05, f"k 币单位归一后价差应≈0，实际 {row[0]}（未归一则≈1.996）"
+
+    def test_record_px_gap_keeps_real_disagreement(self, rev: PredictionReview) -> None:
+        """非 10 的幂的真实价格分歧(如 3×)不被单位归一掩盖，仍如实告警（数据质量诚实）。"""
+        now = int(time.time() * 1000)
+        rev.record(ts=now, coin="WEIRD", kind="SMC", direction="long",
+                   hl_px=300.0, bg_px=100.0)
+        row = rev.store.conn.execute(
+            "SELECT px_gap_pct FROM predictions WHERE coin='WEIRD'"
+        ).fetchone()
+        assert row is not None
+        assert row[0] > 0.5, f"真实 3× 分歧应仍告警，实际 {row[0]}"
 
     def test_record_px_gap_pct_null_when_one_missing(self, rev: PredictionReview) -> None:
         """仅有一源时 px_gap_pct 应为 NULL。"""

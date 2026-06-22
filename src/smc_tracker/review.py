@@ -5,12 +5,29 @@
 """
 from __future__ import annotations
 
+import math
 from typing import Any, Callable
 
 from .util import fmt_ts, to_float
 
 # realized_ret 离群阈值：|ret|>10(=1000%) 几乎必为 emit/eval 单位错配/陈旧价，非真实行情（#98）。
 _RET_OUTLIER = 10.0
+
+
+def aligned_px_gap(hl: float, bg: float) -> float | None:
+    """两源价差比率 |hl-bg|/mid，**先消除 k 计价/数量前缀的 10 的幂单位倍数**（#100）。
+
+    HL 用 k 前缀(kSHIB=SHIB×1000)、Bitget 可能用原始或不同数量前缀 → 同一资产两源价差含整数倍单位差。
+    先把 bg 按最接近的 10 的幂缩放到 hl 量级再算 gap → 反映**真实价格分歧**而非单位差。
+    仅当 hl/bg 接近 10 的整数次幂(单位倍数)时缩放；真实倍数(如 3×)不缩放，仍如实告警。
+    两源任一 <=0 → None。
+    """
+    if hl <= 0 or bg <= 0:
+        return None
+    scale = 10.0 ** round(math.log10(hl / bg))   # 最接近的 10 的幂(…0.1/1/10/100/1000…)
+    bg_aligned = bg * scale
+    mid = (hl + bg_aligned) / 2
+    return abs(hl - bg_aligned) / mid if mid > 0 else None
 
 
 # ---- 纯函数：市场中性命中率（横截面去均值，剔除趋势 beta） ----
@@ -155,11 +172,8 @@ class PredictionReview:
         else:
             return  # 无有效价格，不落库
 
-        # 两源价差（数据质量指标）
-        px_gap_pct: float | None = None
-        if hl > 0 and bg > 0:
-            mid = (hl + bg) / 2
-            px_gap_pct = abs(hl - bg) / mid if mid > 0 else None
+        # 两源价差（数据质量指标）：先消除 k 计价币的 10 的幂单位倍数，避免假性 199% 告警（#100）
+        px_gap_pct = aligned_px_gap(hl, bg) if (hl > 0 and bg > 0) else None
 
         dt = fmt_ts(ts)
         self.store.conn.execute(
