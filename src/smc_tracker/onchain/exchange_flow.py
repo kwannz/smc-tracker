@@ -28,8 +28,8 @@ EVM 稳定币数据源：https://ethereum-rpc.publicnode.com（无 key）
 BTC 说明：
   - 地址为公开已知种子（链上分析报告佐证），可能不全——仅覆盖主要冷/热钱包。
   - 只统计已确认（status.confirmed == True）的交易，未确认视为未发生。
-  - address_txs_window 最多抓 max_pages 页（默认 6），覆盖约 max_pages×25 笔已确认 tx；
-    对极端高频热钱包（24h 内 >150 笔）仍可能低估，属已知局限。
+  - address_txs_window 最多抓 max_pages 页（默认 20，#97 提高），覆盖约 max_pages×25=500 笔已确认 tx；
+    分页按 24h 窗口边界早停，仅对极端高频热钱包（24h 内 >500 笔）仍可能低估，属已知局限。
 """
 from __future__ import annotations
 
@@ -48,6 +48,11 @@ _DEFAULT_BASE_URL = "https://blockstream.info/api"
 
 # ERC20 Transfer 事件 topic0（keccak256("Transfer(address,address,uint256)")，已实证）
 _TRANSFER_TOPIC0 = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef"
+
+# BTC 分页上限（#97 由 6→20 缓解热钱包低估）：覆盖约 20×25=500 笔已确认 tx/24h。
+# 分页本就按 24h 窗口边界早停（见 address_txs_window），普通钱包仍只翻数页；提高上限仅对
+# 真·高频热钱包多翻几页，把低估阈值从 >150 笔抬到 >500 笔，显著缓解（每页 0.2s 节流约束速率）。
+_BTC_MAX_PAGES = 20
 
 # 自管 SQLite 表（不写进 storage/db.py）
 _SCHEMA = """
@@ -110,7 +115,7 @@ class BlockstreamClient:
         addr: str,
         now_ms: int,
         window_ms: int = 86_400_000,
-        max_pages: int = 6,
+        max_pages: int = _BTC_MAX_PAGES,
     ) -> list[dict]:
         """分页抓取地址近 window_ms 内的 tx，最多 max_pages 页（每页 ≤25 笔已确认 tx）。
 
@@ -623,8 +628,8 @@ class ExchangeFlowMonitor:
     evm_cfg["threshold_usd"]：|net_usd| 超过此值触发 ETH 稳定币 alert（默认 $2M）。
 
     说明：地址为公开已知种子，可能不全；只计已确认 tx（BTC）或已上链 log（ETH）；
-    poll_once 的 BTC 路径使用 address_txs_window 分页（最多约 max_pages×25 笔），
-    对极端高频热钱包（24h >150 笔）仍可能低估，属已知局限。
+    poll_once 的 BTC 路径使用 address_txs_window 分页（最多约 max_pages×25=500 笔，#97 提高），
+    仅对极端高频热钱包（24h >500 笔）仍可能低估，属已知局限。
     ETH 路径受公开 RPC 单次结果上限影响，窗口可通过 evm_cfg["block_window"] 调节。
     """
 
