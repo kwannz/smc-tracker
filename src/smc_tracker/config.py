@@ -79,6 +79,13 @@ class ReviewCfg:
 
 
 @dataclass(slots=True)
+class FeishuCfg:
+    """飞书(Lark)自定义机器人推送。webhook_url + secret(机器人开签名校验时必填)。"""
+    webhook_url: str = ""
+    secret: str = ""
+
+
+@dataclass(slots=True)
 class OKXCfg:
     """OKX 永续 streaming 监控配置。默认关闭(避免无脑新增 WS 连接)。"""
     enabled: bool = False
@@ -101,6 +108,7 @@ class Config:
     llm: LLMCfg = field(default_factory=LLMCfg)
     review: ReviewCfg = field(default_factory=ReviewCfg)
     okx: OKXCfg = field(default_factory=OKXCfg)
+    feishu: FeishuCfg = field(default_factory=FeishuCfg)
 
     @classmethod
     def load(cls, path: str | Path) -> "Config":
@@ -117,6 +125,7 @@ class Config:
             llm=LLMCfg(**(raw.get("llm") or {})),
             review=ReviewCfg(**(raw.get("review") or {})),
             okx=OKXCfg(**(raw.get("okx") or {})),
+            feishu=FeishuCfg(**(raw.get("feishu") or {})),
         )
 
 
