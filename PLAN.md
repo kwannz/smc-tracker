@@ -172,7 +172,33 @@ D 多空符号 · E 真实 userFills 解析/分类自洽 · F WS webData2==REST 
   多表全空。修复:`fetch_leaderboard_rows()` 统一 helper(去重),`ClientTimeout(total=180, sock_connect=10)`
   分离连接/读超时(真网络阻断 10s 快失败、大 payload 慢读容忍) + `Accept-Encoding: gzip`。
 
+## 📌 后续功能追踪 Backlog（#96 完整性审计建立 — 在此持续追踪未闭合项）
+
+> 完整性现状（2026-06-22 #96 证据化审计）：**75 功能模块 / 12 功能域，0 真孤儿**（逐模块入边核验，
+> 仅 `__main__.py` 零入边=入口非孤儿）；**62 测试文件 / 688 用例全绿**；12 CLI 子命令全接入 handler；
+> 19 个 `_periodic_*` 周期任务运行时全挂载。系统主体完整、零孤儿合规。以下为**诚实标注的未闭合项**，持续追踪：
+
+- [ ] **Solana 链上监控接入**：`onchain/solana.py` 已实现但链上 meme 监控 `onchain/monitor.py:92` 仍跳过 SOL
+      （非 EVM，待公开 SOL RPC 稳定后并入 EVM 资金流主链路）。当前 ETH/BSC/BASE 三 EVM 链已接入。
+- [ ] **交易所资金流热钱包低估**：`onchain/exchange_flow.py` BTC 分页对极端高频热钱包（24h>150 笔）低估（已诚实标注）；
+      **Bitget BTC 充提地址待补全**（注册表 `config/exchange_wallets.yaml` 种子地址可能不全）。
+- [ ] **排行榜发现源稳定性**：`health.py:285` 提示排行榜缓存可能未建立（抓庄「发现庄」入口依赖）；需监控拉取成功率。
+- [ ] **真实部署 alpha 验证**：#95 诚实发现本沙箱外部 API 实时性不可信（缓存快照），系统逻辑正确但 **alpha 须真实部署长跑验证**；
+      KNN≈随机已诚实标注（仅辅助）。生产环境 `43.224.34.216` 已长期运行，累积真实数据待复盘。
+- [ ] **dashboard 新维度展示**：三所资金费分歧、期现基差已建数据源，dashboard 展示区块持续补全（#91/#92 已补部分）。
+
+> 闭合规则：完成项改 `[x]` 并在迭代日志记 `#NN`；新发现的未闭合项追加到本列表（保持「后续功能追踪」常态化）。
+
 ## 迭代日志
+- 2026-06-22 #96: **数值非科学化 + 飞书单卡片 + HL 分类汇总 + dashboard 上线 + 完整性审计**（用户多诉求连续推进）。
+  ① `util.fmt_px` 统一非科学计数法完整数字（去重 app/wallet 两处重复），全栈接入 8 文件 + 标注价格数值来源
+  （Bitget现价/HL现价/HL成交价），修复服务器实测 `6.387e+04`→`63,870.00`、`2.533e-05`→`0.00002533`；
+  ② 飞书 `_payload`/`send` 改为**信息集中一张卡片**（同卡多 div、一次 POST，不再拆多条消息）；
+  ③ 新增 `notify/digest.HLDigest`：10 类 HL 事件按分类聚合成**一张分类汇总卡片**（核心抓庄信号在前，降噪去刷屏），
+  10 个事件级 `_push`→`_emit(分类)`，仅超级共振/可疑地址 urgent 即时；`_periodic_hl_digest`（默认 5min）+ `DigestCfg`；
+  ④ **dashboard 上线服务器**：`smc-dashboard.service`（127.0.0.1:8799，Restart=always，journald）+ nginx 反代公开 8787，
+  本地 Mac 外网实测 `http://43.224.34.216:8787/` 200/557KB、`/health` 数据新鲜（age<5s）；
+  ⑤ **完整性审计**：75 模块 0 孤儿、688 用例全绿、本 Backlog 建立后续追踪。全量 **688 passed**。
 - 2026-06-20 #1: M1 数据接入层完成（WS/REST/模型/配置），修复 WS 文本帧 bug。
 - 2026-06-20 #2: M2 AddressMonitor 核心完成（分类+净流向+webData2+大单+JSONL），main.py，README，5 单测。
 - 2026-06-20 #3: **大扩张**。① 数据真实性审计 6/6（真实巨鲸交叉验证）。② meme 清单(Bitget∩HL，22 币)。
