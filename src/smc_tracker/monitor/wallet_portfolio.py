@@ -69,6 +69,15 @@ class WalletSnapshot:
     ts: int                       # 快照 ms 时间戳
     lifecycles: dict[str, PositionLifecycle] = field(default_factory=dict)  # coin → 生命周期
 
+    @property
+    def is_empty(self) -> bool:
+        """空画像：无任何持仓 **且** 账户净值可忽略（<$100）。
+
+        用户#：净值$0.00/持仓0个/无币种方向 的快照是纯噪声，周期推送应跳过。
+        但「0 持仓 + 可观净值」（离场持币）仍是信息，不算空——只滤掉真正空壳/休眠地址。
+        """
+        return not self.positions and self.account_value < 100.0
+
 
 # ---------------------------------------------------------------------------
 # 主类

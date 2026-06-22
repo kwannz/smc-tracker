@@ -1095,6 +1095,8 @@ class TradingSystem:
             try:
                 snaps = await self.wallet_portfolio.refresh(self.cfg.watchlist, now)
                 for snap in snaps:
+                    if snap.is_empty:
+                        continue  # 跳过空画像(净值$0/0持仓/无币种方向)——用户#要求去噪，不推空壳地址
                     fmt = self.wallet_portfolio.fmt(snap)
                     print(fmt)
                     self._push(fmt)

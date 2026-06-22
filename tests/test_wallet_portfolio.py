@@ -419,6 +419,20 @@ def test_usd_formatter():
     assert _usd(2_000_000_000.0) == "$2.00B"
 
 
+def test_wallet_snapshot_is_empty_filters_noise():
+    """空画像(无持仓且净值可忽略) → is_empty=True，周期推送应跳过（用户#：净值$0/0持仓/无币种方向 是噪声）。"""
+    # 真实病例：可疑庄 净值$0.00 总名义$0.00 持仓0个
+    empty = WalletSnapshot("0x20cf6f", "可疑庄", 0.0, 0.0, [], 1_700_000_000_000)
+    assert empty.is_empty is True
+    # 有持仓 → 非空（有币种/方向可追踪）
+    nonempty = WalletSnapshot("0xAAA", "庄A", 1_000_000.0, 500_000.0,
+                              [object()], 1_700_000_000_000)
+    assert nonempty.is_empty is False
+    # 0 持仓但有可观净值（离场持币，仍是信息）→ 不算空，保留推送
+    cash = WalletSnapshot("0xBBB", "庄B", 5_000_000.0, 0.0, [], 1_700_000_000_000)
+    assert cash.is_empty is False
+
+
 if __name__ == "__main__":
     for name, fn in list(globals().items()):
         if name.startswith("test_") and callable(fn):
