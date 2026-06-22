@@ -50,6 +50,56 @@ def test_feishu_card_color_mapping():
     assert card_color("普通文本无标记") == "blue"
 
 
+def test_feishu_single_card_even_for_long_text():
+    """长文也集中在**一张卡片**：同卡内拆多个 div 元素，正文无丢失，绝不拆成多条消息(多张卡)。"""
+    from smc_tracker.notify.feishu import FeishuNotifier, _FS_DIV_LIMIT
+    n = FeishuNotifier("https://open.feishu.cn/x", secret="sec")
+    body = "\n".join(f"行{i} 价=63,870.00 净流入$1,468,100" for i in range(800))
+    assert len(body) > _FS_DIV_LIMIT          # 触发拆 div 路径
+    p = n._payload(body, "标题", "blue")
+    assert p["msg_type"] == "interactive"
+    assert "card" in p and isinstance(p["card"], dict)   # 单张卡片(单个 card 对象)
+    divs = [e for e in p["card"]["elements"] if e.get("tag") == "div"]
+    assert len(divs) >= 2                      # 同卡内多 div 承载长文
+    joined = "\n".join(d["text"]["content"] for d in divs)
+    assert joined == body                      # 正文完整无丢失
+    # 仍只有一个头部 + 一个落款 note(单卡片结构)
+    assert p["card"]["header"]["title"]["content"] == "标题"
+    notes = [e for e in p["card"]["elements"] if e.get("tag") == "note"]
+    assert len(notes) == 1
+
+
+def test_feishu_send_posts_once_single_card(monkeypatch):
+    """send() 对长文只 POST 一次(单卡片)，不再按段多次发送。"""
+    import asyncio
+
+    from smc_tracker.notify import feishu as fmod
+    from smc_tracker.notify.feishu import FeishuNotifier
+
+    posts: list[bytes] = []
+
+    class _Resp:
+        status = 200
+        async def __aenter__(self): return self
+        async def __aexit__(self, *a): return False
+        async def read(self): return b'{"code":0}'
+
+    class _Sess:
+        def __init__(self, *a, **k): pass
+        async def __aenter__(self): return self
+        async def __aexit__(self, *a): return False
+        def post(self, url, data=None, headers=None):
+            posts.append(data)
+            return _Resp()
+
+    monkeypatch.setattr(fmod.aiohttp, "ClientSession", _Sess)
+    n = FeishuNotifier("https://open.feishu.cn/x", secret="sec")
+    long_text = "\n".join(f"行{i}" for i in range(5000))
+    ok = asyncio.run(n.send(long_text))
+    assert ok is True
+    assert len(posts) == 1                     # 单卡片：只发一次
+
+
 def test_feishu_card_without_secret_no_sign():
     """无 secret → 卡片仍构造, 但不带 sign(机器人未开签名校验场景)。"""
     from smc_tracker.notify.feishu import FeishuNotifier
