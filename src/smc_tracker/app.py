@@ -280,6 +280,8 @@ class TradingSystem:
                f"${abs(net):,.0f}(3min累积) → 已升级全量追踪"
                + self._price_tag(coin))
         print(f"\n{'='*60}\n{msg}\n{'='*60}\n")
+        if self.cfg.digest.enabled:
+            self.hl_digest.add_bias(coin, net > 0, "可疑")
         self._emit("suspicious", msg, urgent=True)
 
     def _on_wall_signal(self, ev: dict) -> None:
@@ -382,6 +384,8 @@ class TradingSystem:
             if sig is not None:
                 self._ta_seen[coin] = now
                 print(f"[{_ts(now)}] 📐 {self.ta_signal.fmt(sig)}{self._price_tag(coin)}")
+                if self.cfg.digest.enabled:
+                    self.hl_digest.add_bias(coin, sig.direction == "long", "TA")
                 self._emit("ta", f"[{_ts(now)}] {self.ta_signal.fmt(sig)}{self._price_tag(coin)}")
         ze = self.zones.get(coin)
         if ze is None:
@@ -411,6 +415,9 @@ class TradingSystem:
         hl_px：从 self._mids 取；bg_px：从 Bitget OI 监控取价格（price_change()[0]）。
         任何失败不影响主推送热路径。
         """
+        # 币种多空比例（用户#）：此 choke point 覆盖 跟庄/SMC/背离/共识/超级/暴涨 六类方向信号
+        if self.cfg.digest.enabled:
+            self.hl_digest.add_bias(coin, direction in ("long", "up", "bullish"), kind)
         try:
             hl = _f(self._mids.get(coin, 0.0))
             bg = 0.0

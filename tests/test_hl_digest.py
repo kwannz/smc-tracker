@@ -86,6 +86,37 @@ def test_wall_section_aggregates_per_coin_not_raw_lines():
     assert wall_sec.count("spoof") <= 1
 
 
+def test_coin_bias_long_short_ratio():
+    """按币种多空比例（用户#）：聚合各信号方向 → 每币 多/空计数 + 倾向 + 来源；挂单墙 bid/ask 计入。"""
+    d = HLDigest()
+    d.add_bias("TRUMP", True, "跟庄")
+    d.add_bias("TRUMP", True, "背离")
+    d.add_bias("TRUMP", True, "超级")
+    d.add_bias("PEPE", False, "背离")
+    d.add_bias("PEPE", False, "TA")
+    d.add_bias("BTC", True, "SMC")
+    d.add_bias("BTC", False, "持仓")
+    d.add_wall("BTC", "bid", 2_000_000, 64000.0)     # bid 净 → 计入 BTC 多
+    out = d.render(1_700_000_000_000)
+    assert out is not None and "📊 币种多空比例" in out
+    bias = out.split("📊 币种多空比例")[1].split("\n【")[0]   # 只取多空比例 section
+    assert "TRUMP" in bias and "PEPE" in bias and "BTC" in bias
+    assert "净多" in bias                              # TRUMP 全多 → 净多 100%
+    assert "净空" in bias                              # PEPE 全空 → 净空 100%
+    assert "跟庄" in bias and "背离" in bias            # 来源标注
+    # 币种多空比例排在挂单墙等明细之前（头部总览）
+    assert out.index("📊 币种多空比例") < out.index("🧱 挂单墙")
+
+
+def test_bias_cleared_after_render():
+    """多空比例 render 后清空，下周期从零。"""
+    d = HLDigest()
+    d.add_bias("BTC", True, "SMC")
+    d.add("signal", "⚡ BTC 做多")
+    assert d.render(1_700_000_000_000) is not None
+    assert d.render(1_700_000_001_000) is None
+
+
 def test_wall_only_digest_renders_and_clears():
     """仅挂单墙（无其它分类）也应产出（pending 计入 walls）；render 后清空。"""
     d = HLDigest()

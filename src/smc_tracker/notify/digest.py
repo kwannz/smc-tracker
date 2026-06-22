@@ -41,7 +41,7 @@ _KNOWN = {k for k, _ in _CATEGORIES}
 class HLDigest:
     """HL 事件分类聚合缓冲。add(分类, 明细行) 收集；render(now_ms) 渲染汇总卡片文本并清空。"""
 
-    __slots__ = ("_buf", "_walls", "max_per_cat")
+    __slots__ = ("_buf", "_walls", "_bias", "max_per_cat")
 
     def __init__(self, max_per_cat: int = 8) -> None:
         self.max_per_cat = max(1, max_per_cat)
@@ -49,6 +49,8 @@ class HLDigest:
         # 挂单墙单独**结构化聚合**（用户#：不要逐条原始事件，要按币 bid/ask 净意图 + 整体分析）
         # coin -> {bid_ntl, ask_ntl, bid_n, ask_n, px}
         self._walls: dict[str, dict[str, float]] = {}
+        # 币种多空比例（用户#：推送按币种多空比例组织）coin -> {"bull":n, "bear":n, "srcs":set}
+        self._bias: dict[str, dict] = {}
 
     def add(self, category: str, line: str) -> None:
         """把一条 HL 事件明细按分类入缓冲。未知分类静默忽略（数据质量守卫，不抛异常）。
@@ -75,20 +77,37 @@ class HLDigest:
         if px:
             w["px"] = float(px)
 
+    def add_bias(self, coin: str, bull: bool, source: str) -> None:
+        """按币累计**多空方向**（用户#：推送按币种多空比例组织）。
+
+        bull=True 计 1 票多(long/up/bullish/bid)，False 计 1 票空；source=信号源短标签(跟庄/SMC/背离…)。
+        与各信号 _emit 同步调用（见 app），render 出每币 多/空计数 + 倾向 + 共识来源。
+        """
+        if not coin:
+            return
+        b = self._bias.setdefault(coin, {"bull": 0, "bear": 0, "srcs": set()})
+        b["bull" if bull else "bear"] += 1
+        if source:
+            b["srcs"].add(source)
+
     def pending(self) -> int:
         """当前缓冲内事件总数（含挂单墙原始墙数；供 app 判断是否需要推送）。"""
         walls = sum(int(w["bid_n"] + w["ask_n"]) for w in self._walls.values())
         return sum(len(v) for v in self._buf.values()) + walls
 
     def render(self, now_ms: int = 0) -> str | None:
-        """渲染**一张**分类汇总卡片文本并清空缓冲；无任何事件返回 None（不推空卡）。"""
-        total = self.pending()
-        if total == 0:
+        """渲染**一张**分类汇总卡片文本并清空缓冲；无任何事件返回 None（不推空卡）。
+
+        头部先出**币种多空比例**（用户#：按币种多空比例组织内容），再出各分类明细作证据。
+        """
+        if not (self._buf or self._walls or self._bias):
             return None
+        total = self.pending()
         lines: list[str] = [
             f"🦅 HL 抓庄分类汇总 [{fmt_ts(now_ms)}]",
-            f"近窗共 {total} 条 HL 事件（按分类汇总，已降噪去刷屏）",
+            f"近窗共 {total} 条 HL 事件（按币种多空比例聚合 + 分类明细，已降噪去刷屏）",
         ]
+        lines.extend(self._render_bias())     # 头部：币种多空比例总览
         for key, title in _CATEGORIES:
             if key == "wall":
                 lines.extend(self._render_walls(title))   # 挂单墙：按币聚合 + 整体分析
@@ -105,7 +124,48 @@ class HLDigest:
             lines.extend(f"  • {x}" for x in shown)
         self._buf.clear()
         self._walls.clear()
+        self._bias.clear()
         return "\n".join(lines)
+
+    @staticmethod
+    def _lean(bull_pct: int) -> str:
+        """多空倾向标签：按多头占比分档（净多/偏多/分歧/偏空/净空），共识强弱一目了然。"""
+        if bull_pct >= 80:
+            return f"净多 {bull_pct}%"
+        if bull_pct >= 60:
+            return f"偏多 {bull_pct}%"
+        if bull_pct > 40:
+            return f"分歧 多{bull_pct}%"
+        if bull_pct > 20:
+            return f"偏空 {100 - bull_pct}%"
+        return f"净空 {100 - bull_pct}%"
+
+    def _render_bias(self) -> list[str]:
+        """币种多空比例：合并各信号方向票 + 挂单墙净(bid=多/ask=空)，每币出 多/空计数 + 倾向 + 来源。"""
+        tally: dict[str, dict] = {}
+        for coin, b in self._bias.items():
+            t = tally.setdefault(coin, {"bull": 0, "bear": 0, "srcs": set()})
+            t["bull"] += b["bull"]
+            t["bear"] += b["bear"]
+            t["srcs"] |= b["srcs"]
+        # 挂单墙净额计入多空（bid 净=支撑/吸筹=多；ask 净=压制/分销=空）
+        for coin, w in self._walls.items():
+            net = w["bid_ntl"] - w["ask_ntl"]
+            if net == 0:
+                continue
+            t = tally.setdefault(coin, {"bull": 0, "bear": 0, "srcs": set()})
+            t["bull" if net > 0 else "bear"] += 1
+            t["srcs"].add("挂单墙")
+        if not tally:
+            return []
+        out = ["\n【📊 币种多空比例】（聪明钱信号方向聚合，越偏=共识越强）"]
+        for coin, t in sorted(tally.items(),
+                              key=lambda kv: kv[1]["bull"] + kv[1]["bear"], reverse=True):
+            tot = t["bull"] + t["bear"]
+            pct = round(100 * t["bull"] / tot) if tot else 50
+            srcs = "/".join(sorted(t["srcs"]))
+            out.append(f"  • {coin}  🟢多{t['bull']} 🔴空{t['bear']} → {self._lean(pct)}（{srcs}）")
+        return out
 
     @staticmethod
     def _net_tag(net: float) -> str:
