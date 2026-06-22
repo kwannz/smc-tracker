@@ -158,9 +158,16 @@ class HLDigest:
             t["srcs"].add("挂单墙")
         if not tally:
             return []
-        out = ["\n【📊 币种多空比例】（聪明钱信号方向聚合，越偏=共识越强）"]
-        for coin, t in sorted(tally.items(),
-                              key=lambda kv: kv[1]["bull"] + kv[1]["bear"], reverse=True):
+        # 按信号数(关注度)降序，取 Top（忙时防卡片过长；高活跃币=共识最值得看）
+        ranked = sorted(tally.items(),
+                        key=lambda kv: kv[1]["bull"] + kv[1]["bear"], reverse=True)
+        cap = max(self.max_per_cat * 2, 12)
+        shown, omitted = ranked[:cap], max(0, len(ranked) - cap)
+        head = "\n【📊 币种多空比例】（聪明钱信号方向聚合，越偏=共识越强）"
+        if omitted:
+            head += f"（{len(ranked)} 币，显示活跃 Top {len(shown)}，省略 {omitted}）"
+        out = [head]
+        for coin, t in shown:
             tot = t["bull"] + t["bear"]
             pct = round(100 * t["bull"] / tot) if tot else 50
             srcs = "/".join(sorted(t["srcs"]))
