@@ -55,3 +55,15 @@ def test_negative_price():
     s = fmt_px(-63870.0)
     assert s == "-63,870.00"
     assert "e" not in s.lower()
+
+
+def test_is_placeholder_addr():
+    """占位/无效地址判别：空 / 全零地址(0x0..0) → True（示例配置残留，不追踪/不推送）。"""
+    from smc_tracker.util import is_placeholder_addr
+    assert is_placeholder_addr("0x0000000000000000000000000000000000000000") is True
+    assert is_placeholder_addr("0x0") is True
+    assert is_placeholder_addr("") is True
+    assert is_placeholder_addr("0X0000") is True          # 大小写/短零串
+    # 真实地址 → False
+    assert is_placeholder_addr("0x5078C2fBeA2b2aD61bc840Bc023E35Fce56BeDb6") is False
+    assert is_placeholder_addr("0x4025d7") is False

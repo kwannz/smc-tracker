@@ -36,6 +36,20 @@ def fmt_px(px: Any) -> str:
     return f"{v:.{decimals}f}".rstrip("0").rstrip(".")
 
 
+def is_placeholder_addr(addr: str) -> bool:
+    """占位/无效地址判别：空串 或 全零地址（0x0..0）→ True。
+
+    示例配置常残留 `0x0000…0000`「填真实地址」占位项；这类非真实可追踪钱包，
+    应在订阅/推送前跳过（避免空壳画像刷屏）。仅判全零，不误伤真实地址。
+    """
+    if not addr:
+        return True
+    a = addr.lower()
+    if a.startswith("0x"):
+        a = a[2:]
+    return a == "" or set(a) <= {"0"}
+
+
 def fmt_hms(ms: int = 0) -> str:
     """ms 时间戳 → 本地 HH:MM:SS（ms=0 用当前时间）。高频控制台行用，简洁。"""
     return time.strftime("%H:%M:%S", time.localtime(ms / 1000 if ms else time.time()))
