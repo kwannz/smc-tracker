@@ -604,33 +604,6 @@ function renderWhaleSignals(rows){{
   return h+'</table>';
 }}
 
-function renderTickerBoard(rows){{
-  if(!rows||!rows.length)return none();
-  let h='<table><tr><th>币种</th><th>价格</th><th>涨跌幅(24h)</th><th>资金费率</th><th>OI(USD)</th></tr>';
-  rows.forEach(r=>{{
-    // 涨跌幅：chg24 为 null 时显示「—」
-    let chgStr='<span class="none">—</span>';
-    if(r.chg24!=null){{
-      const pct=(parseFloat(r.chg24)*100).toFixed(2);
-      const cls=parseFloat(r.chg24)>=0?'pos':'neg';
-      const sign=parseFloat(r.chg24)>=0?'+':'';
-      chgStr=`<span class="${{cls}}">${{sign}}${{pct}}%</span>`;
-    }}
-    // 资金费率
-    const fundingPct=(parseFloat(r.funding||0)*100).toFixed(4);
-    const fundingSign=parseFloat(r.funding||0)>=0?'+':'';
-    const fundingCls=parseFloat(r.funding||0)>=0?'pos':'neg';
-    h+=`<tr>
-      <td class="coin">${{r.coin||r.symbol||''}}</td>
-      <td>${{fmtNum(r.price,6)}}</td>
-      <td>${{chgStr}}</td>
-      <td class="${{fundingCls}}">${{fundingSign}}${{fundingPct}}%</td>
-      <td>${{fmtUsd(r.oi_usd)}}</td>
-    </tr>`;
-  }});
-  return h+'</table>';
-}}
-
 function fmtOpenTime(open_ms){{
   // 将 open_ms(ms 时间戳) 格式化为本地时间 MM-DD HH:MM
   if(!open_ms)return'—';
@@ -896,7 +869,6 @@ function renderAll(state){{
   const sections=[
     ['🩺 系统健康','health',renderHealth],
     ['📊 预测准确率(诚实回顾)','accuracy',renderAccuracy],
-    ['📊 行情监控板','ticker_board',renderTickerBoard],
     ['🏦 交易所资金流(24h)','exchange_flows',renderExchangeFlows],
     ['🏦 钱包持仓画像','wallet_portfolio',renderWalletPortfolio],
     ['共振信号 ⚡','signals',renderSignals],

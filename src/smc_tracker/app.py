@@ -197,49 +197,28 @@ class TradingSystem:
 
     # ---- 价格标签 ----
     def _price_tag(self, coin: str) -> str:
-        """返回形如 ' 💲$0.08350 🟢+0.36% 费率+0.0100% (Bitget现价)' 的实时价格+涨幅+资金费标签；
-        无数据时返回空串。**带数值来源标注**（Bitget永续 / HL现价），便于核验数字出处。
+        """返回形如 ' 💲$0.08350 (Bitget现价)' 的实时**价格**标签（带数值来源），无数据时返回空串。
 
-        优先查 Bitget OI monitor（含 lastPr/change24h/funding），回退到 HL allMids（仅价格，无涨幅）。
+        用户#要求：涨跌幅/费率/OI 等行情维度不需要 → 价格标签只保留**价格 + 数据来源**（核心抓庄信号
+        附现价上下文即可，行情维度噪声移除）。优先 Bitget OI monitor 价，回退 HL allMids。
         """
         px: float = 0.0
-        chg: float | None = None
-        funding: float | None = None
         src = ""
-
-        # 1) 先查 Bitget（meme 永续，含 lastPr + change24h + funding）
+        # 1) 先查 Bitget（meme 永续 lastPr）
         sym = self.coin_to_symbol.get(normalize(coin))
         if self.oi_monitor and sym:
             tk = self.oi_monitor.ticker(sym)
             if tk is not None:
                 px = tk["price"]
-                chg = tk["chg24"]
-                funding = tk["funding"]
                 src = "Bitget现价"
-
-        # 2) 回退到 HL allMids（无涨幅/资金费数据）
+        # 2) 回退到 HL allMids
         if px <= 0:
             px = self._mids.get(coin, 0.0)
             src = "HL现价"
-
         if px <= 0:
             return ""
-
-        # 格式化价格（非科学计数法完整数字）
-        px_str = _fmt_px(px)
-        # 格式化涨跌幅
-        if chg is not None:
-            sign = "🟢+" if chg >= 0 else "🔴"
-            chg_str = f" {sign}{chg * 100:.2f}%"
-        else:
-            chg_str = ""
-        # 格式化资金费率（有值才追加）
-        if funding is not None:
-            funding_str = f" 费率{funding * 100:+.4f}%"
-        else:
-            funding_str = ""
-        # 数值来源标注：标清这条价格/涨幅/费率取自哪个交易所，便于事后核验
-        return f" 💲${px_str}{chg_str}{funding_str} ({src})"
+        # 仅价格（非科学计数法完整数字）+ 数值来源
+        return f" 💲${_fmt_px(px)} ({src})"
 
     # ---- 回调 ----
     def _on_sm_event(self, evt: SmartMoneyEvent) -> None:
@@ -1057,11 +1036,14 @@ class TradingSystem:
                 self._push(card)
 
     async def _periodic_ticker_board(self, every: float = 300.0) -> None:
-        """周期推送行情监控板：显示所有监控币种的价格/涨跌幅/资金费率/OI（每 5 分钟）。
+        """周期推送行情监控板：价格/涨跌幅/资金费率/OI（每 5 分钟）。
 
-        风格参考 BWE_OI_Price_monitor 频道：涨跌幅最大的排前，每次推 Top 20。
-        oi_monitor 为 None 时跳过；无行情数据时不推送（不空推）。
+        用户#要求：价/涨跌幅/费率/OI 行情维度不需要 → 默认关闭（cfg.output.push_ticker_board=False），
+        本任务直接退出，聚焦 HL 抓庄；需要时配置开启即恢复（保持可达、可配置，不留死代码）。
+        风格参考 BWE_OI_Price_monitor 频道：涨跌幅最大的排前，每次推 Top 20；无行情数据时不空推。
         """
+        if not self.cfg.output.push_ticker_board:
+            return
         while not self._stopping:
             await asyncio.sleep(every)
             if self.oi_monitor is None:

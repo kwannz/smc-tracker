@@ -421,14 +421,20 @@ def test_ticker_board_empty_on_no_oi_data():
     assert board == [], f"无数据时 ticker_board 应为 []，实际 {board}"
 
 
-def test_render_html_contains_ticker_board():
-    """render_html 应包含「行情监控板」字样（来自 sections 数组标题）。"""
+def test_render_html_omits_ticker_board_panel():
+    """render_html **不再含**「行情监控板」面板（用户#要求：价/涨跌幅/费率/OI 不需要，聚焦 HL）。
+
+    诚实标注：后端 build_dashboard_state 仍产出 ticker_board 数据（供 /health 等复用，见
+    test_ticker_board_section_has_data），仅前端面板移除——降噪，与推送侧 push_ticker_board 默认关一致。
+    """
     s, now_ms = _store_with_bitget_oi()
     state = build_dashboard_state(s, now_ms)
     s.close()
 
     html = render_html(state)
-    assert "行情监控板" in html, "render_html 应含「行情监控板」字样"
+    assert "行情监控板" not in html, "render_html 不应再含「行情监控板」面板（已按用户要求移除）"
+    assert "renderTickerBoard" not in html, "renderTickerBoard 死函数应已移除"
+    assert state.get("ticker_board") is not None, "后端 ticker_board 数据应保留（其它消费方依赖）"
 
 
 # ---------------------------------------------------------------------------

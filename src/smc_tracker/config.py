@@ -64,6 +64,7 @@ class OutputCfg:
     console: bool = True
     jsonl_path: str = "data/signals.jsonl"
     webhook_url: str = ""
+    push_ticker_board: bool = False   # 行情监控板(价/涨跌幅/费率/OI)推送——用户#不需要，默认关；核心聚焦 HL
 
 
 @dataclass(slots=True)
