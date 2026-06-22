@@ -303,7 +303,12 @@ class TradingSystem:
                f"${ntl:,.0f}(领先意图·可能spoof，须与成交/OI 交叉验证)"
                + self._price_tag(coin))
         print(f"[{_hms(now)}] {msg}")
-        self._emit("wall", msg)
+        # 挂单墙：digest 开启 → 按币结构化聚合（汇总卡片出「整体分析+单币总结」，非逐条原始）；
+        # 关闭 → 回退逐条即时推（旧行为）。用真实 l2Book 墙事件，无模拟数据。
+        if self.cfg.digest.enabled:
+            self.hl_digest.add_wall(coin, side, ntl, _f(ev.get("px", 0.0)))
+        else:
+            self._push(msg)
 
     def _on_meme_trade(self, t: dict) -> None:
         # 大单 meme 成交（含主动方地址）。t 是 MemeTradeMonitor on_trade 传入的 record dict

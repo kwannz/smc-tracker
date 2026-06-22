@@ -20,17 +20,18 @@ def test_empty_digest_renders_none():
 
 
 def test_categories_grouped_with_counts():
-    """多类事件 → 一张文本含各分类 section 标题 + 明细 + 总数统计。"""
+    """多类事件 → 一张文本含各分类 section 标题 + 明细 + 总数统计（挂单墙走 add_wall 聚合）。"""
     d = HLDigest()
     d.add("whale", "庄#3 净做多 BTC $300,000 @ 64,610.00")
     d.add("whale", "庄#7 净做空 ETH $120,000 @ 1,742.70")
-    d.add("wall", "BTC 🟢bid墙 @ 64,610.00 $1,468,100")
+    d.add_wall("BTC", "bid", 1_468_100, 64610.0)
     d.add("pump", "FLOKI 暴涨 +12% @ 0.00002533")
     out = d.render(1_700_000_000_000)
     assert out is not None
     assert "🐋 跟庄信号" in out and "🧱 挂单墙" in out and "🚀 暴涨暴跌" in out
-    assert "庄#3" in out and "1,468,100" in out and "0.00002533" in out
-    assert "4 条" in out  # 总数统计（2+1+1）
+    assert "庄#3" in out and "0.00002533" in out
+    assert "BTC" in out.split("🧱 挂单墙")[1]   # 挂单墙 section 含 BTC 聚合
+    assert "4 条" in out  # 总数统计（whale 2 + wall 1 + pump 1）
 
 
 def test_unknown_category_ignored_safely():
@@ -60,6 +61,39 @@ def test_render_clears_buffer():
     d.add("signal", "⚡ BTC 做多")
     assert d.render(1_700_000_000_000) is not None
     assert d.render(1_700_000_001_000) is None
+
+
+def test_wall_section_aggregates_per_coin_not_raw_lines():
+    """挂单墙不逐条列原始事件，按币聚合 bid/ask 净意图 + 整体分析（用户#：不要 6 条，要整体+单币总结）。"""
+    d = HLDigest()
+    # 用户真实 6 条墙
+    d.add_wall("BTC", "bid", 1_497_623, 64138.0)
+    d.add_wall("BTC", "ask", 2_308_574, 64126.0)
+    d.add_wall("SOL", "ask", 278_445, 73.856)
+    d.add_wall("ETH", "ask", 2_559_321, 1749.9)
+    d.add_wall("SOL", "bid", 212_905, 73.831)
+    d.add_wall("ETH", "bid", 2_450_694, 1746.9)
+    out = d.render(1_700_000_000_000)
+    assert out is not None and "🧱 挂单墙" in out
+    wall_sec = out.split("🧱 挂单墙")[1]
+    # 3 币各**一行**总结（不是 6 条原始事件）
+    assert wall_sec.count("BTC") == 1 and wall_sec.count("ETH") == 1 and wall_sec.count("SOL") == 1
+    # 每币净意图：BTC ask 2.31M > bid 1.50M → 净 ask 压制/分销
+    assert "净" in wall_sec and "压制" in wall_sec
+    # 整体分析行（全币 net ask）
+    assert "整体" in wall_sec
+    # spoof 提醒只在 header 出现一次（不再逐条重复刷屏）
+    assert wall_sec.count("spoof") <= 1
+
+
+def test_wall_only_digest_renders_and_clears():
+    """仅挂单墙（无其它分类）也应产出（pending 计入 walls）；render 后清空。"""
+    d = HLDigest()
+    d.add_wall("BTC", "bid", 2_000_000, 64000.0)
+    assert d.pending() >= 1
+    out = d.render(1_700_000_000_000)
+    assert out is not None and "BTC" in out
+    assert d.render(1_700_000_001_000) is None       # 已清空
 
 
 def test_category_order_core_signals_first():
