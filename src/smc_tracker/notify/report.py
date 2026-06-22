@@ -4,6 +4,8 @@ from __future__ import annotations
 import time
 from typing import Any
 
+from ..util import fmt_px as _fmt_px
+
 
 def _hms(ms: int) -> str:
     return time.strftime("%H:%M:%S", time.localtime(ms / 1000)) if ms else "--:--:--"
@@ -21,7 +23,7 @@ def build_report(store: Any, since_ms: int, now_ms: int, title: str = "SMC 摘�
     lines.append(f"\n⚡ 共振信号 {len(sigs)} 条：")
     for s in sigs:
         d = "做多" if s[2] == "long" else "做空"
-        plan = (f" 入{s[4]:g}/损{s[5]:g}/标{s[6]:g} RR{s[7]:g}" if s[4] else "")
+        plan = (f" 入{_fmt_px(s[4])}/损{_fmt_px(s[5])}/标{_fmt_px(s[6])} RR{s[7]:.2f}" if s[4] else "")
         lines.append(f"  [{_hms(s[0])}] {s[1]} {d} 分{s[3]:+.2f}{plan}")
     if not sigs:
         lines.append("  （无）")

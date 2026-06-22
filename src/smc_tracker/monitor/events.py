@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from enum import Enum
 
 from ..models import Side
+from ..util import fmt_px as _fmt_px
 
 
 class EventType(str, Enum):
@@ -47,6 +48,6 @@ class SmartMoneyEvent:
         taker = "T" if self.is_taker else "M"
         pnl = f" pnl={self.closed_pnl:+.0f}" if self.closed_pnl else ""
         return (f"[聪明钱] {self.label or self.address[:8]} {self.direction_label} "
-                f"{self.coin} sz={self.sz:g} @ {self.px:g} "
+                f"{self.coin} sz={_fmt_px(self.sz)} @ {_fmt_px(self.px)} "
                 f"名义=${self.notional:,.0f} ({taker}){pnl} "
-                f"仓位 {self.position_before:g}→{self.position_after:g}")
+                f"仓位 {_fmt_px(self.position_before)}→{_fmt_px(self.position_after)}")

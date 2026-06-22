@@ -19,6 +19,7 @@ import math
 from dataclasses import dataclass
 from typing import Any, Callable
 
+from ..util import fmt_px as _fmt_px
 from .risk import compute_risk
 
 
@@ -43,8 +44,8 @@ class Signal:
         emoji = "🟢做多" if self.direction == "long" else "🔴做空"
         base = f"⚡信号 {emoji} {self.coin} 分={self.score:+.2f} | {self.reason}"
         if self.entry:
-            base += (f"\n   入场={self.entry:g} 止损={self.stop:g} 目标={self.target:g} "
-                     f"盈亏比={self.rr:g}")
+            base += (f"\n   入场={_fmt_px(self.entry)} 止损={_fmt_px(self.stop)} "
+                     f"目标={_fmt_px(self.target)} 盈亏比={self.rr:.2f}")
         return base
 
 

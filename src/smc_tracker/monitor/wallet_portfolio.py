@@ -17,6 +17,7 @@ from typing import TYPE_CHECKING, Any
 
 from ..models import Position
 from ..util import to_float as _f
+from ..util import fmt_px as _fmt_px
 from .position_lifecycle import PositionLifecycle, fmt_hold, reconstruct as _reconstruct
 
 if TYPE_CHECKING:
@@ -47,13 +48,10 @@ def _usd(v: float | None) -> str:
 
 
 def _px(v: float | None) -> str:
-    """价格格式化：None → '—'，≥1 保 4 有效数字，<1 保 6 有效数字。"""
+    """价格格式化：None → '—'，其余用统一非科学计数法格式器（见 util.fmt_px）。"""
     if v is None:
         return "—"
-    f = float(v)
-    if f >= 1:
-        return f"{f:,.4g}"
-    return f"{f:.6g}"
+    return _fmt_px(v)
 
 
 # ---------------------------------------------------------------------------

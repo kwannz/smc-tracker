@@ -16,7 +16,7 @@ from __future__ import annotations
 from typing import Any
 
 from ..models import Side
-from ..util import fmt_hms, to_float
+from ..util import fmt_hms, fmt_px, to_float
 from .address_analyzer import AddressAnalyzer
 from .address_correlation import AddressCorrelation
 from .trader_classify import classify_trader, fmt_classify
@@ -145,10 +145,10 @@ def fmt_dossier(d: dict) -> str:
     pos = d.get("positions", [])
     lines.append(f"【实时持仓 {len(pos)} 个】" + ("（按净名义 Top）" if pos else "（当前空仓）"))
     for x in pos[:12]:
-        liq = f" 强平≈{to_float(x['liq']):.4g}" if x.get("liq") else ""
+        liq = f" 强平≈{fmt_px(x['liq'])}" if x.get("liq") else ""
         lines.append(
             f"  {x['coin']:<10} {x['side']} ${abs(to_float(x['value'])):,.0f} "
-            f"@{to_float(x['entry']):.4g} {to_float(x['lev']):.0f}x "
+            f"@{fmt_px(x['entry'])} {to_float(x['lev']):.0f}x "
             f"uPnL${to_float(x['upnl']):+,.0f}{liq}")
 
     # ②b 实时全币种成交明细（开/平/加/减 + 每笔盈亏）
@@ -161,7 +161,7 @@ def fmt_dossier(d: dict) -> str:
             tk = "主动" if f.get("taker") else "被动"
             lines.append(
                 f"  [{fmt_hms(int(f['time_ms']))}] {f['coin']:<8} {f.get('dir', '')}"
-                f" {f['side']} {to_float(f['sz']):.4g}@{to_float(f['px']):.4g}"
+                f" {f['side']} {fmt_px(f['sz'])}@{fmt_px(f['px'])}"
                 f" ${to_float(f['notional']):,.0f} {tk}{pnl_s}")
 
     # ③ 协同地址
@@ -195,7 +195,7 @@ def fmt_dossier(d: dict) -> str:
             tk = "主动" if taker else "被动"
             lines.append(
                 f"  [{fmt_hms(int(tm))}] {coin} {side} ${to_float(notional):,.0f}"
-                f" @{to_float(px):.4g} {tk}")
+                f" @{fmt_px(px)} {tk}")
 
     if not pos and not traj and not d.get("co_movers"):
         lines.append("（该地址近窗无永续持仓/成交/协同记录——可能纯现货、休眠或排行榜聚合账户）")

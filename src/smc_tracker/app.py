@@ -51,15 +51,9 @@ log = logging.getLogger("app")
 from .util import fmt_hms as _hms          # 简洁 HH:MM:SS（高频控制台行）
 from .util import fmt_ts as _ts            # 完整 日期+时间+时区（推送告警，便于事后回顾）
 from .util import to_float as _f           # 统一安全数值解析
+from .util import fmt_px as _fmt_px        # 统一价格格式（非科学计数法完整数字，见 util.fmt_px）
 
 _INTERVAL_MS = {"1m": 60_000, "5m": 300_000, "15m": 900_000, "1h": 3_600_000}
-
-
-def _fmt_px(px: float) -> str:
-    """自适应精度格式化价格：≥1 保 4 位有效数字；<1 用 6 位有效数字去末尾零。"""
-    if px >= 1:
-        return f"{px:,.4g}"
-    return f"{px:.6g}"
 
 
 EVM_RPC = {
@@ -201,13 +195,15 @@ class TradingSystem:
 
     # ---- 价格标签 ----
     def _price_tag(self, coin: str) -> str:
-        """返回形如 ' 💲$0.0835 🟢+0.36% 费率+0.0100%' 的实时价格+涨幅+资金费标签；无数据时返回空串。
+        """返回形如 ' 💲$0.08350 🟢+0.36% 费率+0.0100% (Bitget现价)' 的实时价格+涨幅+资金费标签；
+        无数据时返回空串。**带数值来源标注**（Bitget永续 / HL现价），便于核验数字出处。
 
         优先查 Bitget OI monitor（含 lastPr/change24h/funding），回退到 HL allMids（仅价格，无涨幅）。
         """
         px: float = 0.0
         chg: float | None = None
         funding: float | None = None
+        src = ""
 
         # 1) 先查 Bitget（meme 永续，含 lastPr + change24h + funding）
         sym = self.coin_to_symbol.get(normalize(coin))
@@ -217,15 +213,17 @@ class TradingSystem:
                 px = tk["price"]
                 chg = tk["chg24"]
                 funding = tk["funding"]
+                src = "Bitget现价"
 
         # 2) 回退到 HL allMids（无涨幅/资金费数据）
         if px <= 0:
             px = self._mids.get(coin, 0.0)
+            src = "HL现价"
 
         if px <= 0:
             return ""
 
-        # 格式化价格
+        # 格式化价格（非科学计数法完整数字）
         px_str = _fmt_px(px)
         # 格式化涨跌幅
         if chg is not None:
@@ -238,7 +236,8 @@ class TradingSystem:
             funding_str = f" 费率{funding * 100:+.4f}%"
         else:
             funding_str = ""
-        return f" 💲${px_str}{chg_str}{funding_str}"
+        # 数值来源标注：标清这条价格/涨幅/费率取自哪个交易所，便于事后核验
+        return f" 💲${px_str}{chg_str}{funding_str} ({src})"
 
     # ---- 回调 ----
     def _on_sm_event(self, evt: SmartMoneyEvent) -> None:
@@ -269,7 +268,7 @@ class TradingSystem:
                     direction, abs(net), evt.px, evt.position_after, int(evt.is_taker)))
                 d = "做多🟢" if direction == "long" else "做空🔴"
                 msg = (f"[{_ts(evt.time_ms)}] 🐋跟庄信号 {evt.label or evt.address[:8]} "
-                       f"净{d} {evt.coin} ${abs(net):,.0f}(3min累积) @ {evt.px:g}"
+                       f"净{d} {evt.coin} ${abs(net):,.0f}(3min累积) @ {_fmt_px(evt.px)}(HL成交价)"
                        + self._price_tag(evt.coin)
                        + self.efficacy.label_of("跟庄"))
                 print(f"\n{'='*60}\n{msg}\n{'='*60}\n")
@@ -334,7 +333,7 @@ class TradingSystem:
 
     def _on_structure(self, coin: str, e: StructureEvent) -> None:
         arrow = "↑" if e.direction == "bull" else "↓"
-        print(f"[{_hms()}] 📐 [SMC] {coin} {e.type} {arrow} 突破 {e.level:g} "
+        print(f"[{_hms()}] 📐 [SMC] {coin} {e.type} {arrow} 突破 {_fmt_px(e.level)} "
               f"(trend→{self.structure.structure(coin).trend})")
         # 结构事件 = 信号触发点：先刷新该 coin 的聪明钱流向 + OI 环境，再评估共振
         now = int(time.time() * 1000)
@@ -387,7 +386,7 @@ class TradingSystem:
         # 放量监控(成交量异动)
         vev = self.volume_monitor.update(coin, candle)
         if vev is not None:
-            print(f"[{_hms(now)}] 📊 [放量] {coin} {vev['ratio']:.1f}× 均量 (量={vev['vol']:g})")
+            print(f"[{_hms(now)}] 📊 [放量] {coin} {vev['ratio']:.1f}× 均量 (量={_fmt_px(vev['vol'])})")
         # TA 多因子信号(指标+combo+PA+双顶双底+道氏 全链路在生产执行)
         if len(buf) >= 60 and now - self._ta_seen.get(coin, 0) >= 1_800_000:
             sig = self.ta_signal.evaluate(buf, None, now)
@@ -401,7 +400,7 @@ class TradingSystem:
             self.zones[coin] = ze
         for z in ze.update(candle):
             tag = "看涨" if z.direction == "bull" else "看跌"
-            print(f"[{_hms()}] 🟦 [{z.kind}] {coin} {tag} 区 [{z.bottom:g}, {z.top:g}]")
+            print(f"[{_hms()}] 🟦 [{z.kind}] {coin} {tag} 区 [{_fmt_px(z.bottom)}, {_fmt_px(z.top)}]")
         # 流动性扫荡
         le = self.liquidity.get(coin)
         if le is None:
@@ -411,7 +410,7 @@ class TradingSystem:
             self._last_sweep[coin] = (sw.direction, candle.close_time_ms)
             tag = "看涨(扫SSL)" if sw.direction == "bullish" else "看跌(扫BSL)"
             eq = "等高等低" if sw.equal else ""
-            print(f"[{_hms()}] 💧 [扫荡] {coin} {tag} @ {sw.price:g} {eq}")
+            print(f"[{_hms()}] 💧 [扫荡] {coin} {tag} @ {_fmt_px(sw.price)} {eq}")
 
     def _record_pred(
         self, coin: str, kind: str, direction: str, horizon_ms: int | None = None
@@ -1043,7 +1042,7 @@ class TradingSystem:
             if not rows:
                 continue
             now = int(time.time() * 1000)
-            lines: list[str] = [f"📊 行情监控板 [{_ts(now)}]"]
+            lines: list[str] = [f"📊 行情监控板 [{_ts(now)}] (数据源: Bitget 永续 · 价/涨跌幅/费率/OI)"]
             for r in rows:
                 coin = r["coin"] or r["symbol"]
                 price = r["price"]

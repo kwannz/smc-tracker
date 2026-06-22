@@ -15,6 +15,27 @@ def to_float(x: Any, default: float = 0.0) -> float:
     return v if math.isfinite(v) else default
 
 
+def fmt_px(px: Any) -> str:
+    """价格/数值 → **非科学计数法**完整数字字符串（统一格式器，消除跨模块重复）。
+
+    %g 对大数(≥1e4)/小数(≤1e-5)会切成科学计数法(6.387e+04 / 2.533e-05)，可读性差。
+    本函数按量级自适应：大数千分位两位小数(63,870.00)、中数去末尾零(1,727.08)、
+    小数动态小数位保 ~4 位有效数字(0.00002533)，**任何量级都不出现 e±**。
+    NaN/inf/None/非数经 to_float 兜底为 0，热路径安全。
+    """
+    v = to_float(px)
+    a = abs(v)
+    if a == 0:
+        return "0"
+    if a >= 1000:
+        return f"{v:,.2f}"                                   # 大数：千分位 + 2 位小数
+    if a >= 1:
+        return f"{v:,.4f}".rstrip("0").rstrip(".")           # 中数：去末尾零
+    # <1：小数位 = 保 ~4 位有效数字（log10 定位首个有效位），去末尾零，绝不科学计数
+    decimals = min(18, max(4, 3 - int(math.floor(math.log10(a)))))
+    return f"{v:.{decimals}f}".rstrip("0").rstrip(".")
+
+
 def fmt_hms(ms: int = 0) -> str:
     """ms 时间戳 → 本地 HH:MM:SS（ms=0 用当前时间）。高频控制台行用，简洁。"""
     return time.strftime("%H:%M:%S", time.localtime(ms / 1000 if ms else time.time()))

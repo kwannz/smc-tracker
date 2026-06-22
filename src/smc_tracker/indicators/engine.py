@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from ..util import fmt_px as _fmt_px
 from .combo import combo_consensus, combo_signals
 from .fibonacci import fib_levels, in_golden_pocket, nearest_fib
 from .knn import KNNPredictor
@@ -72,8 +73,9 @@ def fmt_analysis(coin: str, a: dict[str, Any]) -> str:
     kz = f" ⏰{a['killzone']}" if a.get("killzone") else ""
     nf = a.get("near_fib")
     nf_s = f" 贴近{nf[0]}位" if nf else ""
-    return (f"📊 {coin} 价={a['price']:g} 偏向={a['bias_label']}({a['bias']:+.2f}){knn_s}\n"
+    return (f"📊 {coin} 价={_fmt_px(a['price'])} 偏向={a['bias_label']}({a['bias']:+.2f}){knn_s}\n"
             f"   RSI={ind.get('rsi14') or 0:.0f} ADX={ind.get('adx14') or 0:.0f} "
             f"MACD={'+' if (ind.get('macd_hist') or 0) > 0 else '-'} "
-            f"combo={a['combo_dir']} 支撑={a['support'] or '-'} 压力={a['resistance'] or '-'}"
+            f"combo={a['combo_dir']} 支撑={_fmt_px(a['support']) if a['support'] else '-'} "
+            f"压力={_fmt_px(a['resistance']) if a['resistance'] else '-'}"
             f"{' OTE' if a['in_ote'] else ''}{nf_s}{pats}{kz}")
