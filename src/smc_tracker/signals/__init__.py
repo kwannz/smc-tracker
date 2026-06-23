@@ -8,6 +8,9 @@ from .ta_signal import TASignal
 from .pump_radar import PumpRadar, PumpAlert
 from .flow_predictor import FlowPredictor, FlowPrediction, orderbook_imbalance
 from .efficacy import SignalEfficacy, KindEfficacy, wilson_interval
+from .risk import PositionSize, compute_position_size
+from .knn_validator import KNNVerdict, validate_direction
+from .trade_setup import TradeSetup, build_setups
 
 __all__ = ["Signal", "SignalEngine", "DivergenceDetector", "DivergenceSignal",
            "ConsensusSignal", "CoinPositioning", "WhaleConsensus", "positioning",
@@ -15,4 +18,7 @@ __all__ = ["Signal", "SignalEngine", "DivergenceDetector", "DivergenceSignal",
            "ConfluenceAggregator", "ConfluenceSignal", "TASignal",
            "PumpRadar", "PumpAlert",
            "FlowPredictor", "FlowPrediction", "orderbook_imbalance",
-           "SignalEfficacy", "KindEfficacy", "wilson_interval"]
+           "SignalEfficacy", "KindEfficacy", "wilson_interval",
+           "PositionSize", "compute_position_size",
+           "KNNVerdict", "validate_direction",
+           "TradeSetup", "build_setups"]

@@ -112,6 +112,48 @@ class OKXCfg:
 
 
 @dataclass(slots=True)
+class BollingerCfg:
+    """Bitget 永续多周期布林带压力/支撑分析配置。
+
+    enabled=True 时周期推送卡片；interval_sec 控制推送频率（默认 15 分钟一张）。
+    timeframes 默认覆盖 6 个主流周期（用户#：多周期 6tf；去 5m 噪音）；bars 为每周期 K 线根数（上限 1999）。
+    period/k 为布林带参数（业界标准 20/2.0）；top_n 限制最多监控的币种数。
+    """
+    enabled: bool = True
+    interval_sec: float = 900.0          # 推送周期（默认 15 分钟）
+    timeframes: list[str] = field(
+        default_factory=lambda: ["15m", "1H", "4H", "12H", "1D", "1W"]
+    )
+    bars: int = 1000                     # 每周期 K 线根数（用户#：固定 1000）；大周期受 Bitget ~90天/请求上限+
+                                         # max_pages 约束取全部可得历史；429 由 _get 退避重试兜底（实现层 clamp ≤1999）
+    period: int = 20                     # 布林带均线周期
+    k: float = 2.0                       # 标准差倍数
+    top_n: int = 12                      # 最多监控前 N 个币（按成交额排序）
+
+
+@dataclass(slots=True)
+class HarmonicCfg:
+    """Bitget 永续多周期谐波形态（Harmonic Patterns）分析配置。
+
+    enabled=True 时周期推送卡片；interval_sec 控制推送频率（默认 15 分钟）。
+    timeframes 覆盖 6 个主流周期（用户#：多周期 6tf，与布林带一致）；bars 每周期 K 线根数；
+    order 枢轴邻域大小；tol 比率容差（默认 5%）；top_n 最多监控币种数。
+    """
+    enabled: bool = True
+    interval_sec: float = 900.0
+    timeframes: list[str] = field(
+        default_factory=lambda: ["15m", "1H", "4H", "12H", "1D", "1W"]
+    )
+    bars: int = 1000                     # 用户#：固定 1000（谐波需 ~60-150 根；大周期取可得历史，429 退避兜底）
+    order: int = 3
+    tol: float = 0.05
+    top_n: int = 12
+    account_usd: float = 10_000.0        # 仓位计算用账户名义资金（USD）
+    risk_pct: float = 0.01               # 单笔风险比例（1%）
+    target_rr: float = 2.0               # 目标盈亏比
+
+
+@dataclass(slots=True)
 class Config:
     hyperliquid: HyperliquidCfg = field(default_factory=HyperliquidCfg)
     markets: list[str] = field(default_factory=lambda: ["BTC", "ETH"])
@@ -125,11 +167,21 @@ class Config:
     okx: OKXCfg = field(default_factory=OKXCfg)
     feishu: FeishuCfg = field(default_factory=FeishuCfg)
     digest: DigestCfg = field(default_factory=DigestCfg)
+    bollinger: BollingerCfg = field(default_factory=BollingerCfg)
+    harmonic: HarmonicCfg = field(default_factory=HarmonicCfg)
 
     @classmethod
     def load(cls, path: str | Path) -> "Config":
         """从 YAML 文件加载配置；缺失字段用 dataclass 默认值兜底。"""
         raw: dict[str, Any] = yaml.safe_load(Path(path).read_text(encoding="utf-8")) or {}
+        # BollingerCfg.timeframes 是 list，需从 raw 正确透传
+        bb_raw: dict[str, Any] = dict(raw.get("bollinger") or {})
+        if "timeframes" in bb_raw and not isinstance(bb_raw["timeframes"], list):
+            bb_raw["timeframes"] = list(bb_raw["timeframes"])
+        # HarmonicCfg.timeframes 同理
+        harm_raw: dict[str, Any] = dict(raw.get("harmonic") or {})
+        if "timeframes" in harm_raw and not isinstance(harm_raw["timeframes"], list):
+            harm_raw["timeframes"] = list(harm_raw["timeframes"])
         return cls(
             hyperliquid=HyperliquidCfg(**(raw.get("hyperliquid") or {})),
             markets=list(raw.get("markets") or ["BTC", "ETH"]),
@@ -143,6 +195,8 @@ class Config:
             okx=OKXCfg(**(raw.get("okx") or {})),
             feishu=FeishuCfg(**(raw.get("feishu") or {})),
             digest=DigestCfg(**(raw.get("digest") or {})),
+            bollinger=BollingerCfg(**bb_raw),
+            harmonic=HarmonicCfg(**harm_raw),
         )
 
 

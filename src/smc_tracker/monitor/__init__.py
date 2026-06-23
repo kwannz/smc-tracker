@@ -1,4 +1,4 @@
-"""监控模块：聪明钱地址、meme 成交、Bitget OI、地址画像/关联/动量、轮询、钱包持仓画像。"""
+"""监控模块：聪明钱地址、meme 成交、Bitget OI、地址画像/关联/动量、轮询、钱包持仓画像、布林带多周期。"""
 from .events import EventType, SmartMoneyEvent
 from .address_monitor import AddressMonitor
 from .meme_trade_monitor import MemeTradeMonitor
@@ -13,6 +13,8 @@ from .wallet_portfolio import WalletPortfolio, WalletSnapshot
 from .position_lifecycle import PositionLifecycle, reconstruct as reconstruct_lifecycle, fmt_hold
 from .trader_classify import classify_trader, fmt_classify
 from .orderbook_monitor import HLOrderbookMonitor, detect_walls
+from .bitget_bb_monitor import BitgetBBMonitor
+from .harmonic_monitor import HarmonicMonitor
 
 __all__ = [
     "EventType", "SmartMoneyEvent", "AddressMonitor",
@@ -24,4 +26,6 @@ __all__ = [
     "WalletPortfolio", "WalletSnapshot",
     "PositionLifecycle", "reconstruct_lifecycle", "fmt_hold",
     "classify_trader", "fmt_classify",
+    "BitgetBBMonitor",
+    "HarmonicMonitor",
 ]

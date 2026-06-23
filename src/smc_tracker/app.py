@@ -149,6 +149,8 @@ class TradingSystem:
         self.notifier = build_notifier(cfg)   # webhook + Telegram 多渠道推送
         # HL 事件分类汇总：零散事件按分类聚合，_periodic_hl_digest 周期推一张汇总卡片（降噪去刷屏）
         self.hl_digest = HLDigest(cfg.digest.max_per_cat)
+        # 推送串行队列：所有 _push 入此队，_periodic_push_drain 单 worker 按最小间隔逐条发（防限流丢卡）
+        self._push_queue: asyncio.Queue[str] = asyncio.Queue()
         self.analyst = build_analyst(cfg)     # LLM(Codex GPT-5.4) 前瞻研判，未配置则 None
         self.latency = LatencyTracker()       # 热路径「接收→信号」延迟埋点(实证低延迟)
         self.coin_to_symbol: dict[str, str] = {}              # canonical -> bitget symbol
@@ -160,6 +162,8 @@ class TradingSystem:
         # ---- System 2: Bitget ----
         self.bg_ws = BitgetWSClient()
         self.oi_monitor: BitgetOIMonitor | None = None     # 启动时建（需符号映射）
+        self.bb_monitor = None        # BitgetBBMonitor，_seed 后按配置构建（需 tickers 成交额）
+        self.harmonic_monitor = None  # HarmonicMonitor，_seed 后按配置构建
         self.onchain = OnchainMemeMonitor(store, EVM_RPC,
                                           min_amount_usd=cfg.detection.large_fill_notional_usd)
         self.sol_monitor = SolanaSupplyMonitor(store)   # SOL meme 供应量(mint/burn)监控
@@ -441,11 +445,26 @@ class TradingSystem:
             log.debug("_record_pred 失败 %s %s: %s", kind, coin, exc)
 
     def _push(self, text: str) -> None:
-        """非阻塞推送 webhook（已配置才发）。持有 task 引用防其在完成前被 GC 取消。"""
+        """非阻塞**入队**推送：所有推送经单一 worker 按最小间隔逐条发，
+        避免飞书(1.5s)/TG(1.2s) 限流静默丢卡（多周期任务并发推送易撞车）。队列无界，put_nowait 不阻塞热路径。"""
         if self.notifier.enabled:
-            t = asyncio.create_task(self.notifier.send(text, int(time.time() * 1000)))
-            self._bg_tasks.add(t)
-            t.add_done_callback(self._bg_tasks.discard)
+            self._push_queue.put_nowait(text)
+
+    async def _periodic_push_drain(self, min_interval_sec: float = 1.6) -> None:
+        """推送排队串行发送：单 worker 逐条出队、按最小间隔(>飞书1.5s)发送，杜绝限流丢卡。
+
+        发送失败只 log.warning 不中断（韧性）；min_interval 略大于飞书 1.5s/TG 1.2s 限流窗口。
+        """
+        while not self._stopping:
+            text = await self._push_queue.get()
+            try:
+                if self.notifier.enabled:
+                    await self.notifier.send(text, int(time.time() * 1000))
+            except Exception as exc:  # noqa: BLE001 — 单条发送失败不拖垮队列
+                log.warning("推送发送失败: %s", exc)
+            finally:
+                self._push_queue.task_done()
+            await asyncio.sleep(min_interval_sec)
 
     def _emit(self, category: str, text: str, urgent: bool = False) -> None:
         """HL 事件出口：digest 开启则按分类入汇总缓冲（周期合并成一张分类卡片，降噪去刷屏）；
@@ -587,7 +606,7 @@ class TradingSystem:
             log.info("SMC 播种完成 %d 个币（共 %d 根 %s K线）",
                      len(seeded), sum(seeded), self.cfg.smc.candle_interval)
 
-        # 3) Bitget 符号映射 + meme 合约地址（若缺）
+        # 3) Bitget 符号映射 + meme 合约地址（若缺）+ 布林带监控器
         canon = {normalize(c) for c in self.meme_markets}
         async with BitgetREST() as bg:
             base_map = await bg.perp_base_coins()
@@ -607,6 +626,60 @@ class TradingSystem:
                     for chain, addr in all_chains.get(n.upper(), []):
                         self.store.upsert_contract(n, chain, addr, now)
                 log.info("已补 meme 合约地址 %d 条", self.store.count("meme_contracts"))
+
+            # ---- 按 tickers 24h 成交额排序选币（BB + 谐波**共用**，修复谐波曾误用 OI 插入序）----
+            vol_c2s: dict[str, str] = {}   # base -> symbol，按成交额降序（全市场）
+            if self.cfg.bollinger.enabled or self.cfg.harmonic.enabled:
+                try:
+                    tickers_map = await bg.tickers()
+                    _cands: list[tuple[str, str, float]] = []
+                    for sym, tk in tickers_map.items():
+                        if not sym.endswith("USDT"):
+                            continue
+                        # quoteVolume 已实证为 Bitget V2 mix tickers 真实字段；usdtVolume 兜底
+                        vol = _f(tk.get("quoteVolume") or tk.get("usdtVolume") or 0)
+                        base = base_map.get(sym, sym.replace("USDT", ""))
+                        _cands.append((sym, base, vol))
+                    _cands.sort(key=lambda x: x[2], reverse=True)
+                    # P0 守卫：成交额全 0 → 字段可能变更，选币退化为插入序，告警不静默失真
+                    if _cands and all(c[2] <= 0 for c in _cands):
+                        log.warning("选币：tickers 成交额全为 0（quoteVolume 字段可能已变更），退化插入序")
+                    vol_c2s = {base: sym for sym, base, _ in _cands}
+                except Exception as exc:  # noqa: BLE001
+                    log.warning("选币 tickers 拉取失败（不影响主流程）: %s", exc)
+
+            # ---- 布林带监控器 ----
+            if self.cfg.bollinger.enabled and vol_c2s:
+                from .monitor.bitget_bb_monitor import BitgetBBMonitor  # noqa: PLC0415
+                bb_n = self.cfg.bollinger.top_n
+                bb_c2s = dict(list(vol_c2s.items())[:bb_n])
+                self.bb_monitor = BitgetBBMonitor(
+                    coin_to_symbol=bb_c2s,
+                    timeframes=self.cfg.bollinger.timeframes,
+                    bars=self.cfg.bollinger.bars,
+                    period=self.cfg.bollinger.period,
+                    k=self.cfg.bollinger.k,
+                    top_n=bb_n,
+                )
+                log.info("BB 监控器已建，top_%d 币: %s", bb_n, list(bb_c2s.keys())[:6])
+
+            # ---- 谐波形态监控器（同一成交额序选币，与 BB 口径一致）----
+            if self.cfg.harmonic.enabled and vol_c2s:
+                from .monitor.harmonic_monitor import HarmonicMonitor  # noqa: PLC0415
+                harm_n = self.cfg.harmonic.top_n
+                harm_c2s = dict(list(vol_c2s.items())[:harm_n])
+                self.harmonic_monitor = HarmonicMonitor(
+                    coin_to_symbol=harm_c2s,
+                    timeframes=self.cfg.harmonic.timeframes,
+                    bars=self.cfg.harmonic.bars,
+                    order=self.cfg.harmonic.order,
+                    tol=self.cfg.harmonic.tol,
+                    top_n=harm_n,
+                    account_usd=self.cfg.harmonic.account_usd,
+                    risk_pct=self.cfg.harmonic.risk_pct,
+                    target_rr=self.cfg.harmonic.target_rr,
+                )
+                log.info("谐波监控器已建，top_%d 币: %s", harm_n, list(harm_c2s.keys())[:6])
 
     # ---- 周期任务 ----
     async def _periodic_flush(self, every: float = 5.0) -> None:
@@ -1093,6 +1166,48 @@ class TradingSystem:
             print(board_text)
             self._push(board_text)
 
+    async def _periodic_bb_board(self) -> None:
+        """周期推送 Bitget 永续多周期布林带压力/支撑卡片（默认 15 分钟）。
+
+        未配置 cfg.bollinger.enabled=False 或 bb_monitor 未初始化时直接返回，
+        不阻塞其他周期任务。
+        """
+        if not self.cfg.bollinger.enabled or self.bb_monitor is None:
+            return
+        while not self._stopping:
+            await asyncio.sleep(self.cfg.bollinger.interval_sec)
+            try:
+                now = int(time.time() * 1000)
+                rows = await self.bb_monitor.refresh(now)
+                card = self.bb_monitor.render(rows, now)
+                if card:
+                    print(card)
+                    self._push(card)
+            except Exception as exc:  # noqa: BLE001
+                log.warning("布林带周期推送失败: %s", exc)
+
+    async def _periodic_harmonic_board(self) -> None:
+        """周期推送 Bitget 永续多周期谐波形态前瞻卡片（默认 15 分钟）。
+
+        未配置 cfg.harmonic.enabled=False 或 harmonic_monitor 未初始化时直接返回，
+        不阻塞其他周期任务。
+        """
+        if not self.cfg.harmonic.enabled or self.harmonic_monitor is None:
+            return
+        # 相位错开：与 BB 板（同为 interval_sec 周期）偏移半周期，避免两板同刻爆发回填请求撞 429
+        await asyncio.sleep(self.cfg.harmonic.interval_sec / 2)
+        while not self._stopping:
+            await asyncio.sleep(self.cfg.harmonic.interval_sec)
+            try:
+                now = int(time.time() * 1000)
+                rows = await self.harmonic_monitor.refresh(now)
+                card = self.harmonic_monitor.render(rows, now)
+                if card:
+                    print(card)
+                    self._push(card)
+            except Exception as exc:  # noqa: BLE001
+                log.warning("谐波形态周期推送失败: %s", exc)
+
     async def _periodic_solana(self, every: float = 120.0) -> None:
         """SOL meme 供应量监控（mint/burn）。较长间隔，避开公开 RPC 限流。"""
         while not self._stopping:
@@ -1194,6 +1309,9 @@ class TradingSystem:
             self._periodic_exchange_flow(),
             self._periodic_wallet_portfolio(),
             self._periodic_config_reload(),
+            self._periodic_bb_board(),
+            self._periodic_harmonic_board(),
+            self._periodic_push_drain(),
         )
 
     async def stop(self) -> None:
