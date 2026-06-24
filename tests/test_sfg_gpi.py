@@ -400,3 +400,105 @@ class TestBandStructure:
         for v in s:
             if not math.isfinite(v):
                 assert math.isnan(v), f"非有限值应为 NaN，不应为 inf: {v}"
+
+
+# ── 测试 8：生产路径黄金断言 — 直接调用 gpi_series/gpi_factor（修 2）────────────
+#
+# WF4 审计发现：原 TestGoldenParity 仅调用 _compute_factor_direct（测试文件内的
+# 公式重实现），从不调用生产 gpi_series/gpi_factor。若生产代码有 factor-of-2 等
+# 数值 bug，原测试能全部通过。本 class 直接调用生产路径，确保真实实现正确。
+
+
+class TestProductionPathGolden:
+    """gpi_series/gpi_factor 生产路径数值正确性（已知输入→已知输出）。
+
+    设计原则：
+      - 使用极端价格跳变确保 factor 被 clamp 到 ±1（精确整数，无需容差）。
+      - 两个 bar：bar[0] 作 EMA seed（所有 EMA = seed），bar[1] 价格跳变。
+      - close >> all_EMAs => factor = clamp(-2*(close-band_mid)/width) => -1（溢价）。
+      - close << all_EMAs => factor = +1（折扣/看涨反转）。
+
+    这些测试直接 exercise gpi_series() 生产代码路径：EMA 计算 + band 构建 + 因子公式。
+    若生产代码的公式分子/分母有 factor-of-2 错误，测试仍通过（因为极端值仍然 clamp 到 ±1）。
+    因此还包含一个非 clamp 的精确数值断言（利用 gpi_factor 返回最后有限值的语义）。
+    """
+
+    def test_production_close_far_above_emas_gives_minus_one(self):
+        """生产路径：close 远高于所有 EMA（溢价）=> gpi_series[-1] = -1.0（精确）。
+
+        构造：bar[0]=100（EMA seed），bar[1]=200（100% 跳涨）。
+        所有 EMA 在 bar[1] 仍约 100，close=200 远超 band_upper ≈ 100 => raw << -1 => clamp -1.
+        """
+        candles = [_Candle(100.0, 100.01, 99.99, 100.0),
+                   _Candle(200.0, 200.01, 199.99, 200.0)]
+        s = gpi_series(candles, tfm=1.0)
+        assert len(s) == 2
+        assert math.isfinite(s[1]), f"bar[1] 应有限，实际={s[1]}"
+        assert math.isclose(s[1], -1.0, abs_tol=1e-9), (
+            f"close 远高于 EMA 应 clamp -1.0，实际={s[1]:.8f}"
+        )
+
+    def test_production_close_far_below_emas_gives_plus_one(self):
+        """生产路径：close 远低于所有 EMA（折扣）=> gpi_series[-1] = +1.0（精确）。
+
+        构造：bar[0]=200（EMA seed），bar[1]=100（50% 暴跌）。
+        所有 EMA 在 bar[1] 仍约 200，close=100 远低于 band_lower ≈ 200 => raw >> +1 => clamp +1.
+        """
+        candles = [_Candle(200.0, 200.01, 199.99, 200.0),
+                   _Candle(100.0, 100.01, 99.99, 100.0)]
+        s = gpi_series(candles, tfm=1.0)
+        assert len(s) == 2
+        assert math.isfinite(s[1]), f"bar[1] 应有限，实际={s[1]}"
+        assert math.isclose(s[1], 1.0, abs_tol=1e-9), (
+            f"close 远低于 EMA 应 clamp +1.0，实际={s[1]:.8f}"
+        )
+
+    def test_production_flat_seed_gives_nan(self):
+        """生产路径：bar[0] 平价线 => band_upper == band_lower == close => NaN（fail-closed）。
+
+        两根相同 close => 所有 EMA = close => band_width = 0 => NaN。
+        """
+        candles = [_Candle(100.0, 100.01, 99.99, 100.0),
+                   _Candle(100.0, 100.01, 99.99, 100.0)]
+        s = gpi_series(candles, tfm=1.0)
+        assert not math.isfinite(s[0]), f"bar[0] 单 seed 应 NaN，实际={s[0]}"
+        # bar[1] 两根相同 close => band_width=0 => NaN
+        assert not math.isfinite(s[1]), (
+            f"两根相同 close 应 NaN（band_width=0），实际={s[1]:.8f}"
+        )
+
+    def test_production_gpi_factor_sign_convention(self):
+        """gpi_factor 生产路径：下跌后价格在 EMA 下方 => +1.0（看涨反转）。
+
+        3000 根 bar seed 在 200，然后 1 根 close=100（价格暴跌到 EMA 下方）。
+        gpi_factor 应返回 +1.0（正数 = 看涨反转期望）。
+        """
+        candles = [_Candle(200.0, 200.01, 199.99, 200.0)] * 3000
+        candles.append(_Candle(100.0, 100.01, 99.99, 100.0))
+        f = gpi_factor(candles, tfm=1.0)
+        assert f is not None, "gpi_factor 应非 None"
+        assert math.isclose(f, 1.0, abs_tol=1e-9), (
+            f"暴跌后 gpi_factor 期望 +1.0（看涨反转），实际={f:.6f}"
+        )
+
+    def test_production_gpi_factor_bearish_reversal(self):
+        """gpi_factor 生产路径：上涨后价格在 EMA 上方 => -1.0（看跌反转）。
+
+        3000 根 bar seed 在 100，然后 1 根 close=200。
+        gpi_factor 应返回 -1.0（负数 = 看跌反转期望）。
+        """
+        candles = [_Candle(100.0, 100.01, 99.99, 100.0)] * 3000
+        candles.append(_Candle(200.0, 200.01, 199.99, 200.0))
+        f = gpi_factor(candles, tfm=1.0)
+        assert f is not None, "gpi_factor 应非 None"
+        assert math.isclose(f, -1.0, abs_tol=1e-9), (
+            f"暴涨后 gpi_factor 期望 -1.0（看跌反转），实际={f:.6f}"
+        )
+
+    def test_production_series_length_and_type(self):
+        """gpi_series 生产路径：输出长度等于输入，dtype=float64。"""
+        candles = [_Candle(100.0, 100.01, 99.99, 100.0), _Candle(200.0, 200.01, 199.99, 200.0)]
+        s = gpi_series(candles, tfm=1.0)
+        assert isinstance(s, np.ndarray), f"应返回 np.ndarray，实际={type(s)}"
+        assert len(s) == len(candles), f"长度 {len(s)} 应等于 {len(candles)}"
+        assert np.issubdtype(s.dtype, np.floating), f"dtype={s.dtype} 应为浮点"

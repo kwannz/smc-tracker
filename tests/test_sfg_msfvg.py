@@ -665,3 +665,259 @@ class TestParams:
         assert params["swing_size"].default == 20
         assert params["fvg_history"].default == 7
         assert params["shrink_mitigated"].default is True
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 测试 10: 生产路径黄金断言 — 直接调用 msfvg_series/msfvg_factor（修 2）
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# 解决 WF4 审计发现的问题：原 TestGoldenParity 仅调用 _factor_scalar 内部纯函数，
+# 不 exercise 生产路径（msfvg_series/msfvg_factor）。本 class 构造已知合成序列，
+# 直接断言 msfvg_series/msfvg_factor 的真实输出值，确保 factor-of-2 等 bug 会失败。
+
+class TestProductionPathGolden:
+    """msfvg_series/msfvg_factor 生产路径数值正确性（已知输入→已知输出）。
+
+    公式（bull-only, close=bull_top）:
+      zone: top=103.0, bottom=100.0, half=3.0
+      factor = (bull_top - close + half) / (2*half) = (103.0-103.0+3.0)/(6.0) = 0.5
+
+    公式（bear-only, close=bear_bot）:
+      zone: top=99.9, bottom=97.0, half=2.9
+      factor = -(close - bear_bot + half)/(2*half) = -(97.0-97.0+2.9)/(5.8) = -0.5
+    """
+
+    def _make_bull_fvg_known(self) -> list:
+        """构造 bull FVG 序列，zone 边界确定已知：top=103.0, bottom=100.0, half=3.0。
+
+        序列结构（共 45 根 bar，swing_size=20 默认，min_bars=41）：
+          bars 0..40: 平稳 base=100（h=100.1, l=99.9）
+          bar 41: h=100.0（将成为 h[i-3] at i=44，h[41]=100.0）
+          bar 42: 中间 bar（不参与 FVG 条件）
+          bar 43: l=103.0（将成为 l[i-1] at i=44，l[43]=103.0 > h[41]=100.0 => bull FVG）
+          bar 44: current close=103.0, l=103.5（l > top=103.0 不触发 shrink/fill）
+            zone: top=103.0, bottom=100.0, half=3.0
+            factor = (103.0-103.0+3.0)/(6.0) = 3.0/6.0 = 0.5
+        """
+        base = 100.0
+        candles = []
+        # bars 0..40: 平稳
+        for _ in range(41):
+            candles.append(_Candle(base, base + 0.1, base - 0.1, base))
+        # bar 41: h=100.0（作为 h[i-3]）
+        candles.append(_Candle(base, base, base - 0.1, base))
+        # bar 42: 中间
+        candles.append(_Candle(102.0, 104.0, 102.0, 103.0))
+        # bar 43: l=103.0（作为 l[i-1]），l[43]=103.0 > h[41]=100.0 => bull FVG
+        candles.append(_Candle(103.5, 105.0, 103.0, 104.0))
+        # bar 44: current; close=103.0, l=103.5 > top=103.0 => 不触发 shrink/fill
+        candles.append(_Candle(103.0, 103.5, 103.5, 103.0))
+        return candles
+
+    def _make_bear_fvg_known(self) -> list:
+        """构造 bear FVG 序列，zone 边界确定已知：top=99.9, bottom=97.0, half=2.9。
+
+        序列结构（共 45 根 bar）：
+          bars 0..40: 平稳 base=100（l=99.9）
+          bar 41: l=99.9（将成为 l[i-3] at i=44，l[41]=99.9）
+          bar 42: 中间 bar
+          bar 43: h=97.0（将成为 h[i-1] at i=44，l[41]=99.9 > h[43]=97.0 => bear FVG）
+          bar 44: current close=97.0, h=97.0（h[44]=97.0 == bottom=97.0，不触发 partial mit）
+            zone: top=99.9, bottom=97.0, half=2.9
+            factor = -(97.0-97.0+2.9)/(5.8) = -2.9/5.8 = -0.5
+        """
+        base = 100.0
+        candles = []
+        for _ in range(41):
+            candles.append(_Candle(base, base + 0.1, base - 0.1, base))
+        # bar 41: l=99.9（作为 l[i-3]）
+        candles.append(_Candle(base, base + 0.1, base - 0.1, base))
+        # bar 42: 中间
+        candles.append(_Candle(96.0, 97.5, 94.0, 96.0))
+        # bar 43: h=97.0（作为 h[i-1]），l[41]=99.9 > h[43]=97.0 => bear FVG
+        candles.append(_Candle(96.5, 97.0, 95.0, 96.5))
+        # bar 44: current close=97.0, h=97.0（h == bottom，条件 h > bottom=97.0 不满足 => 不 shrink）
+        candles.append(_Candle(97.0, 97.0, 96.5, 97.0))
+        return candles
+
+    def test_bull_fvg_known_series_exact(self):
+        """msfvg_series 生产路径：bull FVG only, close=bull_top => factor=0.5（精确）。
+
+        zone top=103.0, bot=100.0, half=3.0; close=103.0:
+          (103.0 - 103.0 + 3.0) / (2*3.0) = 3.0/6.0 = 0.5
+        """
+        candles = self._make_bull_fvg_known()
+        s = msfvg_series(candles)
+        last = s[-1]
+        assert math.isfinite(last), f"bull FVG known: 最后一根应有限，实际={last}"
+        assert math.isclose(last, 0.5, rel_tol=1e-9), (
+            f"bull FVG known: 期望 0.5，实际={last:.8f}"
+        )
+
+    def test_bull_fvg_known_factor_exact(self):
+        """msfvg_factor 生产路径：bull FVG only, close=bull_top => 0.5。"""
+        candles = self._make_bull_fvg_known()
+        f = msfvg_factor(candles)
+        assert f is not None, "bull FVG known: factor 应非 None"
+        assert math.isclose(f, 0.5, rel_tol=1e-9), (
+            f"bull FVG known: msfvg_factor 期望 0.5，实际={f:.8f}"
+        )
+
+    def test_bear_fvg_known_series_exact(self):
+        """msfvg_series 生产路径：bear FVG only, close=bear_bot => factor=-0.5（精确）。
+
+        zone top=99.9, bot=97.0, half=2.9; close=97.0:
+          -(97.0 - 97.0 + 2.9) / (2*2.9) = -2.9/5.8 = -0.5
+        """
+        candles = self._make_bear_fvg_known()
+        s = msfvg_series(candles)
+        last = s[-1]
+        assert math.isfinite(last), f"bear FVG known: 最后一根应有限，实际={last}"
+        assert math.isclose(last, -0.5, rel_tol=1e-9), (
+            f"bear FVG known: 期望 -0.5，实际={last:.8f}"
+        )
+
+    def test_bear_fvg_known_factor_exact(self):
+        """msfvg_factor 生产路径：bear FVG only, close=bear_bot => -0.5。"""
+        candles = self._make_bear_fvg_known()
+        f = msfvg_factor(candles)
+        assert f is not None, "bear FVG known: factor 应非 None"
+        assert math.isclose(f, -0.5, rel_tol=1e-9), (
+            f"bear FVG known: msfvg_factor 期望 -0.5，实际={f:.8f}"
+        )
+
+    def test_production_path_differs_from_internal_only(self):
+        """确认生产路径与单独调用 _factor_scalar 的结合覆盖正确（缺陷检测确认）。
+
+        若 msfvg_series 内部有 factor-of-2 错误（如除 half 而非 2*half），
+        则 msfvg_series 输出 1.0 但 _factor_scalar 输出 0.5。
+        本测试确保此类 bug 被捕获：断言 msfvg_series()[-1] == 0.5（非 1.0）。
+        """
+        candles = self._make_bull_fvg_known()
+        # 如果有 factor-of-2 bug，这里会失败
+        s = msfvg_series(candles)
+        assert not math.isclose(s[-1], 1.0, rel_tol=1e-6), (
+            "factor-of-2 检测：结果不应为 1.0（若为 1.0 说明除法分母有 bug）"
+        )
+        assert math.isclose(s[-1], 0.5, rel_tol=1e-9), (
+            f"生产路径 factor-of-2 缺陷检测：期望 0.5，实际={s[-1]:.8f}"
+        )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 测试 11: warmup 修复验证 — 早期 FVG zone 在整批守卫通过后正确发射（修 1）
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# WF4 审计发现：原代码 per-row `if i < warmup: continue` 导致早期 bar（i < 2*swing_size）
+# 即使有存活 FVG zone 也不发射。Rust 行为（market_structure_fvg.rs:207-209）只有整批守卫
+# (n < 2*swing_size+1 → return [])，无 per-row mask。
+# 修后：早期 bar 按 active_zones 是否非空决定 finite/NaN，与 Rust 对齐。
+
+class TestWarmupFix:
+    """验证 per-row warmup mask 已移除，早期 FVG zone 可在 i < 2*swing_size 时发射。
+
+    关键：这些早期值保持 prefix-invariance（no-repaint），因为 zone 状态机是严格前向的。
+    """
+
+    def _make_early_fvg(self, swing_size: int = 5) -> list:
+        """构造 early FVG 测试序列（swing_size=5, min_bars=11）。
+
+        结构（共 11 根 bar）：
+          bars 0,1,2: 平稳（h=100.1）
+          bar 3: h=100.0（将成为 h[i-3] at i=6）
+          bar 4: 中间 bar（l=102.0）
+          bar 5: l=103.0（l[5]=103.0 > h[3]=100.0 => bull FVG at i=6）
+                 另外：h[2]=100.1 < l[4]=102.0 => bull FVG at i=5 too
+          bar 6: current bar（第一个 FVG 检测，zone 从这里开始存活）
+          bars 7,8,9,10: 延续平稳 bar（保持 zone 活跃）
+
+        n=11 >= min_bars=11 => 整批守卫通过 => 早期 bar（i=5,6 < warmup=10）应发射有限值。
+        """
+        candles = []
+        for _ in range(3):
+            candles.append(_Candle(100.0, 100.1, 99.9, 100.0))
+        # bar 3: h=100.0
+        candles.append(_Candle(99.5, 100.0, 99.0, 99.5))
+        # bar 4: middle, l=102.0
+        candles.append(_Candle(102.0, 104.0, 102.0, 103.0))
+        # bar 5: l=103.0 (l[5] > h[3]=100.0 => FVG at i=6)
+        # Also: h[2]=100.1 < l[4]=102.0 => FVG at i=5
+        candles.append(_Candle(103.5, 105.0, 103.0, 104.0))
+        # bar 6: close=103.5, l=103.5 > top=103.0 => no fill/shrink
+        candles.append(_Candle(103.5, 104.0, 103.5, 103.5))
+        # bars 7..10: keep zone alive
+        for _ in range(4):
+            candles.append(_Candle(103.5, 104.0, 103.5, 103.5))
+        return candles
+
+    def test_early_fvg_emits_before_warmup_index(self):
+        """修后：swing_size=5 时，bar 5,6（< warmup=10）若有 active zone，应发射有限值。
+
+        bar 5 FVG（h[2]=100.1 < l[4]=102.0）在 i=5 创建 zone，close=104.0 在 zone 上方。
+        bar 6 FVG（h[3]=100.0 < l[5]=103.0）在 i=6 创建 zone，close=103.5。
+        两者均 < warmup=10，但修后不被 per-row mask 屏蔽。
+        """
+        candles = self._make_early_fvg(swing_size=5)
+        assert len(candles) == 11  # 恰好达到 min_bars=11
+        s = msfvg_series(candles, swing_size=5)
+        assert len(s) == 11
+        # bar 5 和 bar 6（i < warmup=10）应有有限值（因为有 active zone）
+        assert math.isfinite(s[5]), (
+            f"修后 bar 5（i=5 < warmup=10）应发射有限值，实际={s[5]}"
+        )
+        assert math.isfinite(s[6]), (
+            f"修后 bar 6（i=6 < warmup=10）应发射有限值，实际={s[6]}"
+        )
+        # 早期值应在 [-1, 1]
+        assert -1.0 <= s[5] <= 1.0, f"bar 5 factor={s[5]:.4f} 超出范围"
+        assert -1.0 <= s[6] <= 1.0, f"bar 6 factor={s[6]:.4f} 超出范围"
+
+    def test_early_fvg_bar6_value_exact(self):
+        """bar 6 的因子值：最近 zone 为 (top=103.0, bot=100.0)，close=103.5。
+
+        nearest zone: top=103.0, bot=100.0, half=3.0
+        factor = (103.0 - 103.5 + 3.0) / (2*3.0) = 2.5/6.0 ≈ 0.4167
+        （两个 zone 都活跃时取最近那个；与 early-emission 无关，验证数值正确性）
+        """
+        candles = self._make_early_fvg(swing_size=5)
+        s = msfvg_series(candles, swing_size=5)
+        expected = 2.5 / 6.0  # (103.0 - 103.5 + 3.0) / 6.0
+        assert math.isfinite(s[6]), f"bar 6 应有限，实际={s[6]}"
+        assert math.isclose(s[6], expected, rel_tol=1e-9), (
+            f"bar 6 期望={expected:.6f}，实际={s[6]:.6f}"
+        )
+
+    def test_batch_guard_still_blocks_short_series(self):
+        """整批守卫（n < min_bars）在修后仍有效：n=10 < min_bars=11 => 全 NaN。"""
+        candles = self._make_early_fvg(swing_size=5)[:-1]  # 去掉最后一根 => n=10 < 11
+        assert len(candles) == 10
+        s = msfvg_series(candles, swing_size=5)
+        assert np.all(np.isnan(s)), (
+            f"n=10 < min_bars=11 应全 NaN，有限值索引={np.where(np.isfinite(s))[0]}"
+        )
+
+    def test_early_emission_no_repaint(self):
+        """早期发射值（i < warmup=10）追加更极端 bar 后不变（no-repaint 护栏）。
+
+        关键：zone 状态机严格前向，append 新 bar 可以 fill/shrink zone（影响新 bar 的输出），
+        但不回写已发射的历史值。
+        """
+        candles = self._make_early_fvg(swing_size=5)
+        s_base = msfvg_series(candles, swing_size=5)
+
+        # 追加 5 根极端 bar（low << zone bottom，确保 zone 被填满）
+        extreme_bars = [_Candle(50.0, 200.0, 10.0, 150.0) for _ in range(5)]
+        candles_ext = candles + extreme_bars
+        s_ext = msfvg_series(candles_ext, swing_size=5)
+
+        # 前 len(candles) 根的值必须完全一致（含早期有限值）
+        for i in range(len(candles)):
+            b, e = s_base[i], s_ext[i]
+            if math.isnan(b):
+                assert math.isnan(e), (
+                    f"no-repaint 违反：位置 {i} 基础=NaN，追加极端 bar 后变为 {e:.4f}"
+                )
+            else:
+                assert math.isclose(b, e, rel_tol=1e-9, abs_tol=1e-12), (
+                    f"no-repaint 违反：位置 {i} 早期值 {b:.6f} -> {e:.6f}（应不变）"
+                )

@@ -45,10 +45,10 @@
 > 4. **形态完成/反转成功率**:历史相似形态统计(KNN-SFG,C1 已做)—— **诚实:项目自承 ≈随机(EMH),
 >    不预设 alpha,作展示 + review 闭环实测**,不夸大(PLAN.md「高 lift≠赚钱」纪律)。
 > 落地优先级:C2 全币种 forward_confirm → B3 forming 逼近 → C3 review 闭环度量真实命中率。
-- [~] C1 SFG-KNN 收口:**10 因子审计闭环完成(loop#5)** —— 平价 10/10 正确、no-lookahead 10/10 安全
-  (lrsd/atr2/gpi/pivot/ai_st/dmha/pdbb/vap/ami ✅ + msfvg 公式对但 warmup gate 分歧);fail-closed + numpy
-  warning 已修(loop 前)。**剩余待修**:① msfvg `if i<warmup:continue` per-row mask 去除(对齐 Rust whole-batch);
-  ② gpi/msfvg golden 测试改为驱动生产 `*_series`(现仅测公式副本);③(可选)lane A/B1/B23/C 代码审(测试已全绿)。
+- [x] C1 **SFG-KNN 审计完全闭合(loop#11,Sonnet 收口 + Opus 验证,全量 1874 passed)**:10 因子平价 10/10
+  + no-lookahead 10/10;fail-closed + numpy warning 已修;**2 待修已修**:① msfvg per-row warmup mask 移除 →
+  whole-batch guard(min_bars=2*swing+1,对齐 Rust,早期有 zone 就发射,no-repaint 保持);② gpi/msfvg 新增
+  TestProductionPathGolden 直接驱动 `*_series`(原 golden 只测公式副本)。lane A 地基(loop#11)+ B3 协同(loop#8)已审。
 - [ ] C2 forward_confirm 接全币种(OI 速度/funding 极值/OFI 已实现,接谐波全币种宇宙)。
 - [ ] C3 review 闭环按 asset_class/horizon 出谐波前瞻命中率(诚实度量,不夸大)。
 
@@ -63,8 +63,12 @@
   现有 aiohttp dashboard.py 内联基座可用。提取设计语言(IBM Plex 字体、浅色金融终端配色 `--bg:#eef3fa
   --blue:#2563eb --long:#16a34a --short:#e23744`、卡片、三栏)→ 原生重写。(如用户坚持 React 版可改。)
 - [ ] D2 合并两终端为统一前端(系统 tab:HL / 谐波 / 量析),原生 HTML/CSS/JS,接 dashboard 真实 API。
-- [ ] D3 **谐波页优先**用新设计重写(浅色金融终端风 + IBM Plex + 三栏:harmList 侧栏 / 大蜡烛图含 XABCD-PRZ-FVG /
-  右栏 Setup+S-R+KNN),接 `build_coin_detail` + 实时刷新(配合 B1)。**与 A2/B1 协同后做(避免 dashboard 竞态)**。
+- [x] D3 **完成(loop#7-8,Sonnet 执行 + Opus 验证/修复,commit 020fe77)**:dashboard.py
+  `_HARMONIC_DETAIL_TEMPLATE` 原生重写 —— 浅色金融终端三栏(262/主/372)+ 16 设计 token + IBM Plex
+  fallback(无 CDN)+ KPI strip + LIVE 脉冲 + 全币种列表(搜索/过滤/排序/分页 50)+ SVG 配色升级;
+  数据接入不变;**全量 1859 passed**。**Opus 诚实修复**:KNN 卡原用 Math.random 伪造百分比/dots →
+  改为只展真实 knn 标记(零伪造)。排版自查(curl 结构级:三栏/KPI/卡片/字体/列表完整,{{ 残留=0)。
+  ⚠️ 视觉截图:浏览器扩展无法渲染 localhost,建议用户本地 http://127.0.0.1:8787/harmonic2 确认。
 
 ### H. HL 系统(聪明钱地址追踪)—— 用户「完善完整开发 hl 系统」(与谐波并列)
 - [x] H1 **评分/协同确定性强化已实现**(WF B2/B3,commit 2e4575d):`smart_money_score` 魔数外置 config +
@@ -80,8 +84,20 @@
 - [ ] H4 系统 tab 统一:设计稿 header 的 [HL 系统 | 谐波系统] 切换 → 统一 SPA(D2 合并,原生)。
 
 ### E. 固化与门禁
-- [ ] E1 固化已完成全绿工作(SFG-KNN + fail-closed,本地 git 提交,非部署)。
-- [ ] E2 部署门禁:本地全绿 + 全接入 + 网页排版无问题 → **用户批准** → 部署服务器。
+- [x] E1 **固化全绿工作**(4 commit 在 feat/sfg-knn-harmonic-loop:2e4575d/98456c1/d4cbfca/020fe77,全程 1859 全绿)。
+- [ ] E2 **部署门禁检查清单**(用户条件:本地无 bug + 全接入 + 排版 OK 再部署 → 须批准):
+  1. ☐ 全量 `pytest -q` 全绿(当前 1859 passed;C1 收口后复跑)。
+  2. ☐ 零孤儿:新模块全接入运行时(`harmonic_candle_ws`/`sfg/*`/`supervisor`/`microprice`/`cooccur_stats`
+     已接;grep 自查 `realtime_ws`/`universe_mode` 等开关可达)。
+  3. ☐ 网页排版无问题:**用户本地浏览器**确认(`-m smc_tracker dashboard` → :8787/harmonic2,
+     三栏对齐/KPI/蜡烛图配色/全币种列表/窄屏堆叠;Claude 浏览器扩展无法渲染 localhost,须人工)。
+  4. ☐ `py_compile` 全通过。
+  5. ☐ 无伪造数据(Math.random 等已清;诚实标注 ≈随机/缺数据)。
+  6. ☐ 审计待办闭合:**lane A 地基已核验通过(loop#11)**(busy_timeout=5000+cache/temp_store、supervise
+     包裹每 periodic 任务+return_exceptions、推送队列 maxsize=2000+QueueFull、harmonic_setups 双索引);
+     **B3 协同已审(loop#8)**;C1 收口中;B2 评分配置化待审(测试全绿,可选)。
+  7. ☐ 全永续实时压测:`universe_mode=all_perp` + `realtime_ws=true` 本地跑,观察 Bitget 限流/WS 稳定/内存。
+  8. ☐ **用户明确批准** → 合并 main → 推 GitHub → 部署服务器(memory:部署须批准)。
 
 ## 迭代日志
 - 2026-06-24 loop#1(Opus 主循环规划):实证谐波现状 gap(top_n 非全币种 / DB 缓存非实时);

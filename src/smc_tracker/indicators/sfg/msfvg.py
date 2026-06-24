@@ -158,8 +158,8 @@ def msfvg_series(
 
     Args:
         candles:         K 线列表，每项需有 .o/.h/.l/.c/.v 属性。
-        swing_size:      Pivot arm（Pine swingSize=20）。仅影响 warmup guard 长度
-                         (2*swing_size+1)，因子路径不依赖 pivot。
+        swing_size:      Pivot arm（Pine swingSize=20）。仅影响 **整批** warmup guard
+                         (n < 2*swing_size+1 时返回全 NaN)，因子路径本身不依赖 pivot。
         fvg_history:     活跃 FVG 环形队列容量 = fvg_history+1（默认 8 个 zone）。
         shrink_mitigated: True = 部分填充时 zone 边界收缩；False = 不收缩（保留原始 zone）。
         bos_wicks_mode:  仅影响 BOS/CHoCH（非因子路径），此参数保留供完整性，不影响因子。
@@ -167,7 +167,11 @@ def msfvg_series(
 
     Returns:
         np.ndarray, shape=(n,), dtype=float64。
-        前 warmup(=2*swing_size) 根为 NaN；warmup 后若无活跃 FVG zone 亦为 NaN（fail-closed）。
+        warmup guard: n < 2*swing_size+1 → 全部 NaN（整批拒绝，对齐 Rust market_structure_fvg.rs:207-209）。
+        整批 n 满足时，每根 bar 按「是否有存活 FVG zone」决定 finite/NaN（fail-closed）：
+          - 早期 bar（i<3）无法触发 FVG 事件，active_zones 为空 → NaN。
+          - i>=3 后如果有 FVG 事件且 zone 存活 → 可在任意 bar（包括 i < 2*swing_size）发射有限值。
+        这与 Rust 行为对齐：per-row 不施加额外 warmup mask，只有整批守卫。
 
     CAVEAT（短序列退化）：
         纯平稳/低波动序列不触发 FVG 事件，所有值均 NaN。这是正常行为（fail-closed），
@@ -179,9 +183,10 @@ def msfvg_series(
     if n == 0:
         return out
 
-    # warmup guard: bar-batch 在 n < 2*swing_size+1 时不发射任何列
-    warmup = 2 * swing_size  # 前 warmup 根全为 NaN（index 0..warmup-1）
-    min_bars = warmup + 1    # 至少需要 warmup+1 根才能发射第一个值
+    # 整批 warmup guard（对齐 Rust market_structure_fvg.rs:207-209）：
+    # n < 2*swing_size+1 时不发射任何列（整批返回全 NaN）。
+    # 注：per-row warmup mask 已移除（见 Rust 行为分析），每 bar 按 active_zones 是否非空决定输出。
+    min_bars = 2 * swing_size + 1
 
     if n < min_bars:
         return out  # 全 NaN
@@ -255,11 +260,10 @@ def msfvg_series(
                     surviving.append(z)
         active_zones = surviving
 
-        # ── warmup guard: 前 warmup 根不发射 ──────────────────────────────────
-        if i < warmup:
-            continue  # out[i] 保持 NaN
-
         # ── STEP 3: nearest-zone 选择（closest midpoint to close[i]）────────
+        # 注：无 per-row warmup mask（对齐 Rust market_structure_fvg.rs:350-512 行为）。
+        # 早期 bar（i<3）active_zones 始终为空 → STEP 4 _factor_scalar 返回 NaN（fail-closed）。
+        # 整批 warmup guard 已在 n < min_bars 处理，per-row 不再重复。
         close_i = c[i]
         if not math.isfinite(close_i):
             continue  # close 无效 => NaN
