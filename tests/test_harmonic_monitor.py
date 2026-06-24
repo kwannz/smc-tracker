@@ -113,16 +113,18 @@ class TestHarmonicMonitorRender:
         assert "谐波形态" in card
 
     def test_render_contains_forming_section(self) -> None:
-        """含 '成形中' 区块（前瞻预测）。"""
+        """含 forming 标记（🎯 前缀行，前瞻预测）。"""
         card = self.monitor.render(_make_rows(with_forming=True, with_completed=False), _NOW_MS)
         assert card is not None
-        assert "成形中" in card
+        # 新格式：forming 行以 🎯{tf} 开头，不再有【🎯 成形中】区块头
+        assert "🎯" in card, f"新格式 forming 行应含 🎯 前缀，卡片:\n{card}"
 
     def test_render_contains_completed_section(self) -> None:
-        """含 '完整' 区块（入场触发）。"""
+        """含 completed 标记（✅ 前缀行，入场触发）。"""
         card = self.monitor.render(_make_rows(with_forming=False, with_completed=True), _NOW_MS)
         assert card is not None
-        assert "完整" in card
+        # 新格式：completed 行以 ✅{tf} 开头，副标题含「完整=入场触发」
+        assert "✅" in card or "完整" in card, f"新格式应含 ✅ 前缀或完整字样，卡片:\n{card}"
 
     def test_render_contains_coin_name(self) -> None:
         """卡片含币名 BTC/ETH。"""
@@ -236,31 +238,31 @@ class TestRenderCapsPatterns:
     def test_render_completed_capped_per_coin_tf(self) -> None:
         """单币单周期 completed 最多展示 top 2。
 
-        当前代码: 不限单币，只限全卡 <=8 条（展平后切片）。
-        修复后: 每币每 tf 先各取 top 2，再展平，整卡 cap 8。
+        新格式：completed 行以 ✅{tf} 前缀（原 • 前缀），每币每 tf 各限 top 2。
         """
         rows = _make_large_rows(n_completed=60, n_forming=0)
         card = self.monitor.render(rows, _NOW_MS)
         assert card is not None
 
-        # 统计 "完整形态" 区块中 "•" 条目数
+        # 新格式：completed 行以 ✅ 前缀（含 Gartley）
         completed_lines = [
             ln for ln in card.splitlines()
-            if ln.strip().startswith("•") and "Gartley" in ln
+            if "✅" in ln and "Gartley" in ln
         ]
         assert len(completed_lines) <= 2, (
             f"单币单 tf completed 应 ≤2 条，实际 {len(completed_lines)} 条（缺陷6未修）"
         )
 
     def test_render_forming_capped_per_coin_tf(self) -> None:
-        """单币单周期 forming 最多展示 top 2。"""
+        """单币单周期 forming 最多展示 top 2。新格式：forming 行以 🎯{tf} 前缀。"""
         rows = _make_large_rows(n_completed=0, n_forming=60)
         card = self.monitor.render(rows, _NOW_MS)
         assert card is not None
 
+        # 新格式：forming 行以 🎯 前缀（含 Bat）
         forming_lines = [
             ln for ln in card.splitlines()
-            if ln.strip().startswith("•") and "Bat" in ln
+            if "🎯" in ln and "Bat" in ln
         ]
         assert len(forming_lines) <= 2, (
             f"单币单 tf forming 应 ≤2 条，实际 {len(forming_lines)} 条（缺陷6未修）"
@@ -269,33 +271,42 @@ class TestRenderCapsPatterns:
     def test_render_total_cap_with_omission_note(self) -> None:
         """整卡 completed+forming 合计不超 cap，且卡片含省略提示。
 
-        修复后: 超出部分卡片应有「…省略 N 条」提示（或类似文字）。
+        新格式：超出部分应有「…省略 N 条」提示；行前缀 ✅/🎯 替代原 •。
         """
         rows = _make_large_rows(n_completed=30, n_forming=30)
         card = self.monitor.render(rows, _NOW_MS)
         assert card is not None
 
-        # 统计总条目
-        bullet_lines = [ln for ln in card.splitlines() if ln.strip().startswith("•")]
-        assert len(bullet_lines) <= 8, (
-            f"整卡条目应 ≤8 条，实际 {len(bullet_lines)} 条"
+        # 新格式：统计 ✅ + 🎯 前缀行数（排除省略行）
+        item_lines = [
+            ln for ln in card.splitlines()
+            if ("✅" in ln or "🎯" in ln) and "省略" not in ln
+        ]
+        assert len(item_lines) <= 8, (
+            f"整卡条目应 ≤8 条（每币上限6条），实际 {len(item_lines)} 条"
         )
 
     def test_render_no_hundred_plus_patterns(self) -> None:
-        """卡片不出现'113 个形态'这类噪音总数——形态总数文字应合理（≤16 或不显示大数）。
+        """卡片不出现'113 个形态'这类噪音总数——币数/形态数文字应合理。
 
-        当前代码: 会渲染 '近窗 120 个形态' 字样（113 形态噪音）。
-        修复后: 实际展示数合理，卡片不显示超大形态数（因为已截断）。
+        新格式：「近窗 N 币」替代原「近窗 N 个形态」，N 应 ≤ _CARD_CAP（8）。
         """
         rows = _make_large_rows(n_completed=60, n_forming=60)
         card = self.monitor.render(rows, _NOW_MS)
         assert card is not None
 
-        # 找「近窗 X 个形态」行，X 应 <= 8（展示数，非原始数）
         import re
-        m = re.search(r"近窗\s*(\d+)\s*个形态", card)
-        if m:
-            shown = int(m.group(1))
+        # 新格式：「近窗 X 币」（不再出现「个形态」）
+        m_coin = re.search(r"近窗\s*(\d+)\s*币", card)
+        if m_coin:
+            shown = int(m_coin.group(1))
+            assert shown <= 16, (
+                f"卡片显示 {shown} 币（过多），应截断后 ≤8"
+            )
+        # 旧格式「近窗 X 个形态」不应出现大数（向后兼容检查）
+        m_old = re.search(r"近窗\s*(\d+)\s*个形态", card)
+        if m_old:
+            shown = int(m_old.group(1))
             assert shown <= 16, (
                 f"卡片显示 {shown} 个形态（过多噪音），应截断后 ≤16"
             )
@@ -340,42 +351,37 @@ class TestRenderConfluenceLabels:
         )
 
     def test_completed_shows_满足(self) -> None:
-        """completed 区块的行含「满足」字样（满足N腿约束）。"""
+        """completed 行（无 setup 时）含「满足」字样（满足N腿约束）。
+
+        新格式：completed 行以 ✅{tf} 前缀，无 setup 退化 PRZ 行含「满足N腿」。
+        有 setup 的 completed 行不含「满足」（改为进场/止损/目标格式）。
+        """
         rows = [_make_row_with_forming_label(confluence=4, completed=True)]
+        # _make_row_with_forming_label 中 completed hit 无 "setup" 键 → 退化 PRZ 行
         card = self.monitor.render(rows, _NOW_MS)
         assert card is not None
-        completed_lines = [ln for ln in card.splitlines() if "•" in ln and "Gartley" in ln]
-        # 在 completed 区块（含 '完整形态'）之后的行
-        in_completed = False
-        completed_bullet_lines: list[str] = []
-        for ln in card.splitlines():
-            if "完整形态" in ln:
-                in_completed = True
-            elif "成形中" in ln:
-                in_completed = False
-            if in_completed and "•" in ln and "Gartley" in ln:
-                completed_bullet_lines.append(ln)
-        assert completed_bullet_lines, "completed 区块应有 Gartley 行"
+        # 新格式：completed 行以 ✅{tf} 前缀，含 Gartley
+        completed_bullet_lines = [
+            ln for ln in card.splitlines()
+            if "✅" in ln and "Gartley" in ln
+        ]
+        assert completed_bullet_lines, f"completed 区块应有 ✅ Gartley 行，卡片:\n{card}"
         for ln in completed_bullet_lines:
             assert "满足" in ln, (
-                f"completed 行应含「满足」，实际: {ln!r}"
+                f"无 setup 的 completed 行应含「满足」，实际: {ln!r}"
             )
 
     def test_forming_shows_收敛(self) -> None:
-        """forming 区块的行含「收敛」字样（收敛N证据）。"""
+        """forming 行（🎯{tf} 前缀）含「收敛」字样（收敛N证据）。"""
         rows = [_make_row_with_forming_label(confluence=2, completed=False)]
         card = self.monitor.render(rows, _NOW_MS)
         assert card is not None
-        in_forming = False
-        forming_bullet_lines: list[str] = []
-        for ln in card.splitlines():
-            if "成形中" in ln:
-                in_forming = True
-            elif "完整形态" in ln:
-                in_forming = False
-            if in_forming and "•" in ln and "Gartley" in ln:
-                forming_bullet_lines.append(ln)
-        assert forming_bullet_lines, "forming 区块应有 Gartley 行"
+        # 新格式：forming 行以 🎯{tf} 前缀
+        forming_bullet_lines = [
+            ln for ln in card.splitlines()
+            if "🎯" in ln and "Gartley" in ln
+        ]
+        assert forming_bullet_lines, f"forming 区块应有 🎯 Gartley 行，卡片:\n{card}"
         for ln in forming_bullet_lines:
             assert "收敛" in ln, (
                 f"forming 行应含「收敛」，实际: {ln!r}"
@@ -386,14 +392,9 @@ class TestRenderConfluenceLabels:
         rows = [_make_row_with_forming_label(confluence=4, completed=True)]
         card = self.monitor.render(rows, _NOW_MS)
         assert card is not None
-        in_completed = False
+        # 新格式：completed 行以 ✅{tf} 前缀
         for ln in card.splitlines():
-            if "完整形态" in ln:
-                in_completed = True
-            elif "成形中" in ln:
-                in_completed = False
-            if in_completed and "•" in ln and "Gartley" in ln:
-                # completed 行不该出现「收敛」字样
+            if "✅" in ln and "Gartley" in ln:
                 assert "收敛" not in ln, (
                     f"completed 行不应含「收敛」（是 forming 语义），实际: {ln!r}"
                 )
@@ -699,12 +700,12 @@ class TestHarmonicMonitorTradeSetup:
         rows = _make_rows_completed_no_setup()
         card = self.monitor.render(rows, _NOW_MS)
         assert card is not None
-        # 无 setup 的行只显示 PRZ，不含「进场」「止损」「目标」「仓位」
+        # 新格式：completed 行以 ✅{tf} 前缀；无 setup 退化为 PRZ 行（不含进场/止损）
         completed_lines = [
             ln for ln in card.splitlines()
-            if ln.strip().startswith("•") and "Bat" in ln
+            if "✅" in ln and "Bat" in ln
         ]
-        assert len(completed_lines) > 0, "Bat 行应出现在卡片"
+        assert len(completed_lines) > 0, f"Bat 行应出现在卡片（✅前缀），卡片:\n{card}"
         for ln in completed_lines:
             assert "进场" not in ln, f"无 setup 的行不应含「进场」: {ln!r}"
             assert "止损" not in ln, f"无 setup 的行不应含「止损」: {ln!r}"
@@ -752,15 +753,18 @@ class TestHarmonicMonitorTradeSetup:
         assert found_fib, f"卡片缺少 fib_note 行，卡片:\n{card}"
 
     def test_render_subtitle_mentions_setup(self) -> None:
-        """卡片副标题更新，含「进场/止损/止盈/仓位」或「可执行」字样。"""
+        """卡片前3行（副标题行）整体含「进场/止损/止盈/仓位」或「完整=入场触发」字样。
+
+        新格式：line[1] 含「完整=入场触发」，全卡含进场/止损/仓位等可执行字样（setup 行）。
+        """
         rows = _make_rows_with_setups()
         card = self.monitor.render(rows, _NOW_MS)
         assert card is not None
-        lines = card.splitlines()
-        subtitle = lines[1] if len(lines) > 1 else ""
-        setup_keywords = ("进场", "止损", "止盈", "仓位", "可执行")
-        has_kw = any(kw in subtitle for kw in setup_keywords)
-        assert has_kw, f"副标题应含可执行 setup 相关词，实际: {subtitle!r}"
+        # 新格式：副标题（前3行）含「完整=入场触发」，全卡 setup 行含「进场」「止损」
+        header_block = "\n".join(card.splitlines()[:3])
+        setup_keywords = ("进场", "止损", "止盈", "仓位", "可执行", "完整=入场触发", "入场触发")
+        has_kw = any(kw in header_block for kw in setup_keywords)
+        assert has_kw, f"前3行应含可执行 setup 相关词，实际:\n{header_block!r}"
 
 
 # ── 🔴-1 注入键碰撞修复：harmonic_monitor 按 src_key 注入 setup ──────────────
@@ -852,11 +856,13 @@ class TestHarmonicInjectionNoCollision:
         rows = _make_rows_two_gartley_bull_completed()
         card = self.monitor.render(rows, _NOW_MS)
         assert card is not None
-        # 两个 setup 进场区的低点应出现（59796 和 56145 附近）
-        # 只验证两条 bullet 行都出现（不被合并）
-        bullet_lines = [ln for ln in card.splitlines() if ln.strip().startswith("•") and "Gartley" in ln]
+        # 新格式：completed 行以 ✅{tf} 前缀（不再是 • 前缀）
+        bullet_lines = [
+            ln for ln in card.splitlines()
+            if "✅" in ln and "Gartley" in ln
+        ]
         assert len(bullet_lines) >= 2, (
-            f"两个 Gartley-bull 应渲染 ≥2 条 bullet，实际 {len(bullet_lines)} 条（注入碰撞未修）"
+            f"两个 Gartley-bull 应渲染 ≥2 条 ✅ 行，实际 {len(bullet_lines)} 条（注入碰撞未修）\n卡片:\n{card}"
         )
 
     def test_two_gartley_have_different_entry_lo(self) -> None:
@@ -864,15 +870,15 @@ class TestHarmonicInjectionNoCollision:
         rows = _make_rows_two_gartley_bull_completed()
         card = self.monitor.render(rows, _NOW_MS)
         assert card is not None
-        # 检查卡片中包含两个不同进场价格区域的数字
-        # setup_a entry_lo=59796（fmt_px 格式化为 "59,796.00"）
-        # setup_b entry_lo=56145（fmt_px 格式化为 "56,145.00"）
+        # 新格式：completed 行以 ✅{tf} 前缀
+        # setup_a entry_lo=59796，setup_b entry_lo=56145
         gartley_bullet_lines = [
-            ln for ln in card.splitlines() if "•" in ln and "Gartley" in ln
+            ln for ln in card.splitlines()
+            if "✅" in ln and "Gartley" in ln
         ]
         # 两条行的文字不相同（不同进场区）
         assert len(gartley_bullet_lines) >= 2, (
-            f"两个 Gartley-bull 应有 ≥2 条 bullet，实际 {len(gartley_bullet_lines)} 条"
+            f"两个 Gartley-bull 应有 ≥2 条 ✅ 行，实际 {len(gartley_bullet_lines)} 条\n卡片:\n{card}"
         )
         # 两条行内容必须不同（不共享同一 setup 进场区）
         assert gartley_bullet_lines[0] != gartley_bullet_lines[1], (
@@ -1753,3 +1759,289 @@ class TestHarmonicSetupDB:
         assert rec[9] is None,  f"stop 应为 None，实际 {rec[9]}"
         assert rec[10] is None, f"target1 应为 None，实际 {rec[10]}"
         assert rec[12] is None, f"rr 应为 None，实际 {rec[12]}"
+
+
+# ── TDD: 按币种分组多周期并列渲染（新格式） ───────────────────────────────────────
+
+
+def _make_multi_tf_rows() -> list[dict]:
+    """构造多币多 tf 合成 rows：
+    - BTC: 4H completed(Gartley,long) + 12H forming(Butterfly,long)
+    - ETH: 1H forming(Bat,short)
+    用于验证按币分组渲染格式。
+    """
+    from smc_tracker.signals.trade_setup import TradeSetup
+
+    btc_setup = TradeSetup(
+        coin="BTC", tf="4H", direction="long", pattern="Gartley",
+        completed=True, entry_lo=62309.0, entry_hi=68867.0,
+        stop=68936.0, target1=58891.0, target2=52195.0, rr=2.0,
+        fib_note="XA-Fib=0.618",
+        knn_supports=False, knn_note="KNN≈随机基线",
+        position_qty=0.03, position_notional=1959.0,
+        confidence=0.81, note="诚实标注",
+        src_key="C|Gartley|long|62309.0",
+    )
+    return [
+        # BTC 4H completed
+        {
+            "coin": "BTC",
+            "symbol": "BTCUSDT",
+            "price": 62500.0,
+            "tf": "4H",
+            "completed": [
+                {
+                    "pattern": "Gartley",
+                    "direction": "bull",
+                    "prz": (62309.0, 68867.0),
+                    "completed": True,
+                    "confidence": 0.81,
+                    "confluence": 3,
+                    "points": {"D": (99, 62309.0)},
+                    "setup": btc_setup,
+                }
+            ],
+            "forming": [],
+        },
+        # BTC 12H forming
+        {
+            "coin": "BTC",
+            "symbol": "BTCUSDT",
+            "price": 62500.0,
+            "tf": "12H",
+            "completed": [],
+            "forming": [
+                {
+                    "pattern": "Butterfly",
+                    "direction": "bull",
+                    "prz": (56443.0, 59806.0),
+                    "completed": False,
+                    "confidence": 0.85,
+                    "confluence": 2,
+                }
+            ],
+        },
+        # ETH 1H forming
+        {
+            "coin": "ETH",
+            "symbol": "ETHUSDT",
+            "price": 1660.0,
+            "tf": "1H",
+            "completed": [],
+            "forming": [
+                {
+                    "pattern": "Bat",
+                    "direction": "bear",
+                    "prz": (1669.0, 1756.0),
+                    "completed": False,
+                    "confidence": 0.85,
+                    "confluence": 2,
+                }
+            ],
+        },
+    ]
+
+
+class TestRenderCoinGrouped:
+    """新格式：按币种分组、多周期并列渲染。"""
+
+    def setup_method(self) -> None:
+        self.monitor = HarmonicMonitor(
+            coin_to_symbol={"BTC": "BTCUSDT", "ETH": "ETHUSDT"},
+            timeframes=["4H", "12H", "1H"],
+            bars=300,
+            order=3,
+            tol=0.05,
+            top_n=10,
+        )
+
+    def test_btc_block_header_present(self) -> None:
+        """BTC 块头含 '━━ BTC'。"""
+        rows = _make_multi_tf_rows()
+        card = self.monitor.render(rows, _NOW_MS)
+        assert card is not None
+        assert "━━ BTC" in card, f"BTC 块头未出现，卡片:\n{card}"
+
+    def test_eth_block_header_present(self) -> None:
+        """ETH 块头含 '━━ ETH'。"""
+        rows = _make_multi_tf_rows()
+        card = self.monitor.render(rows, _NOW_MS)
+        assert card is not None
+        assert "━━ ETH" in card, f"ETH 块头未出现，卡片:\n{card}"
+
+    def test_block_header_contains_asset_badge(self) -> None:
+        """BTC 块头含 '₿加密' 资产徽章。"""
+        rows = _make_multi_tf_rows()
+        card = self.monitor.render(rows, _NOW_MS)
+        assert card is not None
+        assert "₿加密" in card, f"BTC 块头缺少 ₿加密 徽章，卡片:\n{card}"
+
+    def test_block_header_contains_price(self) -> None:
+        """BTC 块头含现价（62500 格式化后出现）。"""
+        rows = _make_multi_tf_rows()
+        card = self.monitor.render(rows, _NOW_MS)
+        assert card is not None
+        # fmt_px(62500.0) → 62500 或 62,500.00
+        assert "62" in card, "BTC 现价数字未出现在卡片"
+
+    def test_tradfi_coin_shows_tradfi_badge(self) -> None:
+        """TradFi 币（SOXL）块头显示 '🏦TradFi'。"""
+        rows = [
+            {
+                "coin": "SOXL",
+                "symbol": "SOXLUSDT",
+                "price": 30.0,
+                "tf": "1H",
+                "completed": [],
+                "forming": [
+                    {
+                        "pattern": "Gartley",
+                        "direction": "bull",
+                        "prz": (28.0, 29.5),
+                        "completed": False,
+                        "confidence": 0.70,
+                        "confluence": 2,
+                    }
+                ],
+            }
+        ]
+        monitor = HarmonicMonitor(
+            coin_to_symbol={"SOXL": "SOXLUSDT"},
+            timeframes=["1H"],
+            bars=300,
+            order=3,
+            tol=0.05,
+            top_n=10,
+        )
+        card = monitor.render(rows, _NOW_MS)
+        assert card is not None
+        assert "🏦TradFi" in card, f"SOXL 块头应含 🏦TradFi，卡片:\n{card}"
+
+    def test_btc_block_contains_both_timeframes(self) -> None:
+        """BTC 块内同时含 4H 和 12H 两条行（多周期并列）。"""
+        rows = _make_multi_tf_rows()
+        card = self.monitor.render(rows, _NOW_MS)
+        assert card is not None
+        # BTC 块内应含 4H 和 12H 两个周期
+        assert "4H" in card, "卡片缺少 4H 行"
+        assert "12H" in card, "卡片缺少 12H 行"
+        # 且都在 BTC 块中（4H 和 12H 行出现在 ━━ BTC 块头之后、━━ ETH 块头之前）
+        btc_start = card.find("━━ BTC")
+        eth_start = card.find("━━ ETH")
+        assert btc_start != -1, "BTC 块头未找到"
+        assert eth_start != -1, "ETH 块头未找到"
+        btc_block = card[btc_start:eth_start] if eth_start > btc_start else card[btc_start:]
+        assert "4H" in btc_block, f"BTC 块内缺少 4H，块内容:\n{btc_block}"
+        assert "12H" in btc_block, f"BTC 块内缺少 12H，块内容:\n{btc_block}"
+
+    def test_eth_block_separate_from_btc(self) -> None:
+        """ETH 的 1H 行在 ETH 块中，不与 BTC 混在一起。"""
+        rows = _make_multi_tf_rows()
+        card = self.monitor.render(rows, _NOW_MS)
+        assert card is not None
+        eth_start = card.find("━━ ETH")
+        assert eth_start != -1, "ETH 块头未找到"
+        eth_block = card[eth_start:]
+        assert "1H" in eth_block, f"ETH 块内缺少 1H 行，ETH 块:\n{eth_block}"
+
+    def test_completed_row_has_entry_keywords(self) -> None:
+        """completed 行（✅前缀）含「进场」「止损」「目标」。"""
+        rows = _make_multi_tf_rows()
+        card = self.monitor.render(rows, _NOW_MS)
+        assert card is not None
+        # 找含 ✅ 的行
+        completed_lines = [ln for ln in card.splitlines() if "✅" in ln]
+        assert len(completed_lines) > 0, "卡片缺少 ✅ completed 行"
+        # 合并文本检查（进场/止损/目标可能在 ✅ 行或其附注行；查整张卡片）
+        for kw in ("进场", "止损", "目标"):
+            assert kw in card, f"卡片缺少关键词「{kw}」"
+
+    def test_forming_row_has_prz_keyword(self) -> None:
+        """forming 行（🎯前缀）含「PRZ」。"""
+        rows = _make_multi_tf_rows()
+        card = self.monitor.render(rows, _NOW_MS)
+        assert card is not None
+        forming_lines = [ln for ln in card.splitlines() if "🎯" in ln]
+        assert len(forming_lines) > 0, "卡片缺少 🎯 forming 行"
+        forming_text = "\n".join(forming_lines)
+        assert "PRZ" in forming_text, f"forming 行缺少 PRZ，forming 行:\n{forming_text}"
+
+    def test_completed_prefix_checkmark(self) -> None:
+        """BTC 4H completed 行以 '✅4H' 为前缀。"""
+        rows = _make_multi_tf_rows()
+        card = self.monitor.render(rows, _NOW_MS)
+        assert card is not None
+        assert "✅4H" in card, f"BTC 4H completed 行应以 ✅4H 开头，卡片:\n{card}"
+
+    def test_forming_prefix_target(self) -> None:
+        """BTC 12H forming 行以 '🎯12H' 为前缀。"""
+        rows = _make_multi_tf_rows()
+        card = self.monitor.render(rows, _NOW_MS)
+        assert card is not None
+        assert "🎯12H" in card, f"BTC 12H forming 行应以 🎯12H 开头，卡片:\n{card}"
+
+    def test_price_no_scientific_notation_grouped(self) -> None:
+        """按币分组格式下，价格不含科学计数法。"""
+        rows = _make_multi_tf_rows()
+        card = self.monitor.render(rows, _NOW_MS)
+        assert card is not None
+        assert "e+" not in card.lower(), "卡片含科学计数法 e+"
+        assert "e-" not in card.lower(), "卡片含科学计数法 e-"
+
+    def test_all_zero_price_returns_none_grouped(self) -> None:
+        """所有 coin price≤0 → None（新格式也适用）。"""
+        rows = [
+            {
+                "coin": "BTC", "symbol": "BTCUSDT", "price": 0.0, "tf": "4H",
+                "completed": [{"pattern": "Gartley", "direction": "bull",
+                               "prz": (60000.0, 60300.0), "completed": True,
+                               "confidence": 0.70, "confluence": 4,
+                               "points": {"D": (5, 60100.0)}, "setup": None}],
+                "forming": [],
+            }
+        ]
+        monitor = HarmonicMonitor(
+            coin_to_symbol={"BTC": "BTCUSDT"}, timeframes=["4H"],
+            bars=300, order=3, tol=0.05, top_n=10,
+        )
+        card = monitor.render(rows, _NOW_MS)
+        assert card is None, "所有 price=0 时应返回 None"
+
+    def test_orderflow_confirm_in_grouped_format(self) -> None:
+        """按币分组格式下，订单流确认标记仍然出现。"""
+        from smc_tracker.signals.orderflow_confirm import OrderflowConfirm
+        of = OrderflowConfirm(
+            confirmed=True, wall_usd=820_000.0, wall_dist_pct=0.007,
+            imbalance=0.38, note="bid墙"
+        )
+        from smc_tracker.signals.trade_setup import TradeSetup
+        setup = TradeSetup(
+            coin="BTC", tf="4H", direction="long", pattern="Gartley",
+            completed=True, entry_lo=60200.0, entry_hi=60650.0,
+            stop=59000.0, target1=62500.0, target2=65000.0, rr=2.0,
+            fib_note="XA-Fib=0.618",
+            knn_supports=True, knn_note="样本足",
+            position_qty=0.03, position_notional=1959.0,
+            confidence=0.81, note="诚实",
+            src_key="C|Gartley|long|60200.0",
+            orderflow=of,
+        )
+        rows = [{
+            "coin": "BTC", "symbol": "BTCUSDT", "price": 62500.0, "tf": "4H",
+            "completed": [{
+                "pattern": "Gartley", "direction": "bull",
+                "prz": (60200.0, 60650.0), "completed": True,
+                "confidence": 0.81, "confluence": 3,
+                "points": {"D": (99, 60200.0)},
+                "setup": setup,
+            }],
+            "forming": [],
+        }]
+        monitor = HarmonicMonitor(
+            coin_to_symbol={"BTC": "BTCUSDT"}, timeframes=["4H"],
+            bars=300, order=3, tol=0.05, top_n=10,
+        )
+        card = monitor.render(rows, _NOW_MS)
+        assert card is not None
+        assert "📊订单流✓" in card, f"按币分组下订单流确认应显示，卡片:\n{card}"
+        assert "bid" in card, "long 方向确认含 bid"

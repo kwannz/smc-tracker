@@ -21,6 +21,7 @@ import asyncio
 import logging
 from typing import Any
 
+from ..asset_class import asset_badge as _asset_badge
 from ..bitget.rest import BitgetREST
 from ..indicators.harmonic import analyze_candles
 from ..signals.orderflow_confirm import confirm_setup as _confirm_setup
@@ -358,17 +359,20 @@ class HarmonicMonitor:
         return result
 
     def render(self, rows: list[dict], now_ms: int) -> str | None:
-        """渲染谐波形态前瞻卡片。
+        """渲染谐波形态前瞻卡片（按币种分组，多周期并列）。
 
-        - 展平后 completed/forming 各 cap _CARD_CAP 条
-        - 显示形态数为截断后实际展示数
-        - 超出部分标注省略数
-        - completed 行显示「满足N腿」，forming 行显示「收敛N」（T-3 语义区分）
-        - price≤0 的行跳过（G-2）
-        - 副标题含枢轴滞后披露（T-1）
+        新格式：
+          - 按 coin 分组，每币一块（`━━ {coin}  {badge}  现价{price} ━━`）
+          - 块内 completed 行用 ✅{tf} 前缀，forming 行用 🎯{tf} 前缀，多周期并列
+          - 各 completed 行保留可执行 setup（进场/止损/目标/仓位/置信/KNN/订单流）
+          - 各 forming 行保留 PRZ/置信/收敛
+          - 按币最高 confidence 降序排列；每币块内 completed 在前（置信降序），forming 在后
+          - 最多展示 _CARD_CAP 个币；每币块内 completed+forming 合计 ≤ _PER_COIN_ITEM_CAP 条
+          - price≤0 的行跳过（G-2）
+          - 副标题含枢轴滞后披露（T-1）
 
         Args:
-            rows:   refresh() 返回值（或合成测试数据）
+            rows:   refresh() 返回值（或合成测试数据），每项 {coin, symbol, price, tf, completed, forming}
             now_ms: 当前时间戳（毫秒）
 
         Returns:
@@ -379,142 +383,192 @@ class HarmonicMonitor:
 
         ts = fmt_ts(now_ms)
 
-        # 展平：每行先取 top _PER_COIN_TF_CAP，再展平，全卡 cap _CARD_CAP
-        # G-2：price<=0 的行跳过（拉取失败兜底，不渲染无意义价格）
-        all_forming: list[tuple[dict, dict]] = []
-        all_completed: list[tuple[dict, dict]] = []
+        # ---------- 第一步：按 coin 聚合，跳过 price≤0 ----------
+        # coin → {price, items: [(kind, tf, hit)]}
+        # kind: "completed" 或 "forming"
+        coin_data: dict[str, dict] = {}
         for r in rows:
-            if r.get("price", 0.0) <= 0.0:
+            price = float(r.get("price", 0.0) or 0.0)
+            if price <= 0.0:
                 continue  # G-2：price=0 跳过
-            # 每行（每币每 tf）各取 top _PER_COIN_TF_CAP（按 confidence 降序）
-            row_forming = sorted(r["forming"], key=lambda h: h["confidence"], reverse=True)
-            row_completed = sorted(r["completed"], key=lambda h: h["confidence"], reverse=True)
-            for h in row_forming[:_PER_COIN_TF_CAP]:
-                all_forming.append((r, h))
-            for h in row_completed[:_PER_COIN_TF_CAP]:
-                all_completed.append((r, h))
+            coin: str = r["coin"]
+            tf: str = r["tf"]
 
-        # 若过滤 price=0 后全空，返回 None
-        if not all_forming and not all_completed:
+            if coin not in coin_data:
+                coin_data[coin] = {"price": price, "items": []}
+            else:
+                # 用最新（或最大）有效 price（取后者确保稳定）
+                if price > 0:
+                    coin_data[coin]["price"] = price
+
+            # 每行（每币每 tf）各取 top _PER_COIN_TF_CAP（按 confidence 降序）
+            row_completed = sorted(
+                r.get("completed") or [],
+                key=lambda h: h["confidence"], reverse=True,
+            )[:_PER_COIN_TF_CAP]
+            row_forming = sorted(
+                r.get("forming") or [],
+                key=lambda h: h["confidence"], reverse=True,
+            )[:_PER_COIN_TF_CAP]
+
+            for h in row_completed:
+                coin_data[coin]["items"].append(("completed", tf, h))
+            for h in row_forming:
+                coin_data[coin]["items"].append(("forming", tf, h))
+
+        if not coin_data:
             return None
 
-        # 按 confidence 降序后截断
-        all_forming.sort(key=lambda x: x[1]["confidence"], reverse=True)
-        all_completed.sort(key=lambda x: x[1]["confidence"], reverse=True)
+        # ---------- 第二步：各币按最高 confidence 降序排序 ----------
+        _PER_COIN_ITEM_CAP = 6  # 每币块内 completed+forming 合计最多展示条数
 
-        omit_forming   = max(0, len(all_forming) - _CARD_CAP)
-        omit_completed = max(0, len(all_completed) - _CARD_CAP)
+        def _coin_max_conf(coin_key: str) -> float:
+            items = coin_data[coin_key]["items"]
+            if not items:
+                return 0.0
+            return max(h["confidence"] for _, _, h in items)
 
-        forming_rows   = all_forming[:_CARD_CAP]
-        completed_rows = all_completed[:_CARD_CAP]
+        sorted_coins: list[str] = sorted(
+            coin_data.keys(), key=_coin_max_conf, reverse=True
+        )[:_CARD_CAP]  # 最多 _CARD_CAP 个币
 
-        # 统计实际展示数（截断后）
-        n_forming   = len(forming_rows)
-        n_completed = len(completed_rows)
-        total = n_forming + n_completed
+        # 统计总展示条数（用于副标题）
+        total_shown = 0
+        for coin in sorted_coins:
+            items = coin_data[coin]["items"]
+            # 排序：completed 在前，forming 在后；同类按 confidence 降序
+            completed_items = sorted(
+                [(k, tf, h) for k, tf, h in items if k == "completed"],
+                key=lambda x: x[2]["confidence"], reverse=True,
+            )
+            forming_items = sorted(
+                [(k, tf, h) for k, tf, h in items if k == "forming"],
+                key=lambda x: x[2]["confidence"], reverse=True,
+            )
+            merged = completed_items + forming_items
+            shown = merged[:_PER_COIN_ITEM_CAP]
+            total_shown += len(shown)
 
+        # ---------- 第三步：渲染卡片 ----------
         lines: list[str] = [
             f"🔷 谐波形态前瞻 [{ts}] (数据源: Bitget永续 · 谐波PRZ)",
-            f"近窗 {total} 个形态（完整形态含可执行进场/止损/止盈/仓位；成形=前瞻PRZ；枢轴需右确认，C/D 滞后~order根）",
+            f"近窗 {len(sorted_coins)} 币（每币多周期并列；完整=入场触发 成形=前瞻PRZ；枢轴滞后~order根；订单流仅辅助·墙可能spoof）",
             "完整形态含订单流确认(领先意图×PRZ)；⚠订单流仅辅助，墙可能spoof/吸收≠必反转",
         ]
 
-        # ---- 成形中（前瞻预测）区块 ----
-        if forming_rows:
-            lines.append("【🎯 成形中(前瞻预测)】")
-            for row, hit in forming_rows:
-                coin     = row["coin"]
-                tf       = row["tf"]
-                price    = row["price"]
-                pat      = hit["pattern"]
-                dirn     = "看多" if hit["direction"] == "bull" else "看空"
-                prz_lo, prz_hi = hit["prz"]
-                conf_pct = int(hit["confidence"] * 100)
-                conf_n   = hit.get("confluence", 0)
+        for coin in sorted_coins:
+            price = coin_data[coin]["price"]
+            badge = _asset_badge(coin)
+            items = coin_data[coin]["items"]
 
-                # Crab 诚实警示（实测胜率偏低，CLAUDE.md §产品方向：诚实不夸大）
+            # 排序：completed 在前（confidence降序），forming 在后（confidence降序）
+            completed_items = sorted(
+                [(k, tf, h) for k, tf, h in items if k == "completed"],
+                key=lambda x: x[2]["confidence"], reverse=True,
+            )
+            forming_items = sorted(
+                [(k, tf, h) for k, tf, h in items if k == "forming"],
+                key=lambda x: x[2]["confidence"], reverse=True,
+            )
+            merged = completed_items + forming_items
+            shown = merged[:_PER_COIN_ITEM_CAP]
+            omit = len(merged) - len(shown)
+
+            # 块头：━━ {coin}  {badge}  现价{price} ━━
+            lines.append(f"━━ {coin}  {badge}  现价{fmt_px(price)} ━━")
+
+            for kind, tf, hit in shown:
+                pat   = hit["pattern"]
+                dir_raw = hit.get("direction", "")
+                dirn  = "看多" if dir_raw == "bull" else "看空"
+                conf_pct = int(hit["confidence"] * 100)
                 crab_note = "  ⚠Crab实测胜率偏低" if pat == "Crab" else ""
 
-                # T-3：forming 显示「收敛N」语义
-                line = (
-                    f"  • {coin} {tf} {pat}({dirn})"
-                    f" PRZ {fmt_px(prz_lo)}–{fmt_px(prz_hi)}"
-                    f"  置信{conf_pct}% 收敛{conf_n}"
-                    f"  现价{fmt_px(price)}"
-                    f"{crab_note}"
-                )
-                lines.append(line)
-            if omit_forming > 0:
-                lines.append(f"  …省略 {omit_forming} 条（低 confidence）")
+                if kind == "completed":
+                    # ✅{tf} 前缀，渲染可执行 setup 或退化 PRZ
+                    setup: TradeSetup | None = hit.get("setup")
+                    if setup is not None:
+                        # KNN 标志
+                        if setup.knn_supports is True:
+                            knn_flag = "✓"
+                        elif setup.knn_supports is False:
+                            knn_flag = "✗"
+                        else:
+                            knn_flag = "?"
 
-        # ---- 完整形态（入场触发）区块 ----
-        if completed_rows:
-            lines.append("【✅ 完整形态(入场触发)】")
-            for row, hit in completed_rows:
-                coin     = row["coin"]
-                tf       = row["tf"]
-                pat      = hit["pattern"]
-                dirn     = "看多" if hit["direction"] == "bull" else "看空"
-                prz_lo, prz_hi = hit["prz"]
-                conf_pct = int(hit["confidence"] * 100)
-                conf_n   = hit.get("confluence", 0)
-                crab_note = "  ⚠Crab实测胜率偏低" if pat == "Crab" else ""
+                        qty_str = _fmt_qty(setup.position_qty)
+                        notional_str = (
+                            fmt_px(setup.position_notional)
+                            if setup.position_notional is not None
+                            else "—"
+                        )
 
-                # 尝试渲染可执行 setup（新格式）
-                setup: TradeSetup | None = hit.get("setup")
-                if setup is not None:
-                    # KNN 标志：True=✓ / False=✗ / None=?
-                    if setup.knn_supports is True:
-                        knn_flag = "✓"
-                    elif setup.knn_supports is False:
-                        knn_flag = "✗"
-                    else:
-                        knn_flag = "?"
+                        # 订单流标记（内联到同行）
+                        of = setup.orderflow
+                        if of is None:
+                            of_inline = ""
+                        elif of.confirmed:
+                            side_label = "bid" if setup.direction == "long" else "ask"
+                            of_inline = f" 📊订单流✓{side_label}{fmt_px(of.wall_usd)}"
+                        else:
+                            of_inline = " 📊订单流✗"
 
-                    # 仓位数量非科学计数，notional 用 fmt_px
-                    qty_str = _fmt_qty(setup.position_qty)
-                    notional_str = fmt_px(setup.position_notional) if setup.position_notional is not None else "—"
-
-                    # T-3：completed 显示「满足N腿」语义 + 可执行进场/止损/目标/仓位/置信/KNN
-                    line = (
-                        f"  • {coin} {tf} {pat}({dirn})"
-                        f" 进场{fmt_px(setup.entry_lo)}–{fmt_px(setup.entry_hi)}"
-                        f" 止损{fmt_px(setup.stop)}"
-                        f" 目标{fmt_px(setup.target1)}/{fmt_px(setup.target2)}"
-                        f" rr{setup.rr:.1f}"
-                        f" 仓位{qty_str}({notional_str})"
-                        f" 置信{int(setup.confidence * 100)}%"
-                        f" KNN{knn_flag}"
-                        f"{crab_note}"
-                    )
-                    lines.append(line)
-                    # fib_note 附注行（缩进）
-                    lines.append(f"   {setup.fib_note}")
-                    # 订单流确认标记行（仅 completed setup 才有）
-                    of = setup.orderflow
-                    if of is not None:
-                        # 侧别：long→bid墙；short→ask墙
-                        side_label = "bid" if setup.direction == "long" else "ask"
-                        if of.confirmed:
+                        # T-3：completed 保留「满足N腿」fib 在附注行
+                        line = (
+                            f"  ✅{tf} {pat}({dirn})"
+                            f" 进场{fmt_px(setup.entry_lo)}–{fmt_px(setup.entry_hi)}"
+                            f" 止损{fmt_px(setup.stop)}"
+                            f" 目标{fmt_px(setup.target1)}/{fmt_px(setup.target2)}"
+                            f" rr{setup.rr:.1f}"
+                            f" 仓位{qty_str}({notional_str})"
+                            f" 置信{int(setup.confidence * 100)}%"
+                            f" KNN{knn_flag}"
+                            f"{of_inline}"
+                            f"{crab_note}"
+                        )
+                        lines.append(line)
+                        # fib_note 附注行（缩进）
+                        lines.append(f"   {setup.fib_note}")
+                        # 订单流详情附注行（仅有墙，追加失衡数据）
+                        if of is not None and of.confirmed:
+                            side_label = "bid" if setup.direction == "long" else "ask"
                             lines.append(
                                 f"  📊订单流✓({side_label}墙{fmt_px(of.wall_usd)}"
                                 f" 失衡{of.imbalance:+.2f})"
                             )
-                        else:
+                        elif of is not None and not of.confirmed:
                             lines.append("  📊订单流✗(PRZ无同向墙)")
-                    # of is None → 无订单流数据，不显示（诚实：该币未被 ob_provider 覆盖）
-                else:
-                    # 无 setup（劣质 setup 被 compute_risk 过滤）→ 退化为旧 PRZ 行
-                    d_info = hit.get("points", {}).get("D")
-                    d_note = f" D@{fmt_px(d_info[1])}" if d_info else ""
+                    else:
+                        # 无 setup → 退化为 PRZ 行（已过滤/无法计算风险）
+                        prz = hit.get("prz") or (0.0, 0.0)
+                        prz_lo, prz_hi = prz
+                        conf_n = hit.get("confluence", 0)
+                        d_info = hit.get("points", {}).get("D")
+                        d_note = f" D@{fmt_px(d_info[1])}" if d_info else ""
+                        line = (
+                            f"  ✅{tf} {pat}({dirn}){d_note}"
+                            f" PRZ {fmt_px(prz_lo)}–{fmt_px(prz_hi)}"
+                            f"  置信{conf_pct}% 满足{conf_n}腿"
+                            f"{crab_note}"
+                        )
+                        lines.append(line)
+
+                else:  # forming
+                    # 🎯{tf} 前缀，显示 PRZ/置信/收敛
+                    prz = hit.get("prz") or (0.0, 0.0)
+                    prz_lo, prz_hi = prz
+                    conf_n = hit.get("confluence", 0)
+
+                    # T-3：forming 显示「收敛N」语义
                     line = (
-                        f"  • {coin} {tf} {pat}({dirn}){d_note}"
-                        f" PRZ {fmt_px(prz_lo)}–{fmt_px(prz_hi)}"
-                        f"  置信{conf_pct}% 满足{conf_n}腿"
+                        f"  🎯{tf} {pat}({dirn})"
+                        f" PRZ{fmt_px(prz_lo)}–{fmt_px(prz_hi)}"
+                        f" 置信{conf_pct}% 收敛{conf_n}"
                         f"{crab_note}"
                     )
                     lines.append(line)
-            if omit_completed > 0:
-                lines.append(f"  …省略 {omit_completed} 条（低 confidence）")
+
+            if omit > 0:
+                lines.append(f"  …省略 {omit} 条（低 confidence）")
 
         return "\n".join(lines)
