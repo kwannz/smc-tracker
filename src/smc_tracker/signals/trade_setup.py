@@ -292,11 +292,13 @@ def _build_one(
         conf *= 0.90
     # knn_supports is None 时不调整
 
-    # ATR2 调权：同向×1.05（封顶前），相反×0.92；None 不调整（candles 不足）
+    # ATR2 调权：同向×1.05，**相反×0.80（重罚）**；None 不调整（candles 不足）。
+    # autosearch Round1 实证(causal前向): ATR2 同向子集胜率 82.5% vs 反向 50%(随机) vs 基线 74%
+    # → 反向是低质信号(随机水平)，应重罚而非轻调；故 ×0.80（原 ×0.92 太轻）。
     if atr2_confirm_val is True:
         conf *= 1.05
     elif atr2_confirm_val is False:
-        conf *= 0.92
+        conf *= 0.80
     # atr2_confirm_val is None 时不调整
 
     # 封顶
