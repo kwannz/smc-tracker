@@ -724,7 +724,23 @@ class TradingSystem:
                 from .monitor.bitget_trade_monitor import BitgetTradeMonitor  # noqa: PLC0415
                 from .monitor.forming_approach import FormingApproachTracker  # noqa: PLC0415
                 harm_n = self.cfg.harmonic.top_n
-                harm_c2s = dict(list(vol_c2s.items())[:harm_n])
+                harm_umode = self.cfg.harmonic.universe_mode
+
+                if harm_umode == "all_perp":
+                    # all_perp 模式：用全部 USDT 永续合约，按 24h 成交额降序排序（高 vol 优先）
+                    # 直接从 base_map + tickers_map 构建，不受全局 universe 配置 top_n 限制
+                    from .config import resolve_universe as _resolve_universe, UniverseCfg  # noqa: PLC0415
+                    harm_c2s = _resolve_universe(
+                        base_map, tickers_map,
+                        UniverseCfg(mode="all", asset_filter="all"),
+                    )
+                    log.info(
+                        "谐波 universe_mode=all_perp：全市场 %d 个 USDT 永续合约（按成交额降序）",
+                        len(harm_c2s),
+                    )
+                else:
+                    # top_n 模式（默认，向后兼容）：按成交额取前 harm_n 个
+                    harm_c2s = dict(list(vol_c2s.items())[:harm_n])
                 # 并入用户「发现搜集」的币（dashboard 按钮 → harmonic_collected）→ 持续监控
                 try:
                     harm_c2s.update(self.store.get_harmonic_collected())
@@ -762,8 +778,14 @@ class TradingSystem:
             if vol_c2s and (self.cfg.bollinger.enabled or self.cfg.harmonic.enabled):
                 from .monitor.candle_collector import BitgetCandleCollector  # noqa: PLC0415
                 # 采集币集 = resolve_universe 输出（已含 BB + 谐波所需的所有币）
+                # all_perp 模式下，harm_c2s 含全部永续合约，合并保证采集器覆盖谐波所有需要的币
                 # 周期 = 两板周期并集；bars 取较大者
-                cc_c2s = vol_c2s  # 全集（轮转采集，每轮 batch_size 个）
+                cc_c2s = dict(vol_c2s)   # 从全局 universe 起步
+                if self.harmonic_monitor is not None and self.cfg.harmonic.universe_mode == "all_perp":
+                    # all_perp：把谐波 universe 全部合并进采集集（键重复时保持已有映射，新的追加）
+                    for _coin, _sym in harm_c2s.items():
+                        if _coin not in cc_c2s:
+                            cc_c2s[_coin] = _sym
                 cc_tfs = list(dict.fromkeys(
                     list(self.cfg.bollinger.timeframes) + list(self.cfg.harmonic.timeframes)))
                 cc_bars = max(self.cfg.bollinger.bars, self.cfg.harmonic.bars)

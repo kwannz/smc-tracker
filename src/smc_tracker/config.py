@@ -273,6 +273,10 @@ class HarmonicCfg:
     enabled=True 时周期推送卡片；interval_sec 控制推送频率（默认 15 分钟）。
     timeframes 覆盖 6 个主流周期（用户#：多周期 6tf，与布林带一致）；bars 每周期 K 线根数；
     order 枢轴邻域大小；tol 比率容差（默认 5%）；top_n 最多监控币种数。
+
+    universe_mode:
+      "top_n"    → 按 24h 成交额降序取前 top_n 个（默认，向后兼容）
+      "all_perp" → 全部 Bitget USDT 永续合约按成交额降序（真实全市场覆盖）
     """
     enabled: bool = True
     interval_sec: float = 900.0
@@ -285,6 +289,9 @@ class HarmonicCfg:
     order: int = 3
     tol: float = 0.05
     top_n: int = 12
+    # universe_mode: "top_n"(默认，向后兼容) | "all_perp"(全部 USDT 永续，高 vol 优先)
+    # all_perp 模式首次 refresh 会回填全量 K 线（一次性冷启动 ~10min），之后用 DB 缓存
+    universe_mode: str = "top_n"
     account_usd: float = 10_000.0        # 仓位计算用账户名义资金（USD）
     risk_pct: float = 0.01               # 单笔风险比例（1%）
     target_rr: float = 2.0               # 目标盈亏比
