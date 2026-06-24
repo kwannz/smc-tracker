@@ -30,7 +30,11 @@
   落库协调=实时层只推送通知不写库(保 dashboard 全量快照),**全量 1859 passed**。诚实:页面实时读取(per-coin
   latest)是 B2 单独做。known limit:all_perp+harmonic_collected 动态加币需重新 attach(预存架构限制)。
 - [ ] B2 dashboard 谐波页从 5s 轮询 → 更实时(SSE/WS 推送或更短轮询 + LIVE 脉冲)。
-- [ ] B3 forming 形态实时逼近 PRZ 告警(harmonic_forward / forming_approach 已有骨架,接全币种)。
+- [x] B3 **forming 实时逼近 PRZ 完成(loop#12,核验已实现 + 补测试,全量 1877 passed)**:
+  `FormingApproachTracker`(forming_approach.py:per-entry TTL 缓存 + 结构指纹冷却去重 + 穿越作废 + 纯内存
+  热路径)+ app.py `_periodic_prz_approach`(15s worker,非 WS 回调)+ `_seed` 建 + PRZ 缓存 update,**已接入运行时**。
+  补 3 测试(热路径无同步写库 + band_pct 0.8% 提前触发 + bear 作废)。**诚实纪律**:forming 投影时不记预测,
+  价实时触达 PRZ 才记 `_record_pred("谐波-逼近")`(QA H1,避免方向随机漂移)。**真前瞻提前量达成**。
 
 ### C. 前瞻预测(基于 bitget 永续数据,结合开源/模型)
 

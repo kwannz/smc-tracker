@@ -79,3 +79,41 @@ def test_update_overwrites_stale_cache():
     t.update([_row(prz=(50000.0, 51000.0))], now_ms=2000)   # 覆盖
     assert t.check("BTC", 60500.0, now_ms=3000) == []        # 旧带已不在
     assert len(t.check("BTC", 50500.0, now_ms=3000)) == 1    # 新带命中
+
+
+def test_check_no_sync_db_write():
+    """QA H6 热路径安全：check() 是纯内存判定，绝不调用任何 store/DB 写方法。
+
+    用 mock store 注入 FormingApproachTracker，check 时断言 store 无任何方法被调用——
+    保证 WS 热回调里调 check 不阻塞 event loop（同步写库是 H6 的根因）。
+    """
+    from unittest.mock import MagicMock
+    store = MagicMock()   # 任何方法调用都会被记录
+
+    t = FormingApproachTracker()
+    t.update([_row()], now_ms=1000)
+    evs = t.check("BTC", 60500.0, now_ms=2000)
+
+    # check() 触发了逼近事件
+    assert len(evs) == 1
+
+    # 热路径：check 内部不调用任何 store 方法（也没有 store 属性——此断言确认零 DB 写）
+    assert not store.called, "check() 不得调用 store（热路径同步写库违纪）"
+    store.assert_not_called()
+
+
+def test_band_pct_extends_trigger_zone():
+    """band_pct 容差：价格在 PRZ 带外但在 ±band_pct 扩展区内 → 逼近事件（前瞻量）。"""
+    t = FormingApproachTracker(band_pct=0.01)  # ±1%
+    t.update([_row(prz=(60000.0, 61000.0))], now_ms=1000)
+    # 价格比 hi(61000) 高 0.5%（在 band_pct=1% 扩展区内）
+    evs = t.check("BTC", 61305.0, now_ms=2000)
+    assert len(evs) == 1
+
+
+def test_bear_invalidation_above_hi():
+    """bear forming：价格穿越 PRZ 远侧（hi 上方）= 形态失效 → 不告警。"""
+    t = FormingApproachTracker(invalidate_pct=0.01)
+    t.update([_row(prz=(60000.0, 61000.0), direction="bear")], now_ms=1000)
+    # 价格远高于 hi（61000×1.02=62220 < 63000）→ 穿越失效
+    assert t.check("BTC", 63000.0, now_ms=2000) == []
