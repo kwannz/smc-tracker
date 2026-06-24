@@ -1519,11 +1519,16 @@ def _knn_note_from_flag(knn_flag: str | None) -> str:
     return "样本不足或未计算（KNN≈随机基线，不可单独依赖）"
 
 
-def _prz_proximity(price: float | None, prz_lo: float | None, prz_hi: float | None) -> str:
+def _prz_proximity(price: float | None, prz_lo: float | None, prz_hi: float | None,
+                   is_completed: bool = False) -> str:
     """描述当前价格相对 PRZ 区间的位置（前瞻信号强度指示）。
 
     返回中文描述字符串，用于"前瞻接近度"展示。价格/PRZ 缺失时返回 '—'。
     util.to_float(None) 返回 0.0 而非 None，故先检查原始值是否为 None。
+
+    is_completed=True（D点已发生的 completed 形态）用回顾语义，不说"前瞻等待"——
+    completed 的 D 点已反应过 PRZ，当前价格只是反应后的位置，说"前瞻等待"语义矛盾。
+    forming（默认）保持前瞻语义（D 未到，等价格逼近 PRZ 是真前瞻提前量）。
     """
     from smc_tracker.util import to_float as _to_float
     if price is None or prz_lo is None or prz_hi is None:
@@ -1543,13 +1548,16 @@ def _prz_proximity(price: float | None, prz_lo: float | None, prz_hi: float | No
         return "—"
     dist_pct = abs(p - mid) / mid * 100
     if lo <= p <= hi:
-        return f"价格在 PRZ 内 ⚡（距中轴 {dist_pct:.1f}%）"
+        zone = "D点反应区" if is_completed else "⚡ 距中轴"
+        return f"价格在 PRZ 内（{zone} {dist_pct:.1f}%）"
     elif p < lo:
         gap_pct = (lo - p) / p * 100
-        return f"价格低于 PRZ {gap_pct:.1f}%（尚未触及，前瞻等待）"
+        tail = "D点已反应，现价回落" if is_completed else "尚未触及，前瞻等待"
+        return f"价格低于 PRZ {gap_pct:.1f}%（{tail}）"
     else:
         gap_pct = (p - hi) / p * 100
-        return f"价格高于 PRZ {gap_pct:.1f}%（已突破 PRZ 上沿）"
+        tail = "D点已反应，现价上行" if is_completed else "已突破 PRZ 上沿"
+        return f"价格高于 PRZ {gap_pct:.1f}%（{tail}）"
 
 
 def _compute_confluence(all_setups: list[dict]) -> list[dict]:
@@ -1639,7 +1647,8 @@ def _enrich_setup(d: dict, current_price: float | None) -> dict:
     else:
         d["honest_label"] = "—"
     price = current_price if current_price is not None else d.get("price")
-    d["prz_proximity"] = _prz_proximity(price, d.get("prz_lo"), d.get("prz_hi"))
+    d["prz_proximity"] = _prz_proximity(
+        price, d.get("prz_lo"), d.get("prz_hi"), is_completed=(kind == "completed"))
     return d
 
 

@@ -341,3 +341,25 @@ def test_build_coin_detail_forming_honest_label():
     s.close()
     setups = result["setups"]
     assert "前瞻" in setups[0]["honest_label"]
+
+
+def test_prz_proximity_completed_no_forward_wording():
+    """completed(D点已发生)的 PRZ 接近度不应含"前瞻等待"——D 已反应过 PRZ，语义矛盾修复。"""
+    from smc_tracker.dashboard import _prz_proximity
+    txt = _prz_proximity(100, 110, 120, is_completed=True)
+    assert "前瞻等待" not in txt
+    assert "D点已反应" in txt
+
+
+def test_prz_proximity_forming_keeps_forward_wording():
+    """forming(D点未到)保持前瞻语义——价格逼近 PRZ 是真前瞻提前量。"""
+    from smc_tracker.dashboard import _prz_proximity
+    txt = _prz_proximity(100, 110, 120, is_completed=False)
+    assert "前瞻等待" in txt
+
+
+def test_enrich_setup_completed_proximity_no_forward():
+    """端到端：_enrich_setup 对 completed setup 传 is_completed=True，措辞不含前瞻等待。"""
+    from smc_tracker.dashboard import _enrich_setup
+    d = _enrich_setup({"kind": "completed", "prz_lo": 110, "prz_hi": 120, "price": 100}, 100)
+    assert "前瞻等待" not in d["prz_proximity"]
