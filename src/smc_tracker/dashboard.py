@@ -975,10 +975,32 @@ async def serve(db_path: str, host: str = "127.0.0.1", port: int = 8787) -> None
         status = 503 if overall == "down" else 200
         return aiohttp.web.json_response(payload, status=status)
 
+    async def handle_harmonic(request: aiohttp.web.Request) -> aiohttp.web.Response:
+        """GET /harmonic — 谐波形态独立 HTML 页。"""
+        now_ms = int(time.time() * 1000)
+        h_state = build_harmonic_state(store, now_ms)
+        html = render_harmonic_html(h_state)
+        return aiohttp.web.Response(
+            text=html,
+            content_type="text/html",
+            charset="utf-8",
+        )
+
+    async def handle_api_harmonic(request: aiohttp.web.Request) -> aiohttp.web.Response:
+        """GET /api/harmonic — 谐波形态 JSON，供前端 setInterval 5s 拉取刷新。"""
+        now_ms = int(time.time() * 1000)
+        h_state = build_harmonic_state(store, now_ms)
+        return aiohttp.web.json_response(
+            h_state, dumps=lambda o: json.dumps(o, default=str)
+        )
+
     app = aiohttp.web.Application()
     app.router.add_get("/", handle_index)
     app.router.add_get("/api/state", handle_api_state)
     app.router.add_get("/health", handle_health)
+    # 谐波形态独立页（与 HL 主页分开，/harmonic + /api/harmonic）
+    app.router.add_get("/harmonic", handle_harmonic)
+    app.router.add_get("/api/harmonic", handle_api_harmonic)
 
     print(f"仪表盘: http://{host}:{port}")
     runner = aiohttp.web.AppRunner(app)
@@ -991,6 +1013,258 @@ async def serve(db_path: str, host: str = "127.0.0.1", port: int = 8787) -> None
     finally:
         await runner.cleanup()
         store.close()
+
+
+# ---------------------------------------------------------------------------
+# 谐波形态独立页 —— build_harmonic_state / render_harmonic_html / 路由
+# ---------------------------------------------------------------------------
+
+# 谐波 setups 列序（与表契约对齐）
+_HARMONIC_KEYS = [
+    "ts", "coin", "tf", "kind", "pattern", "direction", "price",
+    "entry_lo", "entry_hi", "stop", "target1", "target2", "rr",
+    "confidence", "knn", "orderflow", "fib_note", "prz_lo", "prz_hi",
+]
+
+
+def build_harmonic_state(store: Any, now_ms: int) -> dict:
+    """从 store.conn 查询 harmonic_setups，分 completed/forming 两组返回 dict。
+
+    表不存在/为空时各组返回 []，不抛异常（防御性查询）。
+    """
+    gen_str = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(now_ms / 1000))
+
+    rows = _safe_rows(
+        store.conn,
+        "SELECT ts,coin,tf,kind,pattern,direction,price,"
+        "entry_lo,entry_hi,stop,target1,target2,rr,"
+        "confidence,knn,orderflow,fib_note,prz_lo,prz_hi "
+        "FROM harmonic_setups ORDER BY confidence DESC",
+    )
+
+    completed: list[dict] = []
+    forming: list[dict] = []
+    for r in rows:
+        d = _row_to_dict(r, _HARMONIC_KEYS)
+        if d.get("kind") == "completed":
+            completed.append(d)
+        else:
+            forming.append(d)
+
+    return {
+        "completed": completed,
+        "forming": forming,
+        "generated_at": gen_str,
+    }
+
+
+# 谐波页 HTML 模板（深色主题，与现有 _HTML_TEMPLATE 风格一致）
+_HARMONIC_HTML_TEMPLATE = """<!DOCTYPE html>
+<html lang="zh-Hans">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>谐波形态 Setup</title>
+<style>
+:root{{
+  --bg:#0d1117;--card:#161b22;--border:#30363d;--text:#c9d1d9;
+  --muted:#8b949e;--green:#3fb950;--red:#f85149;--blue:#58a6ff;
+  --yellow:#e3b341;--purple:#bc8cff;--orange:#ffa657;
+}}
+*{{box-sizing:border-box;margin:0;padding:0}}
+body{{background:var(--bg);color:var(--text);font-family:"SF Mono",ui-monospace,monospace;font-size:13px;line-height:1.5}}
+header{{padding:16px 24px;border-bottom:1px solid var(--border);display:flex;align-items:baseline;gap:16px;flex-wrap:wrap}}
+h1{{font-size:20px;color:var(--blue)}}
+#meta{{color:var(--muted);font-size:12px}}
+.nav-link{{font-size:12px;color:var(--muted);text-decoration:none;border:1px solid var(--border);
+  border-radius:4px;padding:2px 8px}}
+.nav-link:hover{{color:var(--blue);border-color:var(--blue)}}
+.disclaimer{{margin:12px 16px;padding:10px 14px;background:#1c1a10;border:1px solid #5a4a00;
+  border-radius:6px;color:var(--yellow);font-size:12px;line-height:1.6}}
+main{{display:grid;gap:16px;padding:16px}}
+.card{{background:var(--card);border:1px solid var(--border);border-radius:8px;overflow:hidden}}
+.card-title{{padding:10px 14px;border-bottom:1px solid var(--border);font-weight:700;
+  color:var(--blue);font-size:13px}}
+.card-body{{padding:12px 14px;overflow-x:auto}}
+table{{width:100%;border-collapse:collapse;font-size:12px}}
+th{{color:var(--muted);font-weight:600;text-align:left;padding:4px 6px;
+  border-bottom:1px solid var(--border)}}
+td{{padding:3px 6px;vertical-align:top;white-space:nowrap}}
+tr:hover td{{background:rgba(255,255,255,.03)}}
+.long{{color:var(--green)}} .short{{color:var(--red)}}
+.pos{{color:var(--green)}} .neg{{color:var(--red)}}
+.none{{color:var(--muted);font-style:italic}}
+.tag{{display:inline-block;padding:1px 5px;border-radius:4px;font-size:11px;font-weight:600}}
+.tag-long{{background:#1a3a2a;color:var(--green)}}
+.tag-short{{background:#3a1a1a;color:var(--red)}}
+.coin{{color:var(--orange);font-weight:600}}
+.conf-bar{{display:inline-block;height:8px;background:var(--blue);border-radius:2px;
+  vertical-align:middle;margin-right:4px}}
+.knn-ok{{color:var(--green)}} .knn-no{{color:var(--muted)}} .knn-unk{{color:var(--yellow)}}
+.of-ok{{color:var(--green)}} .of-no{{color:var(--muted)}}
+#refresh-bar{{font-size:11px;color:var(--muted);padding:4px 24px;border-top:1px solid var(--border)}}
+</style>
+</head>
+<body>
+<header>
+  <h1>🔷 谐波形态 + 可执行交易 Setup</h1>
+  <span id="meta">加载中…</span>
+  <a class="nav-link" href="/">← HL 主页</a>
+</header>
+
+<div class="disclaimer">
+  ⚠️ <strong>确认层非投资建议</strong>：谐波PRZ前瞻 × 订单流确认；
+  挂单墙可能 spoof/吸收 ≠ 必反转；KNN ≈ 随机基线（历史 KNN 命中无真实 alpha，仅供参考）。
+  入场需等待价格进入进场区 + 订单流/成交量确认，止损触碰即离场。
+</div>
+
+<main id="main"><!-- 由 JS renderAll() 填充 --></main>
+<div id="refresh-bar">自动刷新 · 5 秒</div>
+<script>
+const S = __INITIAL_STATE__;
+
+// ---------- 工具函数 ----------
+function fmtTime(ms){{
+  if(ms==null)return'—';
+  const d=new Date(ms);
+  return d.toLocaleTimeString('zh-CN',{{hour12:false}});
+}}
+function fmtNum(v,dec){{
+  if(v==null||v===undefined)return'—';
+  const n=parseFloat(v);
+  return isNaN(n)?'—':n.toFixed(dec!=null?dec:4);
+}}
+function fmtPct(v){{
+  if(v==null)return'—';
+  return(parseFloat(v)*100).toFixed(1)+'%';
+}}
+function none(){{return'<span class="none">（无数据）</span>';}}
+
+// 方向标签：看多绿 / 看空红
+function dirTag(d){{
+  if(!d)return'—';
+  if(d==='long')return'<span class="tag tag-long">看多</span>';
+  if(d==='short')return'<span class="tag tag-short">看空</span>';
+  return'<span>'+d+'</span>';
+}}
+
+// 置信进度条 + 百分比（confidence 为 0~1 小数）
+function confBar(v){{
+  if(v==null)return'—';
+  const pct=Math.round(parseFloat(v)*100);
+  const w=Math.max(2,pct);
+  return'<span class="conf-bar" style="width:'+w+'px"></span>'+pct+'%';
+}}
+
+// KNN 标记（✓/✗/?）
+function knnTag(v){{
+  if(v==null||v==='')return'<span class="knn-unk">?</span>';
+  if(v==='✓')return'<span class="knn-ok">✓</span>';
+  if(v==='✗')return'<span class="knn-no">✗</span>';
+  return'<span class="knn-unk">'+v+'</span>';
+}}
+
+// 订单流标记（'✓...'=确认/绿; '✗'=否定/灰; ''=无数据/灰）
+function ofTag(v){{
+  if(v==null||v==='')return'<span class="of-no">—</span>';
+  if(v.startsWith('✓'))return'<span class="of-ok">'+v+'</span>';
+  return'<span class="of-no">'+v+'</span>';
+}}
+
+// 进场区间 "entry_lo ~ entry_hi"，NULL 安全
+function fmtRange(lo,hi){{
+  if(lo==null&&hi==null)return'—';
+  const l=lo!=null?fmtNum(lo,4):'—';
+  const h=hi!=null?fmtNum(hi,4):'—';
+  return l+' ~ '+h;
+}}
+
+// ---------- 完整形态（completed）表格渲染 ----------
+function renderCompleted(rows){{
+  if(!rows||!rows.length)return none();
+  let h='<table><tr>'
+      +'<th>币/周期</th><th>形态</th><th>方向</th><th>进场区</th>'
+      +'<th>止损</th><th>目标1</th><th>目标2</th><th>盈亏比</th>'
+      +'<th>置信</th><th>KNN</th><th>订单流</th>'
+      +'</tr>';
+  rows.forEach(r=>{{
+    h+='<tr>'
+      +'<td><span class="coin">'+r.coin+'</span>'
+      +' <span style="color:var(--muted);font-size:11px">'+r.tf+'</span></td>'
+      +'<td>'+r.pattern+'</td>'
+      +'<td>'+dirTag(r.direction)+'</td>'
+      +'<td>'+fmtRange(r.entry_lo,r.entry_hi)+'</td>'
+      +'<td class="'+(r.direction==='long'?'neg':'pos')+'">'+fmtNum(r.stop,4)+'</td>'
+      +'<td>'+fmtNum(r.target1,4)+'</td>'
+      +'<td>'+fmtNum(r.target2,4)+'</td>'
+      +'<td class="pos">'+fmtNum(r.rr,2)+'</td>'
+      +'<td>'+confBar(r.confidence)+'</td>'
+      +'<td>'+knnTag(r.knn)+'</td>'
+      +'<td>'+ofTag(r.orderflow)+'</td>'
+      +'</tr>';
+  }});
+  return h+'</table>';
+}}
+
+// ---------- 成形中（forming）PRZ 前瞻表格 ----------
+function renderForming(rows){{
+  if(!rows||!rows.length)return none();
+  let h='<table><tr>'
+      +'<th>币/周期</th><th>形态</th><th>方向</th><th>PRZ 区间</th><th>置信</th>'
+      +'</tr>';
+  rows.forEach(r=>{{
+    h+='<tr>'
+      +'<td><span class="coin">'+r.coin+'</span>'
+      +' <span style="color:var(--muted);font-size:11px">'+r.tf+'</span></td>'
+      +'<td>'+r.pattern+'</td>'
+      +'<td>'+dirTag(r.direction)+'</td>'
+      +'<td>'+fmtRange(r.prz_lo,r.prz_hi)+'</td>'
+      +'<td>'+confBar(r.confidence)+'</td>'
+      +'</tr>';
+  }});
+  return h+'</table>';
+}}
+
+// ---------- 主渲染 ----------
+function renderAll(state){{
+  const gen=state.generated_at||'--';
+  document.getElementById('meta').textContent='生成于 '+gen;
+
+  const sections=[
+    ['✅ 完整形态（入场触发）','completed',renderCompleted],
+    ['🔭 成形中（前瞻 PRZ）','forming',renderForming],
+  ];
+
+  document.getElementById('main').innerHTML=sections.map(([title,key,fn])=>
+    '<div class="card">'
+    +'<div class="card-title">'+title+'</div>'
+    +'<div class="card-body">'+fn(state[key]||[])+'</div>'
+    +'</div>'
+  ).join('');
+}}
+
+// ---------- 首屏 + 5s 自动刷新 ----------
+renderAll(S);
+async function refresh(){{
+  try{{
+    const r=await fetch('/api/harmonic');
+    if(r.ok)renderAll(await r.json());
+  }}catch(e){{console.warn('harmonic refresh err',e)}}
+}}
+setInterval(refresh,5000);
+</script>
+</body>
+</html>"""
+
+
+def render_harmonic_html(state: dict) -> str:
+    """将 build_harmonic_state 结果渲染成谐波形态独立自包含 HTML 页。
+
+    复用与 render_html 相同的 {{/}} 转义 + __INITIAL_STATE__ 注入模式。
+    """
+    state_json = json.dumps(state, ensure_ascii=False, default=str)
+    html = _HARMONIC_HTML_TEMPLATE.replace("{{", "{").replace("}}", "}")
+    return html.replace("__INITIAL_STATE__", state_json)
 
 
 # 兼容直接 import asyncio

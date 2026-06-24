@@ -1145,3 +1145,611 @@ class TestOrderflowConfirmIntegration:
         card = self.monitor.render(rows, _NOW_MS)
         assert card is not None
         assert "ask" in card, f"short 方向确认行应含 ask，卡片:\n{card}"
+
+
+# ── TDD: to_records + DB 落库往返测试 ──────────────────────────────────────────
+
+def _make_completed_hit_with_setup(
+    *,
+    direction: str = "long",
+    entry_lo: float = 60200.0,
+    entry_hi: float = 60650.0,
+    stop: float = 59500.0,
+    target1: float = 62100.0,
+    target2: float = 64000.0,
+    rr: float = 2.08,
+    confidence: float = 0.73,
+    fib_note: str = "XA-Fib=0.618(60400.0)",
+    knn_supports: bool | None = True,
+    orderflow_confirmed: bool | None = None,  # None=无数据, True=确认, False=未确认
+    wall_usd: float = 500_000.0,
+    pattern: str = "Gartley",
+    coin: str = "BTC",
+    tf: str = "4H",
+) -> dict:
+    """构造含 setup 的 completed hit dict（模拟 refresh 产出格式）。"""
+    from smc_tracker.signals.trade_setup import TradeSetup
+    from smc_tracker.signals.orderflow_confirm import OrderflowConfirm
+
+    # 构建 orderflow
+    if orderflow_confirmed is None:
+        of = None
+    elif orderflow_confirmed:
+        of = OrderflowConfirm(
+            confirmed=True, wall_usd=wall_usd, wall_dist_pct=0.005,
+            imbalance=0.35, note="bid墙确认"
+        )
+    else:
+        of = OrderflowConfirm(
+            confirmed=False, wall_usd=0.0, wall_dist_pct=1.0,
+            imbalance=0.0, note="PRZ无同向墙"
+        )
+
+    dir_raw = "bull" if direction == "long" else "bear"
+    setup = TradeSetup(
+        coin=coin, tf=tf, direction=direction, pattern=pattern,
+        completed=True, entry_lo=entry_lo, entry_hi=entry_hi,
+        stop=stop, target1=target1, target2=target2, rr=rr,
+        fib_note=fib_note, knn_supports=knn_supports, knn_note="KNN≈随机基线",
+        position_qty=0.0027, position_notional=163.0,
+        confidence=confidence, note="诚实标注",
+        src_key=f"C|{pattern}|{direction}|60400.0",
+        orderflow=of,
+    )
+    return {
+        "pattern": pattern,
+        "direction": dir_raw,
+        "prz": (entry_lo, entry_hi),
+        "completed": True,
+        "confidence": confidence,
+        "confluence": 4,
+        "points": {"D": (99, 60400.0)},
+        "setup": setup,
+    }
+
+
+def _make_forming_hit(
+    *,
+    direction: str = "bull",
+    prz_lo: float = 60000.0,
+    prz_hi: float = 60500.0,
+    confidence: float = 0.65,
+    pattern: str = "Bat",
+) -> dict:
+    """构造 forming hit dict（无 setup，模拟 refresh 产出格式）。"""
+    return {
+        "pattern": pattern,
+        "direction": direction,
+        "prz": (prz_lo, prz_hi),
+        "completed": False,
+        "confidence": confidence,
+        "confluence": 3,
+        "setup": None,
+    }
+
+
+_NOW_REC = 1_700_100_000_000
+
+
+class TestToRecords:
+    """to_records 纯函数：把 refresh rows 展平成 19 列 tuple 列表。"""
+
+    def setup_method(self) -> None:
+        self.monitor = HarmonicMonitor(
+            coin_to_symbol={"BTC": "BTCUSDT", "ETH": "ETHUSDT"},
+            timeframes=["4H"],
+            bars=300,
+            order=3,
+            tol=0.05,
+            top_n=10,
+        )
+
+    def _make_rows_completed_with_of(
+        self,
+        *,
+        knn_supports: bool | None = True,
+        orderflow_confirmed: bool | None = True,
+        wall_usd: float = 500_000.0,
+    ) -> list[dict]:
+        hit = _make_completed_hit_with_setup(
+            knn_supports=knn_supports,
+            orderflow_confirmed=orderflow_confirmed,
+            wall_usd=wall_usd,
+        )
+        return [
+            {
+                "coin": "BTC",
+                "symbol": "BTCUSDT",
+                "price": 62538.5,
+                "tf": "4H",
+                "completed": [hit],
+                "forming": [],
+            }
+        ]
+
+    def _make_rows_forming(self) -> list[dict]:
+        hit = _make_forming_hit()
+        return [
+            {
+                "coin": "ETH",
+                "symbol": "ETHUSDT",
+                "price": 1835.0,
+                "tf": "1H",
+                "completed": [],
+                "forming": [hit],
+            }
+        ]
+
+    def test_to_records_returns_list(self) -> None:
+        """to_records 返回列表。"""
+        rows = self._make_rows_completed_with_of()
+        result = self.monitor.to_records(rows, _NOW_REC)
+        assert isinstance(result, list)
+
+    def test_completed_with_setup_produces_one_record(self) -> None:
+        """completed hit 含 setup → 产出 1 条记录。"""
+        rows = self._make_rows_completed_with_of()
+        result = self.monitor.to_records(rows, _NOW_REC)
+        assert len(result) == 1
+
+    def test_record_has_19_columns(self) -> None:
+        """每条记录恰好 19 列（符合 harmonic_setups schema）。"""
+        rows = self._make_rows_completed_with_of()
+        result = self.monitor.to_records(rows, _NOW_REC)
+        assert len(result[0]) == 19, f"期望 19 列，实际 {len(result[0])} 列"
+
+    def test_completed_kind_is_completed(self) -> None:
+        """completed hit → kind='completed'（列 index=3）。"""
+        rows = self._make_rows_completed_with_of()
+        rec = self.monitor.to_records(rows, _NOW_REC)[0]
+        assert rec[3] == "completed", f"kind 应为 'completed'，实际 {rec[3]!r}"
+
+    def test_completed_direction_long(self) -> None:
+        """bull direction → direction='long'（列 index=5）。"""
+        rows = self._make_rows_completed_with_of()
+        rec = self.monitor.to_records(rows, _NOW_REC)[0]
+        assert rec[5] == "long", f"direction 应为 'long'，实际 {rec[5]!r}"
+
+    def test_completed_direction_short(self) -> None:
+        """bear direction → direction='short'。"""
+        hit = _make_completed_hit_with_setup(direction="short")
+        rows = [{"coin": "BTC", "symbol": "BTCUSDT", "price": 60000.0, "tf": "4H",
+                 "completed": [hit], "forming": []}]
+        rec = self.monitor.to_records(rows, _NOW_REC)[0]
+        assert rec[5] == "short", f"direction 应为 'short'，实际 {rec[5]!r}"
+
+    def test_completed_price_is_float(self) -> None:
+        """price 字段（列 index=6）是 float。"""
+        rows = self._make_rows_completed_with_of()
+        rec = self.monitor.to_records(rows, _NOW_REC)[0]
+        assert isinstance(rec[6], float), f"price 应为 float，实际 {type(rec[6])}"
+
+    def test_completed_entry_lo_hi_from_setup(self) -> None:
+        """entry_lo/hi（列 7/8）来自 setup，是 float。"""
+        rows = self._make_rows_completed_with_of()
+        rec = self.monitor.to_records(rows, _NOW_REC)[0]
+        assert isinstance(rec[7], float), f"entry_lo 应为 float"
+        assert isinstance(rec[8], float), f"entry_hi 应为 float"
+        assert rec[7] == 60200.0
+        assert rec[8] == 60650.0
+
+    def test_completed_stop_target_from_setup(self) -> None:
+        """stop/target1/target2/rr（列 9-12）来自 setup，非 None。"""
+        rows = self._make_rows_completed_with_of()
+        rec = self.monitor.to_records(rows, _NOW_REC)[0]
+        assert rec[9] == 59500.0,  f"stop 应为 59500.0，实际 {rec[9]}"
+        assert rec[10] == 62100.0, f"target1 应为 62100.0，实际 {rec[10]}"
+        assert rec[11] == 64000.0, f"target2 应为 64000.0，实际 {rec[11]}"
+        assert abs(rec[12] - 2.08) < 1e-6, f"rr 应为 2.08，实际 {rec[12]}"
+
+    def test_knn_true_maps_to_checkmark(self) -> None:
+        """knn_supports=True → knn='✓'（列 index=14）。"""
+        rows = self._make_rows_completed_with_of(knn_supports=True)
+        rec = self.monitor.to_records(rows, _NOW_REC)[0]
+        assert rec[14] == "✓", f"knn 应为 '✓'，实际 {rec[14]!r}"
+
+    def test_knn_false_maps_to_cross(self) -> None:
+        """knn_supports=False → knn='✗'。"""
+        rows = self._make_rows_completed_with_of(knn_supports=False)
+        rec = self.monitor.to_records(rows, _NOW_REC)[0]
+        assert rec[14] == "✗", f"knn 应为 '✗'，实际 {rec[14]!r}"
+
+    def test_knn_none_maps_to_question(self) -> None:
+        """knn_supports=None → knn='?'。"""
+        rows = self._make_rows_completed_with_of(knn_supports=None)
+        rec = self.monitor.to_records(rows, _NOW_REC)[0]
+        assert rec[14] == "?", f"knn 应为 '?'，实际 {rec[14]!r}"
+
+    def test_orderflow_confirmed_maps_to_checkmark_bid(self) -> None:
+        """orderflow.confirmed=True, long → orderflow='✓bid500000.0'（列 index=15）。"""
+        rows = self._make_rows_completed_with_of(
+            orderflow_confirmed=True, wall_usd=500_000.0
+        )
+        rec = self.monitor.to_records(rows, _NOW_REC)[0]
+        assert rec[15].startswith("✓bid"), f"orderflow 应以 '✓bid' 开头，实际 {rec[15]!r}"
+
+    def test_orderflow_not_confirmed_maps_to_cross(self) -> None:
+        """orderflow.confirmed=False → orderflow='✗'。"""
+        rows = self._make_rows_completed_with_of(orderflow_confirmed=False)
+        rec = self.monitor.to_records(rows, _NOW_REC)[0]
+        assert rec[15] == "✗", f"orderflow 应为 '✗'，实际 {rec[15]!r}"
+
+    def test_orderflow_none_maps_to_empty(self) -> None:
+        """setup.orderflow=None（无数据）→ orderflow=''。"""
+        rows = self._make_rows_completed_with_of(orderflow_confirmed=None)
+        rec = self.monitor.to_records(rows, _NOW_REC)[0]
+        assert rec[15] == "", f"orderflow 无数据应为 ''，实际 {rec[15]!r}"
+
+    def test_forming_kind_is_forming(self) -> None:
+        """forming hit → kind='forming'（列 index=3）。"""
+        rows = self._make_rows_forming()
+        result = self.monitor.to_records(rows, _NOW_REC)
+        assert len(result) == 1
+        rec = result[0]
+        assert rec[3] == "forming", f"kind 应为 'forming'，实际 {rec[3]!r}"
+
+    def test_forming_direction_bull_maps_long(self) -> None:
+        """forming bull → direction='long'。"""
+        rows = self._make_rows_forming()
+        rec = self.monitor.to_records(rows, _NOW_REC)[0]
+        assert rec[5] == "long", f"forming bull→direction 应为 'long'，实际 {rec[5]!r}"
+
+    def test_forming_direction_bear_maps_short(self) -> None:
+        """forming bear → direction='short'。"""
+        hit = _make_forming_hit(direction="bear")
+        rows = [{"coin": "ETH", "symbol": "ETHUSDT", "price": 1835.0, "tf": "1H",
+                 "completed": [], "forming": [hit]}]
+        rec = self.monitor.to_records(rows, _NOW_REC)[0]
+        assert rec[5] == "short", f"forming bear→direction 应为 'short'，实际 {rec[5]!r}"
+
+    def test_forming_stop_target_are_none(self) -> None:
+        """forming hit stop/target1/target2 为 None（无精确值）。"""
+        rows = self._make_rows_forming()
+        rec = self.monitor.to_records(rows, _NOW_REC)[0]
+        assert rec[9] is None,  f"forming stop 应为 None，实际 {rec[9]}"
+        assert rec[10] is None, f"forming target1 应为 None，实际 {rec[10]}"
+        assert rec[11] is None, f"forming target2 应为 None，实际 {rec[11]}"
+
+    def test_forming_entry_is_prz(self) -> None:
+        """forming entry_lo/hi 等于 hit.prz（列 7/8）。"""
+        rows = self._make_rows_forming()
+        rec = self.monitor.to_records(rows, _NOW_REC)[0]
+        assert rec[7] == 60000.0, f"forming entry_lo 应为 60000.0，实际 {rec[7]}"
+        assert rec[8] == 60500.0, f"forming entry_hi 应为 60500.0，实际 {rec[8]}"
+
+    def test_forming_prz_lo_hi(self) -> None:
+        """forming prz_lo/prz_hi（列 17/18）来自 hit.prz。"""
+        rows = self._make_rows_forming()
+        rec = self.monitor.to_records(rows, _NOW_REC)[0]
+        assert rec[17] == 60000.0, f"prz_lo 应为 60000.0，实际 {rec[17]}"
+        assert rec[18] == 60500.0, f"prz_hi 应为 60500.0，实际 {rec[18]}"
+
+    def test_ts_column_is_now_ms(self) -> None:
+        """列 index=0 是 now_ms 时间戳。"""
+        rows = self._make_rows_completed_with_of()
+        rec = self.monitor.to_records(rows, _NOW_REC)[0]
+        assert rec[0] == _NOW_REC, f"ts 应为 {_NOW_REC}，实际 {rec[0]}"
+
+    def test_mixed_rows_produces_multiple_records(self) -> None:
+        """completed + forming 各一条 row → 产出 2 条记录。"""
+        completed_row = self._make_rows_completed_with_of()[0]
+        forming_row = self._make_rows_forming()[0]
+        result = self.monitor.to_records([completed_row, forming_row], _NOW_REC)
+        assert len(result) == 2, f"应有 2 条记录，实际 {len(result)}"
+
+    def test_completed_no_setup_uses_prz_nulls(self) -> None:
+        """completed hit setup=None → stop/target/entry 均为 NULL，prz 来自 hit。"""
+        hit = {
+            "pattern": "Bat", "direction": "bull",
+            "prz": (1700.0, 1720.0), "completed": True,
+            "confidence": 0.68, "confluence": 4,
+            "points": {"D": (10, 1710.0)}, "setup": None,
+        }
+        rows = [{"coin": "ETH", "symbol": "ETHUSDT", "price": 1835.0, "tf": "1H",
+                 "completed": [hit], "forming": []}]
+        result = self.monitor.to_records(rows, _NOW_REC)
+        assert len(result) == 1
+        rec = result[0]
+        assert rec[3] == "completed"
+        assert rec[7] is None, f"no-setup entry_lo 应为 None，实际 {rec[7]}"
+        assert rec[9] is None, f"no-setup stop 应为 None，实际 {rec[9]}"
+        assert rec[17] == 1700.0, f"prz_lo 应为 1700.0，实际 {rec[17]}"
+        assert rec[18] == 1720.0, f"prz_hi 应为 1720.0，实际 {rec[18]}"
+
+
+# ── TDD: DB 优先 / live 回退 / store=None 三模式 ────────────────────────────────
+
+
+def _make_candles(n: int, coin: str = "BTC", tf: str = "4H") -> list:
+    """构造 n 根合成 Candle（导入 smc_tracker 的 Candle dataclass）。
+
+    价格在 60000–62000 之间小幅波动，满足谐波最小窗口要求。
+    """
+    from smc_tracker.models import Candle
+    step_ms = 4 * 3600 * 1000  # 4H 周期 = 14400000 ms
+    base_ms = 1_700_000_000_000
+    result: list[Candle] = []
+    for i in range(n):
+        o = 60000.0 + (i % 5) * 200.0
+        h = o + 300.0
+        l = o - 300.0
+        c = o + 100.0
+        result.append(Candle(
+            coin=coin, interval=tf,
+            open_time_ms=base_ms + i * step_ms,
+            close_time_ms=base_ms + (i + 1) * step_ms,
+            o=o, h=h, l=l, c=c, v=1.5, n=0,
+        ))
+    return result
+
+
+class _FakeStoreHarmonic:
+    """FakeStore：满足 get_candles/count_candles/upsert_candles 契约（谐波测试用）。
+
+    构造时传入每次 get_candles 返回的预设列表。
+    upsert_candles 调用记录到 self.upserted。
+    """
+
+    def __init__(self, candles: list, /) -> None:
+        self._candles = candles
+        self.upserted: list[tuple] = []
+
+    def get_candles(self, coin: str, tf: str, limit: int = 1000) -> list:
+        return self._candles[:limit]
+
+    def count_candles(self, coin: str, tf: str) -> int:
+        return len(self._candles)
+
+    def upsert_candles(self, rows) -> None:
+        self.upserted.extend(rows)
+
+
+class TestHarmonicMonitorDBFetch:
+    """HarmonicMonitor DB 优先 / live 回退 / store=None 三模式 TDD 测试。"""
+
+    def setup_method(self) -> None:
+        self.order = 3
+        self.bars = 100
+        # need_min = 2*3+3 = 9；合成 50 根（足够）
+        self._enough_candles = _make_candles(50)
+
+    def _make_monitor(self, store=None) -> "HarmonicMonitor":
+        return HarmonicMonitor(
+            coin_to_symbol={"BTC": "BTCUSDT"},
+            timeframes=["4H"],
+            bars=self.bars,
+            order=self.order,
+            tol=0.05,
+            top_n=5,
+            store=store,
+        )
+
+    def test_store_attribute_exists_default_none(self) -> None:
+        """store 参数默认 None，无 store 时向后兼容。"""
+        mon = self._make_monitor()
+        assert mon.store is None
+
+    def test_store_attribute_stored(self) -> None:
+        """store 参数正确存储为属性。"""
+        fake = _FakeStoreHarmonic(self._enough_candles)
+        mon = self._make_monitor(store=fake)
+        assert mon.store is fake
+
+    def test_db_hit_does_not_call_live_klines(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """DB 数据足够时，live bg.klines 调用次数应为 0。"""
+        live_calls: list[tuple] = []
+
+        async def fake_klines(self_bg, symbol, tf, bars=1000, coin=""):
+            live_calls.append((symbol, tf))
+            return []
+
+        from smc_tracker.bitget import rest as rest_mod
+        monkeypatch.setattr(rest_mod.BitgetREST, "klines", fake_klines)
+
+        fake_store = _FakeStoreHarmonic(self._enough_candles)
+        mon = self._make_monitor(store=fake_store)
+
+        import asyncio
+        asyncio.run(mon.refresh(now_ms=1_700_000_000_000))
+
+        assert len(live_calls) == 0, (
+            f"DB 命中时不应调用 live klines，实际调用 {len(live_calls)} 次: {live_calls}"
+        )
+
+    def test_db_insufficient_falls_back_to_live(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """DB 不足（< need_min）时，应回退 live klines（调用次数 = 1）。"""
+        live_calls: list[tuple] = []
+
+        async def fake_klines(self_bg, symbol, tf, bars=1000, coin=""):
+            live_calls.append((symbol, tf))
+            # 返回足够根数（live 成功）
+            return _make_candles(50)
+
+        from smc_tracker.bitget import rest as rest_mod
+        monkeypatch.setattr(rest_mod.BitgetREST, "klines", fake_klines)
+
+        # 只给 2 根（< need_min=9），强制回退
+        fake_store = _FakeStoreHarmonic(_make_candles(2))
+        mon = self._make_monitor(store=fake_store)
+
+        import asyncio
+        asyncio.run(mon.refresh(now_ms=1_700_000_000_000))
+
+        assert len(live_calls) == 1, (
+            f"DB 不足应调用 live klines 1 次，实际 {len(live_calls)} 次"
+        )
+
+    def test_db_insufficient_upserts_live_data(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """DB 不足回退 live 后，live 数据应被 upsert 回填到 DB（自愈）。"""
+        live_data = _make_candles(50)
+
+        async def fake_klines(self_bg, symbol, tf, bars=1000, coin=""):
+            return live_data
+
+        from smc_tracker.bitget import rest as rest_mod
+        monkeypatch.setattr(rest_mod.BitgetREST, "klines", fake_klines)
+
+        fake_store = _FakeStoreHarmonic(_make_candles(2))
+        mon = self._make_monitor(store=fake_store)
+
+        import asyncio
+        asyncio.run(mon.refresh(now_ms=1_700_000_000_000))
+
+        # upsert_candles 应被调用（至少有 1 条回填记录）
+        assert len(fake_store.upserted) > 0, (
+            "DB 不足回退 live 后，应 upsert 回填数据，但 upsert_candles 未被调用"
+        )
+        # 每条记录格式 (coin, tf, open_ms, o, h, l, c, v)
+        first = fake_store.upserted[0]
+        assert len(first) == 8, f"upsert 行应为 8 列，实际 {len(first)} 列"
+
+    def test_store_none_calls_live(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """store=None（纯 live 模式）时，bg.klines 被正常调用（向后兼容）。"""
+        live_calls: list[tuple] = []
+
+        async def fake_klines(self_bg, symbol, tf, bars=1000, coin=""):
+            live_calls.append((symbol, tf))
+            return []
+
+        from smc_tracker.bitget import rest as rest_mod
+        monkeypatch.setattr(rest_mod.BitgetREST, "klines", fake_klines)
+
+        mon = self._make_monitor(store=None)
+
+        import asyncio
+        asyncio.run(mon.refresh(now_ms=1_700_000_000_000))
+
+        # store=None 时每个 tf 都走 live（1 个币 × 1 个 tf = 1 次）
+        assert len(live_calls) == 1, (
+            f"store=None 时应调用 live klines 1 次，实际 {len(live_calls)} 次"
+        )
+
+    def test_db_hit_upsert_not_called(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """DB 命中时（足够根数），upsert_candles 不应被调用。"""
+        async def fake_klines(self_bg, symbol, tf, bars=1000, coin=""):
+            return []  # 不应被调用
+
+        from smc_tracker.bitget import rest as rest_mod
+        monkeypatch.setattr(rest_mod.BitgetREST, "klines", fake_klines)
+
+        fake_store = _FakeStoreHarmonic(self._enough_candles)
+        mon = self._make_monitor(store=fake_store)
+
+        import asyncio
+        asyncio.run(mon.refresh(now_ms=1_700_000_000_000))
+
+        assert len(fake_store.upserted) == 0, (
+            f"DB 命中时不应调用 upsert_candles，实际 upserted {len(fake_store.upserted)} 行"
+        )
+
+
+class TestHarmonicSetupDB:
+    """insert_harmonic_setups + recent_harmonic_setups 往返测试（用临时 in-memory Store）。"""
+
+    def setup_method(self) -> None:
+        import tempfile
+        import os
+        # 使用 in-memory 或临时文件（Store 不支持 ":memory:" 路径语法时用 tmp）
+        from smc_tracker.storage.db import Store
+        self._tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+        self._tmp.close()
+        self.store = Store(self._tmp.name)
+
+    def teardown_method(self) -> None:
+        import os
+        self.store.close()
+        try:
+            os.unlink(self._tmp.name)
+        except OSError:
+            pass
+
+    def _sample_rows(self) -> list[tuple]:
+        """构造 3 条合法的 19 列 tuple（1 completed, 2 forming）。"""
+        return [
+            # ts, coin, tf, kind, pattern, direction, price,
+            # entry_lo, entry_hi, stop, target1, target2,
+            # rr, confidence, knn, orderflow, fib_note,
+            # prz_lo, prz_hi
+            (
+                _NOW_REC, "BTC", "4H", "completed", "Gartley", "long",
+                62538.5, 60200.0, 60650.0, 59500.0, 62100.0, 64000.0,
+                2.08, 0.73, "✓", "✓bid500000.0", "XA-Fib=0.618",
+                60200.0, 60650.0,
+            ),
+            (
+                _NOW_REC, "ETH", "1H", "forming", "Bat", "long",
+                1835.0, 60000.0, 60500.0, None, None, None,
+                None, 0.65, "?", "", "forming PRZ",
+                60000.0, 60500.0,
+            ),
+            (
+                _NOW_REC, "SOL", "15m", "forming", "Crab", "short",
+                145.0, 130.0, 135.0, None, None, None,
+                None, 0.60, "✗", "✗", "forming PRZ short",
+                130.0, 135.0,
+            ),
+        ]
+
+    def test_insert_and_recent_roundtrip(self) -> None:
+        """insert 后 recent_harmonic_setups 能读回相同行数。"""
+        rows = self._sample_rows()
+        self.store.insert_harmonic_setups(rows)
+        result = self.store.recent_harmonic_setups()
+        assert len(result) == 3, f"应读回 3 行，实际 {len(result)}"
+
+    def test_recent_returns_19_columns(self) -> None:
+        """recent_harmonic_setups 每行 19 列。"""
+        self.store.insert_harmonic_setups(self._sample_rows())
+        result = self.store.recent_harmonic_setups()
+        for row in result:
+            assert len(row) == 19, f"期望 19 列，实际 {len(row)}"
+
+    def test_delete_old_snapshot_on_reinsert(self) -> None:
+        """第二次 insert 时先 DELETE 旧快照，只保最新（防膨胀）。"""
+        self.store.insert_harmonic_setups(self._sample_rows())
+        # 第二次 insert 不同数据
+        new_rows = [
+            (
+                _NOW_REC + 1000, "BTC", "4H", "completed", "Gartley", "long",
+                63000.0, 61000.0, 61500.0, 60000.0, 63500.0, 65500.0,
+                2.1, 0.75, "✓", "", "XA-Fib=0.786",
+                61000.0, 61500.0,
+            ),
+        ]
+        self.store.insert_harmonic_setups(new_rows)
+        result = self.store.recent_harmonic_setups()
+        # 旧 3 行应被删除，只保新的 1 行
+        assert len(result) == 1, f"应只保留最新快照 1 行，实际 {len(result)}"
+
+    def test_recent_ordered_by_confidence_desc(self) -> None:
+        """recent_harmonic_setups 按 confidence DESC 排序。"""
+        self.store.insert_harmonic_setups(self._sample_rows())
+        result = self.store.recent_harmonic_setups()
+        confidences = [row[13] for row in result]  # 列 index=13 是 confidence
+        assert confidences == sorted(confidences, reverse=True), (
+            f"未按 confidence DESC 排序: {confidences}"
+        )
+
+    def test_insert_empty_rows_safe(self) -> None:
+        """insert 空列表不报错，recent 返回空。"""
+        self.store.insert_harmonic_setups([])
+        result = self.store.recent_harmonic_setups()
+        assert result == [], f"空 insert 后 recent 应为 []，实际 {result}"
+
+    def test_null_values_preserved(self) -> None:
+        """forming 行的 NULL 字段（stop/target/rr）读回后仍为 None。"""
+        forming_row = [
+            (
+                _NOW_REC, "ETH", "1H", "forming", "Bat", "long",
+                1835.0, 60000.0, 60500.0, None, None, None,
+                None, 0.65, "?", "", "forming PRZ",
+                60000.0, 60500.0,
+            )
+        ]
+        self.store.insert_harmonic_setups(forming_row)
+        result = self.store.recent_harmonic_setups()
+        assert len(result) == 1
+        rec = result[0]
+        assert rec[9] is None,  f"stop 应为 None，实际 {rec[9]}"
+        assert rec[10] is None, f"target1 应为 None，实际 {rec[10]}"
+        assert rec[12] is None, f"rr 应为 None，实际 {rec[12]}"

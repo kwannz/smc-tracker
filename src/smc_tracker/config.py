@@ -151,6 +151,9 @@ class HarmonicCfg:
     account_usd: float = 10_000.0        # 仓位计算用账户名义资金（USD）
     risk_pct: float = 0.01               # 单笔风险比例（1%）
     target_rr: float = 2.0               # 目标盈亏比
+    # 谐波系统**专用独立飞书**（用户#：与 HL 信号分开推送）；为空则回退主 notifier
+    feishu_webhook: str = ""
+    feishu_secret: str = ""
 
 
 @dataclass(slots=True)

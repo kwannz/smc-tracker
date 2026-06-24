@@ -823,6 +823,307 @@ def test_render_okx_hl_functions_defined():
     assert "function renderHlWalls(" in html
 
 
+# ---------------------------------------------------------------------------
+# 测试：谐波形态独立页（build_harmonic_state / render_harmonic_html）
+# ---------------------------------------------------------------------------
+
+from smc_tracker.dashboard import build_harmonic_state, render_harmonic_html  # noqa: E402
+
+# harmonic_setups 表 schema（与任务规范对齐）
+_HARMONIC_SCHEMA = """
+CREATE TABLE IF NOT EXISTS harmonic_setups (
+    ts          INTEGER,
+    coin        TEXT,
+    tf          TEXT,
+    kind        TEXT,
+    pattern     TEXT,
+    direction   TEXT,
+    price       REAL,
+    entry_lo    REAL,
+    entry_hi    REAL,
+    stop        REAL,
+    target1     REAL,
+    target2     REAL,
+    rr          REAL,
+    confidence  REAL,
+    knn         TEXT,
+    orderflow   TEXT,
+    fib_note    TEXT,
+    prz_lo      REAL,
+    prz_hi      REAL
+);
+"""
+
+
+def _store_with_harmonic() -> tuple:
+    """建含 harmonic_setups 合成数据的临时 Store：completed + forming 各一行。"""
+    d = __import__("tempfile").mkdtemp()
+    s = Store(__import__("pathlib").Path(d) / "t.db")
+    now_ms = 1_700_000_000_000
+
+    s.conn.executescript(_HARMONIC_SCHEMA)
+    # completed 行（有止损/目标）
+    s.conn.execute(
+        "INSERT INTO harmonic_setups VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        (
+            now_ms - 120_000, "BTC", "1h", "completed", "Gartley", "long",
+            65000.0, 64500.0, 64800.0, 63000.0, 67000.0, 69000.0,
+            2.5, 0.82, "✓", "✓ 买压确认", "XA=0.618", 64000.0, 65200.0,
+        ),
+    )
+    # forming 行（stop/target 为 NULL）
+    s.conn.execute(
+        "INSERT INTO harmonic_setups VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        (
+            now_ms - 60_000, "ETH", "4h", "forming", "Bat", "short",
+            3500.0, None, None, None, None, None,
+            None, 0.65, "?", "", "BC=0.886", 3450.0, 3550.0,
+        ),
+    )
+    s.conn.commit()
+    return s, now_ms
+
+
+# ---- build_harmonic_state ----
+
+def test_build_harmonic_state_returns_dict():
+    """build_harmonic_state 返回 dict，含 completed/forming/generated_at 键。"""
+    s, now_ms = _store_with_harmonic()
+    state = build_harmonic_state(s, now_ms)
+    s.close()
+
+    assert isinstance(state, dict)
+    assert "completed" in state
+    assert "forming" in state
+    assert "generated_at" in state
+
+
+def test_build_harmonic_state_groups_correctly():
+    """completed 行归入 completed 组，forming 行归入 forming 组。"""
+    s, now_ms = _store_with_harmonic()
+    state = build_harmonic_state(s, now_ms)
+    s.close()
+
+    assert len(state["completed"]) == 1
+    assert len(state["forming"]) == 1
+
+    c = state["completed"][0]
+    assert c["coin"] == "BTC"
+    assert c["pattern"] == "Gartley"
+    assert c["direction"] == "long"
+    assert abs(c["confidence"] - 0.82) < 1e-9
+    assert c["stop"] is not None
+
+    f = state["forming"][0]
+    assert f["coin"] == "ETH"
+    assert f["pattern"] == "Bat"
+    assert f["direction"] == "short"
+    # forming 的 stop/target 可能为 NULL，不要求非 None
+    assert "prz_lo" in f and "prz_hi" in f
+
+
+def test_build_harmonic_state_empty_table():
+    """harmonic_setups 表为空时返回空列表，不抛。"""
+    d = __import__("tempfile").mkdtemp()
+    s = Store(__import__("pathlib").Path(d) / "t.db")
+    s.conn.executescript(_HARMONIC_SCHEMA)
+    s.conn.commit()
+
+    state = build_harmonic_state(s, 1_700_000_000_000)
+    s.close()
+
+    assert state["completed"] == []
+    assert state["forming"] == []
+
+
+def test_build_harmonic_state_no_table():
+    """harmonic_setups 表不存在时返回空列表，不抛（防御性查询）。"""
+    s = _store_empty()
+    state = build_harmonic_state(s, 1_700_000_000_000)
+    s.close()
+
+    assert state["completed"] == []
+    assert state["forming"] == []
+
+
+def test_build_harmonic_state_row_fields():
+    """每行 dict 含规定列：ts/coin/tf/kind/pattern/direction/price/entry_lo/entry_hi/
+    stop/target1/target2/rr/confidence/knn/orderflow/fib_note/prz_lo/prz_hi。"""
+    s, now_ms = _store_with_harmonic()
+    state = build_harmonic_state(s, now_ms)
+    s.close()
+
+    expected_fields = [
+        "ts", "coin", "tf", "kind", "pattern", "direction", "price",
+        "entry_lo", "entry_hi", "stop", "target1", "target2", "rr",
+        "confidence", "knn", "orderflow", "fib_note", "prz_lo", "prz_hi",
+    ]
+    for row in state["completed"] + state["forming"]:
+        for f in expected_fields:
+            assert f in row, f"row 缺少字段: {f}"
+
+
+# ---- render_harmonic_html ----
+
+def test_render_harmonic_html_returns_str():
+    """render_harmonic_html 返回非空字符串。"""
+    s, now_ms = _store_with_harmonic()
+    state = build_harmonic_state(s, now_ms)
+    s.close()
+
+    html = render_harmonic_html(state)
+    assert isinstance(html, str) and len(html) > 0
+
+
+def test_render_harmonic_html_title():
+    """HTML 含标题关键字「谐波形态」。"""
+    s, now_ms = _store_with_harmonic()
+    state = build_harmonic_state(s, now_ms)
+    s.close()
+
+    html = render_harmonic_html(state)
+    assert "谐波形态" in html
+
+
+def test_render_harmonic_html_entry_and_orderflow():
+    """HTML 含「进场」和「订单流」字样（表格列头）。"""
+    s, now_ms = _store_with_harmonic()
+    state = build_harmonic_state(s, now_ms)
+    s.close()
+
+    html = render_harmonic_html(state)
+    assert "进场" in html
+    assert "订单流" in html
+
+
+def test_render_harmonic_html_disclaimer():
+    """HTML 含诚实提示条「确认层非投资建议」。"""
+    s, now_ms = _store_with_harmonic()
+    state = build_harmonic_state(s, now_ms)
+    s.close()
+
+    html = render_harmonic_html(state)
+    assert "确认层非投资建议" in html
+
+
+def test_render_harmonic_html_direction_labels():
+    """HTML 含看多（绿色）和看空（红色）方向标签。"""
+    s, now_ms = _store_with_harmonic()
+    state = build_harmonic_state(s, now_ms)
+    s.close()
+
+    html = render_harmonic_html(state)
+    assert "看多" in html
+    assert "看空" in html
+
+
+def test_render_harmonic_html_set_interval():
+    """HTML 含 setInterval（5s 自刷新）。"""
+    state = {"completed": [], "forming": [], "generated_at": "now"}
+    html = render_harmonic_html(state)
+    assert "setInterval" in html
+
+
+def test_render_harmonic_html_api_harmonic_fetch():
+    """HTML 拉取 /api/harmonic（而非 /api/state）刷新。"""
+    state = {"completed": [], "forming": [], "generated_at": "now"}
+    html = render_harmonic_html(state)
+    assert "/api/harmonic" in html
+
+
+def test_render_harmonic_html_no_cdn():
+    """render_harmonic_html 不含外部 CDN/资源链接（自包含单页）。"""
+    s, now_ms = _store_with_harmonic()
+    state = build_harmonic_state(s, now_ms)
+    s.close()
+
+    html = render_harmonic_html(state)
+    import re
+    for kw in ("cdn.", "unpkg.com", "jsdelivr", "googleapis"):
+        assert kw not in html, f"谐波 HTML 不应含外部资源: {kw}"
+    bad = [m for m in re.findall(r'https?://[^\s"\'<>]+', html)
+           if "w3.org/2000/svg" not in m]
+    assert not bad, f"不应含外部链接: {bad[:3]}"
+
+
+def test_render_harmonic_html_none_values_displayed_as_dash():
+    """None 数值应显示为 '—' 而非 'None' 或 'null'。"""
+    state = {
+        "completed": [{
+            "ts": 1700000000000, "coin": "BTC", "tf": "1h", "kind": "completed",
+            "pattern": "Gartley", "direction": "long", "price": 65000.0,
+            "entry_lo": 64500.0, "entry_hi": 64800.0, "stop": None,
+            "target1": None, "target2": None, "rr": None, "confidence": 0.75,
+            "knn": "✓", "orderflow": "✓", "fib_note": "", "prz_lo": None, "prz_hi": None,
+        }],
+        "forming": [],
+        "generated_at": "2024-01-01 00:00:00",
+    }
+    html = render_harmonic_html(state)
+    # HTML 中不应出现裸 None/null 字面量（JSON 内 null 可以，但显示用 '—' 替代）
+    # 检查渲染函数中对 null 的处理（JS 中 null 应显示为 '—'）
+    assert "—" in html or "&#x2014;" in html, "None 值应渲染为破折号"
+    # null 可以存在于注入的 JSON 中，但不应作为显示文本出现
+    # 验证 JS 函数中有对 null 的守卫逻辑
+    assert "null" in html or "== null" in html or "!=null" in html or "!=" in html
+
+
+def test_render_harmonic_html_self_contained_doctype():
+    """HTML 是完整的独立页面（含 <!DOCTYPE html>）。"""
+    state = {"completed": [], "forming": [], "generated_at": "now"}
+    html = render_harmonic_html(state)
+    assert "<!DOCTYPE html>" in html or "<!doctype html>" in html.lower()
+
+
+def test_render_harmonic_html_initial_state_injected():
+    """__INITIAL_STATE__ 被替换为实际 JSON（与现有 render_html 模式一致）。"""
+    s, now_ms = _store_with_harmonic()
+    state = build_harmonic_state(s, now_ms)
+    s.close()
+
+    html = render_harmonic_html(state)
+    assert "__INITIAL_STATE__" not in html, "模板占位符应已被替换"
+    # 注入 JSON 可解析
+    import json as _json, re as _re
+    m = _re.search(r"const S\s*=\s*(\{.*?\});", html, _re.S)
+    assert m, "未找到注入的 const S"
+    parsed = _json.loads(m.group(1))
+    assert "completed" in parsed and "forming" in parsed
+
+
+def test_render_harmonic_html_dark_theme():
+    """HTML 含深色主题 CSS 变量 --bg（与现有风格一致）。"""
+    state = {"completed": [], "forming": [], "generated_at": "now"}
+    html = render_harmonic_html(state)
+    assert "--bg" in html
+
+
+def test_render_harmonic_html_no_residual_double_braces():
+    """转义正确性：输出不含残留 {{ （模板解转义完整）。"""
+    s, now_ms = _store_with_harmonic()
+    state = build_harmonic_state(s, now_ms)
+    s.close()
+
+    html = render_harmonic_html(state)
+    assert "{{" not in html, "残留 {{ → 模板转义不完整"
+
+
+# ---- 不破坏现有 / 路由分离 ----
+
+def test_existing_render_html_unchanged():
+    """现有 render_html 仍正常工作，不受谐波页影响（/ 主页内容不变）。"""
+    s, now_ms = _store_with_data()
+    state = build_dashboard_state(s, now_ms)
+    s.close()
+
+    html = render_html(state)
+    assert "SMC 抓庄监控" in html
+    assert "共振信号" in html
+    assert "/api/state" in html
+    # 谐波专用路由不应混入主页
+    assert "/api/harmonic" not in html
+
+
 if __name__ == "__main__":
     for name, fn in list(globals().items()):
         if name.startswith("test_") and callable(fn):

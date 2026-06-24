@@ -146,11 +146,16 @@ class TradingSystem:
         self._div_seen: dict[tuple[str, str], int] = {}   # (coin,direction) -> 上次背离 ts(冷却,降噪)
         self._DIV_COOLDOWN_MS = 900_000     # 同币同向背离 15 分钟冷却(避免每60s重复+高自相关预测)
         self._mids: dict[str, float] = {}     # 全市场中间价（allMids），共识估值用
-        self.notifier = build_notifier(cfg)   # webhook + Telegram 多渠道推送
+        self.notifier = build_notifier(cfg)   # webhook + Telegram 多渠道推送（HL 主通道）
+        # 谐波系统**专用独立飞书**（用户#：与 HL 信号分开推送）；未配置则回退主 notifier
+        from .notify.feishu import FeishuNotifier  # noqa: PLC0415
+        from .notify.multi import MultiNotifier    # noqa: PLC0415
+        _hfs = FeishuNotifier(cfg.harmonic.feishu_webhook, cfg.harmonic.feishu_secret)
+        self.harmonic_notifier = MultiNotifier([_hfs]) if _hfs.enabled else self.notifier
         # HL 事件分类汇总：零散事件按分类聚合，_periodic_hl_digest 周期推一张汇总卡片（降噪去刷屏）
         self.hl_digest = HLDigest(cfg.digest.max_per_cat)
-        # 推送串行队列：所有 _push 入此队，_periodic_push_drain 单 worker 按最小间隔逐条发（防限流丢卡）
-        self._push_queue: asyncio.Queue[str] = asyncio.Queue()
+        # 推送串行队列：(text, notifier) 入队，单 worker 按最小间隔逐条发到指定 notifier（防限流丢卡 + 多通道路由）
+        self._push_queue: asyncio.Queue[tuple[str, Any]] = asyncio.Queue()
         self.analyst = build_analyst(cfg)     # LLM(Codex GPT-5.4) 前瞻研判，未配置则 None
         self.latency = LatencyTracker()       # 热路径「接收→信号」延迟埋点(实证低延迟)
         self.coin_to_symbol: dict[str, str] = {}              # canonical -> bitget symbol
@@ -164,6 +169,7 @@ class TradingSystem:
         self.oi_monitor: BitgetOIMonitor | None = None     # 启动时建（需符号映射）
         self.bb_monitor = None        # BitgetBBMonitor，_seed 后按配置构建（需 tickers 成交额）
         self.harmonic_monitor = None  # HarmonicMonitor，_seed 后按配置构建
+        self.candle_collector = None  # BitgetCandleCollector，_seed 后构建（拉 K 线落 DB 供两板共用）
         self.onchain = OnchainMemeMonitor(store, EVM_RPC,
                                           min_amount_usd=cfg.detection.large_fill_notional_usd)
         self.sol_monitor = SolanaSupplyMonitor(store)   # SOL meme 供应量(mint/burn)监控
@@ -445,21 +451,27 @@ class TradingSystem:
             log.debug("_record_pred 失败 %s %s: %s", kind, coin, exc)
 
     def _push(self, text: str) -> None:
-        """非阻塞**入队**推送：所有推送经单一 worker 按最小间隔逐条发，
+        """非阻塞**入队**推送到 HL 主通道：经单一 worker 按最小间隔逐条发，
         避免飞书(1.5s)/TG(1.2s) 限流静默丢卡（多周期任务并发推送易撞车）。队列无界，put_nowait 不阻塞热路径。"""
         if self.notifier.enabled:
-            self._push_queue.put_nowait(text)
+            self._push_queue.put_nowait((text, self.notifier))
+
+    def _push_harmonic(self, text: str) -> None:
+        """谐波系统**专用通道**推送（独立飞书，与 HL 分开）；未配置独立飞书时回退主通道。"""
+        n = self.harmonic_notifier
+        if getattr(n, "enabled", False):
+            self._push_queue.put_nowait((text, n))
 
     async def _periodic_push_drain(self, min_interval_sec: float = 1.6) -> None:
-        """推送排队串行发送：单 worker 逐条出队、按最小间隔(>飞书1.5s)发送，杜绝限流丢卡。
+        """推送排队串行发送：单 worker 逐条出队、按最小间隔(>飞书1.5s)发送到**指定 notifier**，杜绝限流丢卡。
 
         发送失败只 log.warning 不中断（韧性）；min_interval 略大于飞书 1.5s/TG 1.2s 限流窗口。
         """
         while not self._stopping:
-            text = await self._push_queue.get()
+            text, notifier = await self._push_queue.get()
             try:
-                if self.notifier.enabled:
-                    await self.notifier.send(text, int(time.time() * 1000))
+                if getattr(notifier, "enabled", False):
+                    await notifier.send(text, int(time.time() * 1000))
             except Exception as exc:  # noqa: BLE001 — 单条发送失败不拖垮队列
                 log.warning("推送发送失败: %s", exc)
             finally:
@@ -660,6 +672,7 @@ class TradingSystem:
                     period=self.cfg.bollinger.period,
                     k=self.cfg.bollinger.k,
                     top_n=bb_n,
+                    store=self.store,   # 优先读 DB K线缓存，不足回退 live（减 API/跨重启持久）
                 )
                 log.info("BB 监控器已建，top_%d 币: %s", bb_n, list(bb_c2s.keys())[:6])
 
@@ -679,8 +692,22 @@ class TradingSystem:
                     risk_pct=self.cfg.harmonic.risk_pct,
                     target_rr=self.cfg.harmonic.target_rr,
                     ob_provider=self.orderbook_monitor,  # 订单流确认层（HL l2Book，主流币）
+                    store=self.store,   # 优先读 DB K线缓存，不足回退 live（减 API/跨重启持久）
                 )
                 log.info("谐波监控器已建，top_%d 币: %s", harm_n, list(harm_c2s.keys())[:6])
+
+            # ---- Bitget K线采集器：周期拉永续 K 线落 DB，供 BB/谐波多周期计算共用（减 API 重复拉）----
+            if vol_c2s and (self.cfg.bollinger.enabled or self.cfg.harmonic.enabled):
+                from .monitor.candle_collector import BitgetCandleCollector  # noqa: PLC0415
+                # 币集 = 两板 top_n 的并集；周期 = 两板周期并集；bars 取较大者
+                cc_n = max(self.cfg.bollinger.top_n, self.cfg.harmonic.top_n)
+                cc_c2s = dict(list(vol_c2s.items())[:cc_n])
+                cc_tfs = list(dict.fromkeys(
+                    list(self.cfg.bollinger.timeframes) + list(self.cfg.harmonic.timeframes)))
+                cc_bars = max(self.cfg.bollinger.bars, self.cfg.harmonic.bars)
+                self.candle_collector = BitgetCandleCollector(
+                    cc_c2s, cc_tfs, cc_bars, self.store)
+                log.info("K线采集器已建，%d 币 × %d 周期 → DB", len(cc_c2s), len(cc_tfs))
 
     # ---- 周期任务 ----
     async def _periodic_flush(self, every: float = 5.0) -> None:
@@ -1167,6 +1194,23 @@ class TradingSystem:
             print(board_text)
             self._push(board_text)
 
+    async def _periodic_candle_collect(self, every: float = 300.0) -> None:
+        """周期采集 Bitget 永续 K 线落 DB（BB/谐波多周期计算共用，减重复拉 + 跨重启持久）。
+
+        启动后先延迟 20s（避开 HL seed 带宽），采一次填 DB（让首个板周期可直接读 DB），
+        之后每 every 秒刷新。采集失败只 log.warning，不阻塞其他任务。
+        """
+        if self.candle_collector is None:
+            return
+        await asyncio.sleep(20.0)
+        while not self._stopping:
+            try:
+                n = await self.candle_collector.collect_once()
+                log.info("K线采集落 DB %d 根", n)
+            except Exception as exc:  # noqa: BLE001
+                log.warning("K线采集失败: %s", exc)
+            await asyncio.sleep(every)
+
     async def _periodic_bb_board(self) -> None:
         """周期推送 Bitget 永续多周期布林带压力/支撑卡片（默认 15 分钟）。
 
@@ -1183,7 +1227,7 @@ class TradingSystem:
                 card = self.bb_monitor.render(rows, now)
                 if card:
                     print(card)
-                    self._push(card)
+                    self._push_harmonic(card)   # 独立 TA 通道（与 HL 分开）
             except Exception as exc:  # noqa: BLE001
                 log.warning("布林带周期推送失败: %s", exc)
 
@@ -1205,7 +1249,14 @@ class TradingSystem:
                 card = self.harmonic_monitor.render(rows, now)
                 if card:
                     print(card)
-                    self._push(card)
+                    self._push_harmonic(card)   # 谐波系统专用独立飞书（与 HL 分开）
+                # 谐波 setups 落库（供 dashboard 独立页读取）；落库失败只 warn，不阻塞推送
+                try:
+                    self.store.insert_harmonic_setups(
+                        self.harmonic_monitor.to_records(rows, now)
+                    )
+                except Exception as db_exc:  # noqa: BLE001
+                    log.warning("谐波 setups 落库失败: %s", db_exc)
             except Exception as exc:  # noqa: BLE001
                 log.warning("谐波形态周期推送失败: %s", exc)
 
@@ -1312,6 +1363,7 @@ class TradingSystem:
             self._periodic_config_reload(),
             self._periodic_bb_board(),
             self._periodic_harmonic_board(),
+            self._periodic_candle_collect(),
             self._periodic_push_drain(),
         )
 

@@ -60,7 +60,7 @@ class HarmonicMonitor:
     """
     __slots__ = (
         "coin_to_symbol", "timeframes", "bars", "order", "tol", "top_n",
-        "account_usd", "risk_pct", "target_rr", "ob_provider",
+        "account_usd", "risk_pct", "target_rr", "ob_provider", "store",
     )
 
     def __init__(
@@ -75,6 +75,7 @@ class HarmonicMonitor:
         risk_pct: float = 0.01,
         target_rr: float = 2.0,
         ob_provider: Any | None = None,
+        store: Any | None = None,
     ) -> None:
         self.coin_to_symbol = coin_to_symbol
         self.timeframes = timeframes
@@ -88,6 +89,9 @@ class HarmonicMonitor:
         # 订单流确认提供者（鸭子类型：需有 confirming_wall + book_imbalance）
         # None=无数据（HL l2Book 未覆盖的币），confirm_setup 返回 None，诚实不崩
         self.ob_provider = ob_provider
+        # K 线缓存 store（实现 get_candles/upsert_candles 契约）
+        # None=纯 live 模式（向后兼容）
+        self.store = store
 
     async def refresh(self, now_ms: int) -> list[dict]:
         """并发拉取所有币种 × 周期 K 线，分析谐波形态，返回有形态的行。
@@ -109,12 +113,29 @@ class HarmonicMonitor:
         ) -> tuple[str, str, str, dict | None]:
             """拉单币单周期 K 线并 analyze_candles，构建 trade_setup，返回 (coin, symbol, tf, result|None)。
 
+            优先从 DB 读取 K 线（self.store 非 None 时）；DB 不足则回退到 live 网络拉取，
+            并将 live 数据回填写入 DB（自愈）。store=None 时纯 live（向后兼容）。
+
             在有 candles 的上下文内调用 build_setups，将每条 completed/forming 形态的
             setup 直接注入对应 hit dict 的 "setup" 键（无 setup 则设 None，诚实不崩溃）。
             """
             async with sema:
                 try:
-                    candles = await bg.klines(symbol, tf, bars=self.bars, coin=coin)
+                    # 谐波所需最小 K 线数（2*order+3 是 swing_highs/lows 最小窗口）
+                    need_min: int = 2 * self.order + 3
+
+                    # 优先 DB 读取
+                    candles = self.store.get_candles(coin, tf, self.bars) if self.store is not None else []
+
+                    if len(candles) < need_min:
+                        # DB 不足，回退 live 拉取
+                        candles = await bg.klines(symbol, tf, bars=self.bars, coin=coin)
+                        # live 数据回填 DB（自愈：下次可直接用 DB，减少网络请求）
+                        if self.store is not None and candles:
+                            self.store.upsert_candles([
+                                (coin, tf, k.open_time_ms, k.o, k.h, k.l, k.c, k.v)
+                                for k in candles
+                            ])
                     result = analyze_candles(candles, order=self.order, tol=self.tol)
                     if result is not None:
                         # 构建所有 setup，按 src_key 精确索引（🔴-1: 消除同名形态碰撞）
@@ -230,6 +251,111 @@ class HarmonicMonitor:
 
         rows.sort(key=_max_conf, reverse=True)
         return rows
+
+    def to_records(self, rows: list[dict], now_ms: int) -> list[tuple]:
+        """把 refresh() 返回的 rows 展平成 harmonic_setups 表的 19 列 tuple 列表（纯函数）。
+
+        列顺序（与 DB schema 对齐）：
+          ts, coin, tf, kind, pattern, direction, price,
+          entry_lo, entry_hi, stop, target1, target2,
+          rr, confidence, knn, orderflow, fib_note,
+          prz_lo, prz_hi
+
+        映射规则：
+          - completed 有 setup → 用 setup 的精确进场/止损/目标/rr/confidence/fib_note。
+          - completed 无 setup → entry/stop/target/rr/fib_note 全 NULL，prz 来自 hit.prz。
+          - forming hit → stop/target1/target2/rr=NULL；entry_lo/hi 和 prz=hit.prz。
+          - direction: bull→long, bear→short（forming 与 completed 统一映射）。
+          - knn: True→'✓' / False→'✗' / None→'?'（无 setup 则 '?'）。
+          - orderflow: confirmed→'✓bid{wall_usd}' / not confirmed→'✗' / None→''。
+        """
+        result: list[tuple] = []
+        for row in rows:
+            coin: str = row.get("coin", "")
+            tf: str = row.get("tf", "")
+            price: float = float(row.get("price", 0.0) or 0.0)
+
+            # ---- completed hits ----
+            for hit in row.get("completed") or []:
+                pat: str = str(hit.get("pattern", ""))
+                dir_raw: str = hit.get("direction", "")
+                direction: str = "long" if dir_raw == "bull" else (
+                    "short" if dir_raw == "bear" else dir_raw
+                )
+                hit_conf: float = float(hit.get("confidence", 0.0) or 0.0)
+                prz = hit.get("prz") or (None, None)
+                prz_lo = float(prz[0]) if prz and prz[0] is not None else None
+                prz_hi = float(prz[1]) if prz and len(prz) > 1 and prz[1] is not None else None
+
+                setup = hit.get("setup")
+                if setup is not None:
+                    # 有 setup：用精确进场/止损/目标
+                    entry_lo: float | None = float(setup.entry_lo)
+                    entry_hi: float | None = float(setup.entry_hi)
+                    stop: float | None = float(setup.stop)
+                    target1: float | None = float(setup.target1)
+                    target2: float | None = float(setup.target2)
+                    rr: float | None = float(setup.rr)
+                    confidence: float = float(setup.confidence)
+                    fib_note: str | None = str(setup.fib_note) if setup.fib_note else None
+
+                    # knn 映射
+                    if setup.knn_supports is True:
+                        knn: str = "✓"
+                    elif setup.knn_supports is False:
+                        knn = "✗"
+                    else:
+                        knn = "?"
+
+                    # orderflow 映射
+                    of = setup.orderflow
+                    if of is None:
+                        orderflow_str: str = ""
+                    elif of.confirmed:
+                        orderflow_str = f"✓bid{of.wall_usd}"
+                    else:
+                        orderflow_str = "✗"
+                else:
+                    # 无 setup：退化为 PRZ，止损/目标全 NULL
+                    entry_lo = None
+                    entry_hi = None
+                    stop = None
+                    target1 = None
+                    target2 = None
+                    rr = None
+                    confidence = hit_conf
+                    fib_note = None
+                    knn = "?"
+                    orderflow_str = ""
+
+                result.append((
+                    now_ms, coin, tf, "completed", pat, direction, price,
+                    entry_lo, entry_hi, stop, target1, target2,
+                    rr, confidence, knn, orderflow_str, fib_note,
+                    prz_lo, prz_hi,
+                ))
+
+            # ---- forming hits ----
+            for hit in row.get("forming") or []:
+                pat = str(hit.get("pattern", ""))
+                dir_raw = hit.get("direction", "")
+                direction = "long" if dir_raw == "bull" else (
+                    "short" if dir_raw == "bear" else dir_raw
+                )
+                hit_conf = float(hit.get("confidence", 0.0) or 0.0)
+                prz = hit.get("prz") or (None, None)
+                prz_lo = float(prz[0]) if prz and prz[0] is not None else None
+                prz_hi = float(prz[1]) if prz and len(prz) > 1 and prz[1] is not None else None
+
+                result.append((
+                    now_ms, coin, tf, "forming", pat, direction, price,
+                    prz_lo, prz_hi,   # entry_lo/hi = prz 值
+                    None, None, None,  # stop/target1/target2 = NULL
+                    None, hit_conf, "?", "", None,  # rr/confidence/knn/orderflow/fib_note
+                    prz_lo, prz_hi,
+                ))
+
+        return result
 
     def render(self, rows: list[dict], now_ms: int) -> str | None:
         """渲染谐波形态前瞻卡片。

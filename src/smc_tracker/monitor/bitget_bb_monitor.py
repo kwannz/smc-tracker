@@ -35,7 +35,7 @@ class BitgetBBMonitor:
         rest_base:      Bitget REST API base URL
     """
     __slots__ = (
-        "coin_to_symbol", "timeframes", "bars", "period", "k", "top_n", "rest_base"
+        "coin_to_symbol", "timeframes", "bars", "period", "k", "top_n", "rest_base", "store"
     )
 
     def __init__(
@@ -47,6 +47,7 @@ class BitgetBBMonitor:
         k: float,
         top_n: int,
         rest_base: str = "https://api.bitget.com",
+        store: Any | None = None,
     ) -> None:
         self.coin_to_symbol = coin_to_symbol
         self.timeframes = timeframes
@@ -55,6 +56,9 @@ class BitgetBBMonitor:
         self.k = k
         self.top_n = top_n
         self.rest_base = rest_base
+        # K 线缓存 store（实现 get_candles/upsert_candles 契约）
+        # None=纯 live 模式（向后兼容）
+        self.store = store
 
     async def refresh(self, now_ms: int) -> list[dict]:
         """并发拉取所有币种 × 周期 K 线，计算布林带，返回汇总行。
@@ -72,10 +76,29 @@ class BitgetBBMonitor:
         async def _fetch_tf(
             bg: BitgetREST, symbol: str, coin: str, tf: str
         ) -> tuple[str, str, str, Any]:
-            """拉单币单周期 K 线并计算 analyze_tf，返回 (coin, symbol, tf, result|None)。"""
+            """拉单币单周期 K 线并计算 analyze_tf，返回 (coin, symbol, tf, result|None)。
+
+            优先从 DB 读取 K 线（self.store 非 None 时）；DB 不足则回退到 live 网络拉取，
+            并将 live 数据回填写入 DB（自愈）。store=None 时纯 live（向后兼容）。
+            """
             async with sema:
                 try:
-                    candles = await bg.klines(symbol, tf, bars=self.bars, coin=coin)
+                    # BB 所需最小 K 线数（period+1 才能计算布林带）
+                    need_min: int = self.period + 1
+
+                    # 优先 DB 读取
+                    candles = self.store.get_candles(coin, tf, self.bars) if self.store is not None else []
+
+                    if len(candles) < need_min:
+                        # DB 不足，回退 live 拉取
+                        candles = await bg.klines(symbol, tf, bars=self.bars, coin=coin)
+                        # live 数据回填 DB（自愈：下次可直接用 DB，减少网络请求）
+                        if self.store is not None and candles:
+                            self.store.upsert_candles([
+                                (coin, tf, k.open_time_ms, k.o, k.h, k.l, k.c, k.v)
+                                for k in candles
+                            ])
+
                     result = analyze_tf(candles, period=self.period, k=self.k)
                     return (coin, symbol, tf, result)
                 except Exception as exc:  # noqa: BLE001

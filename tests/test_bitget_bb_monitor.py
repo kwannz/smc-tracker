@@ -203,3 +203,178 @@ def test_render_price_formatted():
     assert card is not None
     # 62,538.40 格式
     assert "62,538" in card
+
+
+# ── TDD: DB 优先 / live 回退 / store=None 三模式 ────────────────────────────────
+
+
+def _make_candles_bb(n: int, coin: str = "BTC", tf: str = "1H") -> list:
+    """构造 n 根合成 Candle（满足 BB period+1 最小窗口要求）。"""
+    from smc_tracker.models import Candle
+    step_ms = 3600 * 1000  # 1H = 3600000 ms
+    base_ms = 1_700_000_000_000
+    result: list[Candle] = []
+    for i in range(n):
+        o = 60000.0 + (i % 7) * 300.0
+        h = o + 200.0
+        l = o - 200.0
+        c = o + 50.0
+        result.append(Candle(
+            coin=coin, interval=tf,
+            open_time_ms=base_ms + i * step_ms,
+            close_time_ms=base_ms + (i + 1) * step_ms,
+            o=o, h=h, l=l, c=c, v=2.0, n=0,
+        ))
+    return result
+
+
+class _FakeStoreBB:
+    """FakeStore：满足 get_candles/count_candles/upsert_candles 契约（BB 测试用）。"""
+
+    def __init__(self, candles: list, /) -> None:
+        self._candles = candles
+        self.upserted: list[tuple] = []
+
+    def get_candles(self, coin: str, tf: str, limit: int = 1000) -> list:
+        return self._candles[:limit]
+
+    def count_candles(self, coin: str, tf: str) -> int:
+        return len(self._candles)
+
+    def upsert_candles(self, rows) -> None:
+        self.upserted.extend(rows)
+
+
+class TestBitgetBBMonitorDBFetch:
+    """BitgetBBMonitor DB 优先 / live 回退 / store=None 三模式 TDD 测试。"""
+
+    def setup_method(self) -> None:
+        self.period = 20
+        self.bars = 100
+        # need_min = period+1 = 21；合成 50 根（足够）
+        self._enough_candles = _make_candles_bb(50)
+
+    def _make_monitor(self, store=None) -> BitgetBBMonitor:
+        return BitgetBBMonitor(
+            coin_to_symbol={"BTC": "BTCUSDT"},
+            timeframes=["1H"],
+            bars=self.bars,
+            period=self.period,
+            k=2.0,
+            top_n=5,
+            store=store,
+        )
+
+    def test_store_attribute_exists_default_none(self) -> None:
+        """store 参数默认 None，无 store 时向后兼容。"""
+        mon = self._make_monitor()
+        assert mon.store is None
+
+    def test_store_attribute_stored(self) -> None:
+        """store 参数正确存储为属性。"""
+        fake = _FakeStoreBB(self._enough_candles)
+        mon = self._make_monitor(store=fake)
+        assert mon.store is fake
+
+    def test_db_hit_does_not_call_live_klines(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """DB 数据足够时，live bg.klines 调用次数应为 0。"""
+        live_calls: list[tuple] = []
+
+        async def fake_klines(self_bg, symbol, tf, bars=1000, coin=""):
+            live_calls.append((symbol, tf))
+            return []
+
+        from smc_tracker.bitget import rest as rest_mod
+        monkeypatch.setattr(rest_mod.BitgetREST, "klines", fake_klines)
+
+        fake_store = _FakeStoreBB(self._enough_candles)
+        mon = self._make_monitor(store=fake_store)
+
+        import asyncio
+        asyncio.run(mon.refresh(now_ms=1_700_000_000_000))
+
+        assert len(live_calls) == 0, (
+            f"DB 命中时不应调用 live klines，实际调用 {len(live_calls)} 次: {live_calls}"
+        )
+
+    def test_db_insufficient_falls_back_to_live(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """DB 不足（< period+1）时，应回退 live klines（调用次数 = 1）。"""
+        live_calls: list[tuple] = []
+
+        async def fake_klines(self_bg, symbol, tf, bars=1000, coin=""):
+            live_calls.append((symbol, tf))
+            return _make_candles_bb(50)
+
+        from smc_tracker.bitget import rest as rest_mod
+        monkeypatch.setattr(rest_mod.BitgetREST, "klines", fake_klines)
+
+        # 只给 5 根（< need_min=21），强制回退
+        fake_store = _FakeStoreBB(_make_candles_bb(5))
+        mon = self._make_monitor(store=fake_store)
+
+        import asyncio
+        asyncio.run(mon.refresh(now_ms=1_700_000_000_000))
+
+        assert len(live_calls) == 1, (
+            f"DB 不足应调用 live klines 1 次，实际 {len(live_calls)} 次"
+        )
+
+    def test_db_insufficient_upserts_live_data(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """DB 不足回退 live 后，live 数据应被 upsert 回填到 DB（自愈）。"""
+        live_data = _make_candles_bb(50)
+
+        async def fake_klines(self_bg, symbol, tf, bars=1000, coin=""):
+            return live_data
+
+        from smc_tracker.bitget import rest as rest_mod
+        monkeypatch.setattr(rest_mod.BitgetREST, "klines", fake_klines)
+
+        fake_store = _FakeStoreBB(_make_candles_bb(5))
+        mon = self._make_monitor(store=fake_store)
+
+        import asyncio
+        asyncio.run(mon.refresh(now_ms=1_700_000_000_000))
+
+        assert len(fake_store.upserted) > 0, (
+            "DB 不足回退 live 后，应 upsert 回填数据，但 upsert_candles 未被调用"
+        )
+        first = fake_store.upserted[0]
+        assert len(first) == 8, f"upsert 行应为 8 列 (coin,tf,open_ms,o,h,l,c,v)，实际 {len(first)} 列"
+
+    def test_store_none_calls_live(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """store=None（纯 live 模式）时，bg.klines 被正常调用（向后兼容）。"""
+        live_calls: list[tuple] = []
+
+        async def fake_klines(self_bg, symbol, tf, bars=1000, coin=""):
+            live_calls.append((symbol, tf))
+            return []
+
+        from smc_tracker.bitget import rest as rest_mod
+        monkeypatch.setattr(rest_mod.BitgetREST, "klines", fake_klines)
+
+        mon = self._make_monitor(store=None)
+
+        import asyncio
+        asyncio.run(mon.refresh(now_ms=1_700_000_000_000))
+
+        assert len(live_calls) == 1, (
+            f"store=None 时应调用 live klines 1 次，实际 {len(live_calls)} 次"
+        )
+
+    def test_db_hit_upsert_not_called(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """DB 命中时（足够根数），upsert_candles 不应被调用。"""
+        async def fake_klines(self_bg, symbol, tf, bars=1000, coin=""):
+            return []
+
+        from smc_tracker.bitget import rest as rest_mod
+        monkeypatch.setattr(rest_mod.BitgetREST, "klines", fake_klines)
+
+        fake_store = _FakeStoreBB(self._enough_candles)
+        mon = self._make_monitor(store=fake_store)
+
+        import asyncio
+        asyncio.run(mon.refresh(now_ms=1_700_000_000_000))
+
+        assert len(fake_store.upserted) == 0, (
+            f"DB 命中时不应调用 upsert_candles，实际 upserted {len(fake_store.upserted)} 行"
+        )

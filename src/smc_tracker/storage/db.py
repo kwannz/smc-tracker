@@ -282,6 +282,41 @@ CREATE TABLE IF NOT EXISTS hl_orderbook_walls (
     notional REAL                 -- 墙名义 USD = px × sz
 );
 CREATE INDEX IF NOT EXISTS ix_hl_obwalls_coin_ts ON hl_orderbook_walls(coin, ts);
+
+CREATE TABLE IF NOT EXISTS harmonic_setups (
+    ts         INTEGER,
+    coin       TEXT,
+    tf         TEXT,
+    kind       TEXT,       -- 'completed' / 'forming'
+    pattern    TEXT,
+    direction  TEXT,       -- 'long' / 'short'
+    price      REAL,
+    entry_lo   REAL,       -- forming 无精确值时为 PRZ 下沿
+    entry_hi   REAL,       -- forming 无精确值时为 PRZ 上沿
+    stop       REAL,       -- forming 存 NULL
+    target1    REAL,       -- forming 存 NULL
+    target2    REAL,       -- forming 存 NULL
+    rr         REAL,       -- forming 存 NULL
+    confidence REAL,
+    knn        TEXT,       -- '✓' / '✗' / '?'
+    orderflow  TEXT,       -- '✓bidXXX' / '✗' / ''（无数据）
+    fib_note   TEXT,
+    prz_lo     REAL,
+    prz_hi     REAL
+);
+
+CREATE TABLE IF NOT EXISTS bitget_candles (
+    coin     TEXT    NOT NULL,
+    tf       TEXT    NOT NULL,
+    open_ms  INTEGER NOT NULL,
+    o        REAL    NOT NULL,
+    h        REAL    NOT NULL,
+    l        REAL    NOT NULL,
+    c        REAL    NOT NULL,
+    v        REAL    NOT NULL,
+    PRIMARY KEY (coin, tf, open_ms)
+);
+CREATE INDEX IF NOT EXISTS ix_bitget_candles_coin_tf_ms ON bitget_candles(coin, tf, open_ms);
 """
 
 
@@ -544,6 +579,115 @@ class Store:
         return self.conn.execute(
             "SELECT ts,coin,side,kind,px,notional FROM hl_orderbook_walls "
             "WHERE ts>=? ORDER BY ts ASC", (since_ms,)).fetchall()
+
+    # ---- 谐波形态快照（供 dashboard 独立页读取）----
+    def insert_harmonic_setups(self, rows: Iterable[tuple]) -> None:
+        """覆盖谐波快照：先 DELETE 全表（只保最新快照，避免膨胀），再批量 INSERT，commit。
+
+        rows: Iterable[tuple] 每行 19 列，顺序为：
+          ts, coin, tf, kind, pattern, direction, price,
+          entry_lo, entry_hi, stop, target1, target2,
+          rr, confidence, knn, orderflow, fib_note,
+          prz_lo, prz_hi
+
+        空 rows 仍会先 DELETE 旧快照（清空表），再 executemany 0 行，保持表恒为最新。
+        """
+        rows_list = list(rows)
+        try:
+            self.conn.execute("BEGIN")
+            self.conn.execute("DELETE FROM harmonic_setups")
+            if rows_list:
+                self.conn.executemany(
+                    "INSERT INTO harmonic_setups("
+                    "ts,coin,tf,kind,pattern,direction,price,"
+                    "entry_lo,entry_hi,stop,target1,target2,"
+                    "rr,confidence,knn,orderflow,fib_note,"
+                    "prz_lo,prz_hi"
+                    ") VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                    rows_list,
+                )
+            self.conn.execute("COMMIT")
+        except Exception:
+            self.conn.execute("ROLLBACK")
+            raise
+
+    def recent_harmonic_setups(self) -> list[tuple]:
+        """返回最新谐波快照，按 confidence DESC。
+
+        返回列（19 列，与 insert_harmonic_setups 顺序一致）：
+          ts, coin, tf, kind, pattern, direction, price,
+          entry_lo, entry_hi, stop, target1, target2,
+          rr, confidence, knn, orderflow, fib_note,
+          prz_lo, prz_hi
+        """
+        return self.conn.execute(
+            "SELECT ts,coin,tf,kind,pattern,direction,price,"
+            "entry_lo,entry_hi,stop,target1,target2,"
+            "rr,confidence,knn,orderflow,fib_note,"
+            "prz_lo,prz_hi "
+            "FROM harmonic_setups ORDER BY confidence DESC"
+        ).fetchall()
+
+    # ---- Bitget 永续 K 线缓存 ----
+
+    def upsert_candles(self, rows: Iterable[tuple]) -> None:
+        """批量写入 K 线，同 (coin, tf, open_ms) 覆盖旧值（去重）。
+
+        rows: Iterable[(coin, tf, open_ms, o, h, l, c, v)]
+        空 rows 安全返回（executemany 处理 0 行，不 commit 无事务）。
+        """
+        rows_list = list(rows)
+        if not rows_list:
+            return
+        self.conn.executemany(
+            "INSERT OR REPLACE INTO bitget_candles(coin,tf,open_ms,o,h,l,c,v) "
+            "VALUES(?,?,?,?,?,?,?,?)",
+            rows_list,
+        )
+
+    def get_candles(self, coin: str, tf: str, limit: int = 1000) -> list:
+        """读取最近 limit 根 K 线，升序返回 list[Candle]。
+
+        DB 以 DESC 取最新 limit 根，Python 侧再升序排列，确保调用方拿到正确时间顺序。
+        tf 不在 GRANULARITY_MS 中时 close_time_ms 偏移量为 0（兜底，不抛）。
+        空结果返回 []。
+        """
+        from ..models import Candle
+        from ..bitget.rest import GRANULARITY_MS
+
+        gran_ms = GRANULARITY_MS.get(tf, 0)
+        raw = self.conn.execute(
+            "SELECT open_ms,o,h,l,c,v FROM bitget_candles "
+            "WHERE coin=? AND tf=? ORDER BY open_ms DESC LIMIT ?",
+            (coin, tf, limit),
+        ).fetchall()
+        if not raw:
+            return []
+        # 升序排列（DB 取最新 N 根后反转）
+        raw_asc = list(reversed(raw))
+        return [
+            Candle(
+                coin=coin,
+                interval=tf,
+                open_time_ms=row[0],
+                close_time_ms=row[0] + gran_ms,
+                o=row[1],
+                h=row[2],
+                l=row[3],
+                c=row[4],
+                v=row[5],
+                n=0,
+            )
+            for row in raw_asc
+        ]
+
+    def count_candles(self, coin: str, tf: str) -> int:
+        """返回指定 coin/tf 的 K 线行数。"""
+        row = self.conn.execute(
+            "SELECT COUNT(*) FROM bitget_candles WHERE coin=? AND tf=?",
+            (coin, tf),
+        ).fetchone()
+        return row[0] if row else 0
 
     # ---- 聪明钱地址画像 ----
     def upsert_address_profile(self, p: dict[str, Any]) -> None:
