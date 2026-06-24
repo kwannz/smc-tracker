@@ -22,6 +22,7 @@ from .engine import analyze, fmt_analysis
 from .bollinger_bands import bb_bands, analyze_tf, aggregate_coin
 from .harmonic import (find_pivots, detect_xabcd, project_prz, analyze_candles,
                        HARMONIC_RATIOS)
+from .atr2_signals import atr2_confirmation
 
 __all__ = [
     "detect_double_top", "detect_double_bottom", "dow_trend", "swing_highs", "swing_lows",
@@ -36,4 +37,5 @@ __all__ = [
     "KNNPredictor", "feature_matrix", "analyze", "fmt_analysis",
     "bb_bands", "analyze_tf", "aggregate_coin",
     "find_pivots", "detect_xabcd", "project_prz", "analyze_candles", "HARMONIC_RATIOS",
+    "atr2_confirmation",
 ]
