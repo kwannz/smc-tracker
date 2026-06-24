@@ -72,7 +72,7 @@ def main() -> int:
         got = discover_chat(token)
         if not got:
             print("⚠ getUpdates 没发现任何 chat。请先：\n"
-                  "  1) 把 @Chiukwan49Bot 加为你频道的管理员(允许发消息)；\n"
+                  "  1) 把 @REDACTED_BOT 加为你频道的管理员(允许发消息)；\n"
                   "  2) 在频道发一条任意消息(或私聊 bot 发 /start)；\n"
                   "  3) 再次运行本脚本。\n"
                   "  或直接指定：scripts/telegram_setup.py @你的频道username")

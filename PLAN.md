@@ -359,7 +359,7 @@ D 多空符号 · E 真实 userFills 解析/分类自洽 · F WS webData2==REST 
   5 单测 + 集成实跑(7共识+1背离未重叠→0,符合设计:多源同向稀有)。**124 单测全过**。
   下一步（#20）：把 poll 的 flow 建仓也纳入共振源；或 TG 配好后验证；或庄盈亏排名变化预警。
 - 2026-06-20 #20~28（多消息+多 workflow 并行大迭代）：
-  · **Telegram 推送打通**（Bot API，Chiukwan49Bot，chat_id 6707146007，实测推送成功）+ 多渠道 MultiNotifier。
+  · **Telegram 推送打通**（Bot API，REDACTED_BOT，chat_id REDACTED_CHAT_ID，实测推送成功）+ 多渠道 MultiNotifier。
   · **轮询监控模式** poll_monitor.py（--loop 动态，每3600s，纯 REST，跨运行快照 diff）+ 近1h流向/背离。
   · **指标引擎 indicators/**（10指标+PA形态+双顶双底/道氏+成交量+斐波那契+支撑压力+4combo+时间策略+KNN）。
   · **聪明钱地址画像** address_analyzer（评分胜率仅10分,盈利为主）+ **地址关联** address_correlation（协同地址群/庄家集团,app 5min 实时扫描）。
@@ -602,7 +602,7 @@ D 多空符号 · E 真实 userFills 解析/分类自洽 · F WS webData2==REST 
   原 cli/poll 把 digest 截断到 1800 字、telegram.py 又 `text[:4000]` → 长摘要(共识+流向+面板+画像+准确率)被砍。
   新 `notify/chunk.py` `split_message`(按行边界切,单行超长硬切,内容零丢失);TelegramNotifier 分段全发(≤4000,
   带 (i/n) 页码,段间 0.4s 防 429);WebhookNotifier 同理(≤1900,Discord 2000 上限);cli/poll 去掉 1800 截断传全文。
-  **实证**:4509 字消息→分 2 段(3997+511)全部送达真实 TG 频道(chat_id 6707146007,failed=0)。**3 新单测**
+  **实证**:4509 字消息→分 2 段(3997+511)全部送达真实 TG 频道(chat_id REDACTED_CHAT_ID,failed=0)。**3 新单测**
   (短文不分/按行切/长行硬切,零丢失)。零孤儿(split_message 导出)。**379 单测全过**(376+3)。
   附:本轮 poll 用 #56 缓存回退(排行榜 TimeoutError→回退 39359 行)成功跑通,评估 16 条 1h 到期(累计已评 44)+
   记录新多水平线批(62@1h/34@4h/34@24h)。
