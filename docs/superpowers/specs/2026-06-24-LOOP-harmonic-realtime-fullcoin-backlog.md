@@ -21,12 +21,31 @@
 - [ ] A3 DB schema / dashboard 列表支持全币种(分页/过滤/搜索)。
 
 ### B. 实时动态(用户强调:谐波形态最新实时)
-- [ ] B1 谐波从「周期 refresh DB 缓存」→ 增量实时:接 Bitget K线 WS(`bitget/ws_client.py` 已支持任意 channel),收线即增量更新谐波 pivot/XABCD(复用 B1 已修的 append-only swing,no-repaint)。
+- [~] B1 谐波 K线 WS 增量实时:**核心完成(loop#5,Sonnet 执行)** —— 新增 `monitor/harmonic_candle_ws.py`
+  (收盘线即 to_thread 落库+analyze,WS 回调非阻塞)+ config `realtime_ws` 开关(默认 false)+ 32 测试,**全量 1850
+  passed**。**Opus 验证发现 2 gap → 派 Sonnet 收口(af3d9f99)**:① 热路径 O(n) 反向映射重建(全币种违纪)→
+  预建 O(1);② on_update 未接 insert_harmonic_setups(实时算了不落库=空转)→ app.py 填回调端到端落库 +
+  落库协调(不破坏 recent_harmonic_setups 全量快照)。
 - [ ] B2 dashboard 谐波页从 5s 轮询 → 更实时(SSE/WS 推送或更短轮询 + LIVE 脉冲)。
 - [ ] B3 forming 形态实时逼近 PRZ 告警(harmonic_forward / forming_approach 已有骨架,接全币种)。
 
 ### C. 前瞻预测(基于 bitget 永续数据,结合开源/模型)
-- [ ] C1 SFG-KNN 收口:修 WF4 审计发现(msfvg warmup gate、弱测试加强、vap/ami 深审、lane A/B1/B23/C 审计)。
+
+> **谐波前瞻性方法对标(loop#6,模型知识 + 开源/学术)** —— 用户核心要求「指标形态前瞻性预测性」。
+> 谐波本质是回看(XABCD 的 D 已发生),让它「前瞻」的业界路径(由弱到强,诚实标注):
+> 1. **forming 实时投影**(B3):XABC 完成、D 未到 → 从 A 投 d_xa + 从 C 投 cd_bc 双估 D(PRZ),
+>    价格逼近 PRZ 实时告警 = 真提前量(对标 Pelletier/Carney PRZ 重叠区,已有 `harmonic_forward`/`forming_approach` 骨架)。
+> 2. **多周期 PRZ 共振**:同币多 tf 谐波 PRZ 重叠 = 更强前瞻(对标 SMC 多 TF confluence;smc 已有多周期 S/R)。
+> 3. **前瞻确认叠加**(C2,已实现 `forward_confirm`):PRZ + OI 方向化 + funding 极值 + OFI(Cont-Kukanov-Stoikov)
+>    —— 订单流/资金流**先于价格**(领先信号),是谐波回看 → 前瞻的核心补强。接全币种。
+> 3b. **订单流前置 PRZ**:PRZ 附近 OFI/挂单意图异常 = 反转前置确认(absorption 背离,C5 可选)。
+> 4. **形态完成/反转成功率**:历史相似形态统计(KNN-SFG,C1 已做)—— **诚实:项目自承 ≈随机(EMH),
+>    不预设 alpha,作展示 + review 闭环实测**,不夸大(PLAN.md「高 lift≠赚钱」纪律)。
+> 落地优先级:C2 全币种 forward_confirm → B3 forming 逼近 → C3 review 闭环度量真实命中率。
+- [~] C1 SFG-KNN 收口:**10 因子审计闭环完成(loop#5)** —— 平价 10/10 正确、no-lookahead 10/10 安全
+  (lrsd/atr2/gpi/pivot/ai_st/dmha/pdbb/vap/ami ✅ + msfvg 公式对但 warmup gate 分歧);fail-closed + numpy
+  warning 已修(loop 前)。**剩余待修**:① msfvg `if i<warmup:continue` per-row mask 去除(对齐 Rust whole-batch);
+  ② gpi/msfvg golden 测试改为驱动生产 `*_series`(现仅测公式副本);③(可选)lane A/B1/B23/C 代码审(测试已全绿)。
 - [ ] C2 forward_confirm 接全币种(OI 速度/funding 极值/OFI 已实现,接谐波全币种宇宙)。
 - [ ] C3 review 闭环按 asset_class/horizon 出谐波前瞻命中率(诚实度量,不夸大)。
 
@@ -63,3 +82,14 @@
   ≈ smc 现有 API 1:1,落地=表现层)+ **D1 决定方案3**(设计 token 提取 + 原生重写,无依赖约束排除 React CDN);
   **B1 现状实证**(bitget ws_client 已支持 candle1m channel;现状 candle_collector REST 轮询 + periodic refresh
   非实时)。下一步:固化 A2 → 派 Sonnet 执行 **B1 谐波实时化**(candle WS 增量驱动)。
+- 2026-06-24 loop#4(Opus 规划,与 B1 后台执行并行零冲突):固化 A2(commit 98456c1);派 Sonnet
+  后台执行 **B1 谐波实时化**(adce12f7,candle WS 增量驱动,K线级实时);**D 设计系统提取**完成 →
+  写 `D3-harmonic-page-design-system.md`(设计 token + 谐波页三栏蓝本 + 数据映射 + 无依赖落地要点,
+  为 D3 原生重写铺路)。下一步:B1 完成核验 → D3 谐波页重写(Sonnet)或 C1 SFG 收口。
+- 2026-06-24 loop#5(Opus 只读审计,与 B1 后台执行并行零冲突):**vap/ami 深审完成 → 10 因子审计闭环**
+  (平价 10/10 正确、no-lookahead 10/10 安全;vap 严格因果 rolling、ami trailing channel + 短序列退化已标注)。
+  C1 待修项明确(msfvg warmup gate + gpi/msfvg 弱测试驱动生产路径)。下一步:B1 核验 → C1 收口或 D3 重写。
+- 2026-06-24 loop#6(Opus 规划,与 B1 收口 af3d9f99 后台并行零冲突):B1 独立验证(1850 全绿)→ 抓 2 gap
+  (热路径 O(n) + on_update 空转不落库)→ 派 Sonnet 收口;**C 前瞻方法对标**(模型知识+开源:forming 实时投影/
+  多周期 PRZ 共振/forward_confirm 订单流领先/完成率诚实≈随机)写入 C 段,指导 C2/B3/C3。下一步:B1 收口核验
+  → C2 全币种 forward_confirm 或 D3 谐波页重写。

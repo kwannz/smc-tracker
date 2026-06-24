@@ -1,4 +1,4 @@
-"""监控模块：聪明钱地址、meme 成交、Bitget OI、地址画像/关联/动量、轮询、钱包持仓画像、布林带多周期、K 线采集。"""
+"""监控模块：聪明钱地址、meme 成交、Bitget OI、地址画像/关联/动量、轮询、钱包持仓画像、布林带多周期、K 线采集、谐波 WS 增量实时。"""
 from .events import EventType, SmartMoneyEvent
 from .address_monitor import AddressMonitor
 from .meme_trade_monitor import MemeTradeMonitor
@@ -20,6 +20,7 @@ from .harmonic_forward import HarmonicForwardSignals
 from .bitget_trade_monitor import BitgetTradeMonitor, parse_trade_delta
 from .forming_approach import FormingApproachTracker
 from .candle_collector import BitgetCandleCollector
+from .harmonic_candle_ws import HarmonicCandleWS, _parse_candle_row, _is_bar_closed, _TF_TO_CHANNEL
 
 __all__ = [
     "EventType", "SmartMoneyEvent", "AddressMonitor",
@@ -39,4 +40,8 @@ __all__ = [
     "parse_trade_delta",
     "FormingApproachTracker",
     "BitgetCandleCollector",
+    "HarmonicCandleWS",
+    "_parse_candle_row",
+    "_is_bar_closed",
+    "_TF_TO_CHANNEL",
 ]

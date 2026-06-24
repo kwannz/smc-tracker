@@ -178,6 +178,7 @@ class TradingSystem:
         self.oi_monitor: BitgetOIMonitor | None = None     # 启动时建（需符号映射）
         self.bb_monitor = None        # BitgetBBMonitor，_seed 后按配置构建（需 tickers 成交额）
         self.harmonic_monitor = None  # HarmonicMonitor，_seed 后按配置构建
+        self.harmonic_candle_ws = None  # HarmonicCandleWS，_seed 后按配置构建（B1：K线 WS 增量实时）
         self.candle_collector = None  # BitgetCandleCollector，_seed 后构建（拉 K 线落 DB 供两板共用）
         self.onchain = OnchainMemeMonitor(store, EVM_RPC,
                                           min_amount_usd=cfg.detection.large_fill_notional_usd)
@@ -772,6 +773,72 @@ class TradingSystem:
                     forward_provider=self.harmonic_forward,  # 前瞻置信（OI/funding；completed+forming）
                 )
                 log.info("谐波监控器已建，top_%d 币: %s", harm_n, list(harm_c2s.keys())[:6])
+
+            # ---- 谐波 K线 WS 增量驱动（B1）：可选实时性层（harmonic.realtime_ws=True 时启用）----
+            # realtime_ws=False 时跳过，行为不变（纯 periodic refresh 模式，向后兼容）。
+            # 启用时：订阅 candle{tf} channel，收盘线即触发增量 analyze_candles + 可选回调。
+            # periodic refresh 保留作全量兜底（两者共存，互不排斥）。
+            #
+            # Gap 2 修复：填入 on_update 回调，实现「收盘即推送」实时性端到端。
+            #
+            # 落库协调设计（关键权衡）：
+            #   - recent_harmonic_setups() 用 WHERE ts=(SELECT MAX(ts) FROM harmonic_setups) 读最新快照批。
+            #   - periodic refresh 以同一 now_ms 落全量（所有币），dashboard 读 MAX(ts) 拿全部币。
+            #   - 若实时层逐 (coin,tf) 单独写，MAX(ts) 变成仅含 1 个币的新 ts，dashboard 列表塌陷。
+            #   - 选择方案：on_update 仅做**推送通知**（实时卡片 → harmonic 飞书），**不写 harmonic_setups**。
+            #   - 优点：零风险不破坏 dashboard 全量视图；仍实现「K线收盘即通知」实时性目标。
+            #   - 缺点：实时层不单独落库（DB 历史仅由 periodic refresh 每 N 分钟一次写入）；
+            #     若需实时落库，未来可改用独立 harmonic_realtime_setups 表 + dashboard 改读两表。
+            if (self.cfg.harmonic.realtime_ws
+                    and self.harmonic_monitor is not None
+                    and self.cfg.harmonic.enabled):
+                from .monitor.harmonic_candle_ws import HarmonicCandleWS  # noqa: PLC0415
+
+                # Gap 2: on_update 回调——收盘分析完成 → 推送单币谐波实时卡片（不落库，见上方权衡注释）
+                _hmon_ref = self.harmonic_monitor  # 避免闭包捕获 self 循环引用
+
+                async def _on_harmonic_ws_update(
+                    coin: str, tf: str, result: dict | None, now_ms: int,
+                ) -> None:
+                    """K 线 WS 收盘后谐波分析完成回调：推送单币实时通知（不写 harmonic_setups）。
+
+                    落库协调：不调用 insert_harmonic_setups，避免破坏 recent_harmonic_setups
+                    的「WHERE ts=MAX(ts)」全量快照语义。实时性端到端通过推送通知实现。
+                    """
+                    if result is None:
+                        return  # 无形态，静默跳过
+                    try:
+                        completed = result.get("completed") or []
+                        forming = result.get("forming") or []
+                        if not completed and not forming:
+                            return  # 该 (coin,tf) 无形态，不推空卡
+                        # 构造单币行（与 render 格式兼容）
+                        row = {
+                            "coin":      coin,
+                            "symbol":    _hmon_ref.coin_to_symbol.get(coin, coin + "USDT"),
+                            "price":     float(result.get("price", 0.0) or 0.0),
+                            "tf":        tf,
+                            "completed": completed,
+                            "forming":   forming,
+                        }
+                        card = _hmon_ref.render([row], now_ms)
+                        if card:
+                            self._push_harmonic(f"[WS实时] {card}")
+                            log.debug(
+                                "谐波 WS on_update 推送 %s/%s: completed=%d forming=%d",
+                                coin, tf, len(completed), len(forming),
+                            )
+                    except Exception as _exc:  # noqa: BLE001
+                        log.warning("谐波 WS on_update 推送失败 %s/%s: %s", coin, tf, _exc)
+
+                self.harmonic_candle_ws = HarmonicCandleWS(
+                    harmonic_monitor=self.harmonic_monitor,
+                    bg_ws=self.bg_ws,
+                    on_update=_on_harmonic_ws_update,
+                )
+                log.info("谐波 K线 WS 增量驱动已初始化（realtime_ws=True，on_update 已接入）")
+            else:
+                self.harmonic_candle_ws = None
 
             # ---- Bitget K线采集器：周期拉永续 K 线落 DB，供 BB/谐波多周期计算共用（减 API 重复拉）----
             # 采集器用 vol_c2s 全集（resolve_universe 输出），轮转覆盖；BB/谐波各取其 top_n
@@ -1589,6 +1656,9 @@ class TradingSystem:
         # 谐波逐笔 taker 监控（Bitget trade channel → flow_score 资金流加速度）
         if getattr(self, "harmonic_trade", None) is not None:
             self.harmonic_trade.attach()
+        # 谐波 K线 WS 增量驱动（B1）：收盘线即触发增量分析（realtime_ws=True 时启用）
+        if self.harmonic_candle_ws is not None:
+            self.harmonic_candle_ws.attach()
         # 挂载 System 3（OKX，默认 enabled=False，不影响现有路径）
         if self.cfg.okx.enabled:
             from .okx.stream import run_okx_streaming  # noqa: PLC0415

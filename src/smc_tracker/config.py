@@ -298,6 +298,10 @@ class HarmonicCfg:
     # 谐波系统**专用独立飞书**（用户#：与 HL 信号分开推送）；为空则回退主 notifier
     feishu_webhook: str = ""
     feishu_secret: str = ""
+    # K 线 WS 增量驱动实时性（B1）：
+    # False（默认）= 纯 periodic refresh 模式（向后兼容，不影响现网）
+    # True = 收盘线即触发增量谐波分析（K 线级实时，periodic refresh 保留作全量兜底）
+    realtime_ws: bool = False
 
 
 @dataclass(slots=True)
