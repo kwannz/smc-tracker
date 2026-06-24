@@ -26,8 +26,8 @@ def _make_tickers(coins: list[str], volumes: list[float]) -> dict[str, dict]:
 
 
 def _make_base_map(coins: list[str]) -> dict[str, str]:
-    """生成合成 base_map: coin → symbol(USDT永续)。"""
-    return {coin: f"{coin}USDT_UMCBL" for coin in coins}
+    """生成合成 base_map: **symbol → baseCoin**（与 BitgetREST.perp_base_coins() 真实契约一致）。"""
+    return {f"{coin}USDT_UMCBL": coin for coin in coins}
 
 
 # 默认测试集：5个币，成交额降序 ETH>BTC>SOL>SOXL>XAU
