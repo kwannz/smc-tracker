@@ -161,6 +161,7 @@ class TradingSystem:
         self.latency = LatencyTracker()       # 热路径「接收→信号」延迟埋点(实证低延迟)
         self.coin_to_symbol: dict[str, str] = {}              # canonical -> bitget symbol
         self.canon_to_hl = {normalize(c): c for c in meme_markets}  # canonical -> HL 币名
+        self._collect_offset: int = 0   # K 线批量轮转偏移（collect_batch 环绕用）
 
         # SMC 结构 + 信号的币种全集 = 主流币 + meme（meme 才有聪明钱流向/OI 共振）
         self.signal_universe = list(dict.fromkeys(cfg.markets + meme_markets))
@@ -644,23 +645,20 @@ class TradingSystem:
                 log.info("已补 meme 合约地址 %d 条", self.store.count("meme_contracts"))
 
             # ---- 按 tickers 24h 成交额排序选币（BB + 谐波**共用**，修复谐波曾误用 OI 插入序）----
-            vol_c2s: dict[str, str] = {}   # base -> symbol，按成交额降序（全市场）
+            # 使用 resolve_universe 统一选币（配置化，支持 all/top_n/list + asset_filter/exclude）
+            vol_c2s: dict[str, str] = {}   # coin -> symbol，按成交额降序（全市场，所有模式基础集）
             if self.cfg.bollinger.enabled or self.cfg.harmonic.enabled:
                 try:
                     tickers_map = await bg.tickers()
-                    _cands: list[tuple[str, str, float]] = []
-                    for sym, tk in tickers_map.items():
-                        if not sym.endswith("USDT"):
-                            continue
-                        # quoteVolume 已实证为 Bitget V2 mix tickers 真实字段；usdtVolume 兜底
-                        vol = _f(tk.get("quoteVolume") or tk.get("usdtVolume") or 0)
-                        base = base_map.get(sym, sym.replace("USDT", ""))
-                        _cands.append((sym, base, vol))
-                    _cands.sort(key=lambda x: x[2], reverse=True)
                     # P0 守卫：成交额全 0 → 字段可能变更，选币退化为插入序，告警不静默失真
-                    if _cands and all(c[2] <= 0 for c in _cands):
+                    vols = [_f(tk.get("quoteVolume") or tk.get("usdtVolume") or 0)
+                            for tk in tickers_map.values()]
+                    if vols and all(v <= 0 for v in vols):
                         log.warning("选币：tickers 成交额全为 0（quoteVolume 字段可能已变更），退化插入序")
-                    vol_c2s = {base: sym for sym, base, _ in _cands}
+                    # resolve_universe：统一选币（配置化，支持 mode/asset_filter/exclude）
+                    from .config import resolve_universe  # noqa: PLC0415
+                    vol_c2s = resolve_universe(base_map, tickers_map, self.cfg.universe)
+                    # 无 universe 配置（默认 top_n=12）时行为不变；mode=all 则返回全部符合条件的币
                 except Exception as exc:  # noqa: BLE001
                     log.warning("选币 tickers 拉取失败（不影响主流程）: %s", exc)
 
@@ -668,6 +666,7 @@ class TradingSystem:
             if self.cfg.bollinger.enabled and vol_c2s:
                 from .monitor.bitget_bb_monitor import BitgetBBMonitor  # noqa: PLC0415
                 bb_n = self.cfg.bollinger.top_n
+                # resolve_universe 已按成交额排序；bb_n 控制监控窗口上限（universe 可能含更多币）
                 bb_c2s = dict(list(vol_c2s.items())[:bb_n])
                 self.bb_monitor = BitgetBBMonitor(
                     coin_to_symbol=bb_c2s,
@@ -701,17 +700,18 @@ class TradingSystem:
                 log.info("谐波监控器已建，top_%d 币: %s", harm_n, list(harm_c2s.keys())[:6])
 
             # ---- Bitget K线采集器：周期拉永续 K 线落 DB，供 BB/谐波多周期计算共用（减 API 重复拉）----
+            # 采集器用 vol_c2s 全集（resolve_universe 输出），轮转覆盖；BB/谐波各取其 top_n
             if vol_c2s and (self.cfg.bollinger.enabled or self.cfg.harmonic.enabled):
                 from .monitor.candle_collector import BitgetCandleCollector  # noqa: PLC0415
-                # 币集 = 两板 top_n 的并集；周期 = 两板周期并集；bars 取较大者
-                cc_n = max(self.cfg.bollinger.top_n, self.cfg.harmonic.top_n)
-                cc_c2s = dict(list(vol_c2s.items())[:cc_n])
+                # 采集币集 = resolve_universe 输出（已含 BB + 谐波所需的所有币）
+                # 周期 = 两板周期并集；bars 取较大者
+                cc_c2s = vol_c2s  # 全集（轮转采集，每轮 batch_size 个）
                 cc_tfs = list(dict.fromkeys(
                     list(self.cfg.bollinger.timeframes) + list(self.cfg.harmonic.timeframes)))
                 cc_bars = max(self.cfg.bollinger.bars, self.cfg.harmonic.bars)
                 self.candle_collector = BitgetCandleCollector(
                     cc_c2s, cc_tfs, cc_bars, self.store)
-                log.info("K线采集器已建，%d 币 × %d 周期 → DB", len(cc_c2s), len(cc_tfs))
+                log.info("K线采集器已建，%d 币 × %d 周期 → DB（轮转模式）", len(cc_c2s), len(cc_tfs))
 
     # ---- 周期任务 ----
     async def _periodic_flush(self, every: float = 5.0) -> None:
@@ -1221,15 +1221,21 @@ class TradingSystem:
         """周期采集 Bitget 永续 K 线落 DB（BB/谐波多周期计算共用，减重复拉 + 跨重启持久）。
 
         启动后先延迟 20s（避开 HL seed 带宽），采一次填 DB（让首个板周期可直接读 DB），
-        之后每 every 秒刷新。采集失败只 log.warning，不阻塞其他任务。
+        之后每 every 秒刷新（work-first 已在延迟后立即执行）。
+
+        增量轮转（661 币分多轮）：每轮采 batch_size=60 个币，_collect_offset 环绕滚动，
+        避免单轮爆量请求。采集失败只 log.warning，不阻塞其他任务。
         """
         if self.candle_collector is None:
             return
+        # work-first：延迟 20s 后立即首轮采集（让 BB/谐波首个板周期可直接读 DB）
         await asyncio.sleep(20.0)
         while not self._stopping:
             try:
-                n = await self.candle_collector.collect_once()
-                log.info("K线采集落 DB %d 根", n)
+                # 每轮采 60 个币；661 币约 11 轮覆盖一次（每轮 5 分钟 = 约 55 分钟全覆盖）
+                self._collect_offset = await self.candle_collector.collect_batch(
+                    self._collect_offset, 60)
+                log.info("K线批量采集落 DB（offset→%d）", self._collect_offset)
             except Exception as exc:  # noqa: BLE001
                 log.warning("K线采集失败: %s", exc)
             await asyncio.sleep(every)
@@ -1252,6 +1258,13 @@ class TradingSystem:
                 if card:
                     print(card)
                     self._push_harmonic(card)   # 独立 TA 通道（与 HL 分开）
+                # BB 压力层落库（供 dashboard 多周期 S/R 叠加）；落库失败只 warn，不阻塞推送
+                try:
+                    bb_recs = self.bb_monitor.to_bb_records(rows, now)
+                    if bb_recs:
+                        self.store.insert_bb_levels(bb_recs)
+                except Exception as db_exc:  # noqa: BLE001
+                    log.warning("BB levels 落库失败: %s", db_exc)
             except Exception as exc:  # noqa: BLE001
                 log.warning("布林带周期推送失败: %s", exc)
             await asyncio.sleep(self.cfg.bollinger.interval_sec)

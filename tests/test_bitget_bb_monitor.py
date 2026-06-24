@@ -378,3 +378,149 @@ class TestBitgetBBMonitorDBFetch:
         assert len(fake_store.upserted) == 0, (
             f"DB 命中时不应调用 upsert_candles，实际 upserted {len(fake_store.upserted)} 行"
         )
+
+
+# ── TDD: to_bb_records 纯函数测试 ────────────────────────────────────────────
+
+
+def _make_analyze_result(
+    upper: float = 110.0,
+    mid: float = 100.0,
+    lower: float = 90.0,
+    pct_b: float = 0.6,
+    squeeze: bool = False,
+) -> dict:
+    """构造 analyze_tf 风格的结果 dict（to_bb_records 所需字段）。"""
+    return {
+        "upper": upper,
+        "mid": mid,
+        "lower": lower,
+        "pct_b": pct_b,
+        "squeeze": squeeze,
+        "price": mid,
+        "bandwidth": (upper - lower) / mid,
+        "pos_label": "中轨",
+        "bull": pct_b > 0.5,
+    }
+
+
+class TestToBBRecords:
+    """BitgetBBMonitor.to_bb_records 纯函数单元测试。"""
+
+    def _make_monitor(self) -> BitgetBBMonitor:
+        return BitgetBBMonitor(
+            coin_to_symbol={"BTC": "BTCUSDT"},
+            timeframes=["1H", "4H"],
+            bars=100, period=20, k=2.0, top_n=5,
+        )
+
+    def test_basic_single_coin_single_tf(self):
+        """单币单 tf → 1 条记录，8 列正确。"""
+        mon = self._make_monitor()
+        rows = [{
+            "coin": "BTC",
+            "tfs": {"1H": _make_analyze_result(110.0, 100.0, 90.0, 0.7, False)},
+            "agg": {},
+        }]
+        recs = mon.to_bb_records(rows, now_ms=1_700_000_000_000)
+        assert len(recs) == 1
+        rec = recs[0]
+        assert len(rec) == 8
+        coin, tf, ts, upper, mid, lower, pct_b, squeeze = rec
+        assert coin == "BTC"
+        assert tf == "1H"
+        assert ts == 1_700_000_000_000
+        assert upper == pytest.approx(110.0)
+        assert mid == pytest.approx(100.0)
+        assert lower == pytest.approx(90.0)
+        assert pct_b == pytest.approx(0.7)
+        assert squeeze == 0
+
+    def test_squeeze_true_maps_to_int_1(self):
+        """squeeze=True → 整型 1（DB 列为 INTEGER）。"""
+        mon = self._make_monitor()
+        rows = [{
+            "coin": "ETH",
+            "tfs": {"1H": _make_analyze_result(squeeze=True)},
+            "agg": {},
+        }]
+        recs = mon.to_bb_records(rows, now_ms=1_000_000)
+        assert recs[0][7] == 1
+
+    def test_squeeze_false_maps_to_int_0(self):
+        """squeeze=False → 整型 0。"""
+        mon = self._make_monitor()
+        rows = [{
+            "coin": "ETH",
+            "tfs": {"4H": _make_analyze_result(squeeze=False)},
+            "agg": {},
+        }]
+        recs = mon.to_bb_records(rows, now_ms=1_000_000)
+        assert recs[0][7] == 0
+
+    def test_none_tf_result_skipped(self):
+        """analyze_tf 结果为 None 的 tf 跳过，不写脏行。"""
+        mon = self._make_monitor()
+        rows = [{
+            "coin": "SOL",
+            "tfs": {
+                "1H": _make_analyze_result(),
+        "4H": None,   # 采集失败
+            },
+            "agg": {},
+        }]
+        recs = mon.to_bb_records(rows, now_ms=1_000_000)
+        assert len(recs) == 1  # 只有 1H（4H 跳过）
+        assert recs[0][1] == "1H"
+
+    def test_multi_coin_multi_tf(self):
+        """多币多 tf → 每个有效 (coin,tf) 各一条记录。"""
+        mon = self._make_monitor()
+        rows = [
+            {
+                "coin": "BTC",
+                "tfs": {
+                    "1H": _make_analyze_result(),
+                    "4H": _make_analyze_result(),
+                },
+                "agg": {},
+            },
+            {
+                "coin": "ETH",
+                "tfs": {
+                    "1H": _make_analyze_result(),
+                    "4H": None,  # 跳过
+                },
+                "agg": {},
+            },
+        ]
+        recs = mon.to_bb_records(rows, now_ms=2_000_000)
+        # BTC 2条 + ETH 1条 = 3条
+        assert len(recs) == 3
+        # 所有记录 ts 一致
+        assert all(r[2] == 2_000_000 for r in recs)
+
+    def test_empty_rows_returns_empty_list(self):
+        """rows 为空 → 返回空列表，不抛。"""
+        mon = self._make_monitor()
+        recs = mon.to_bb_records([], now_ms=1_000_000)
+        assert recs == []
+
+    def test_all_tf_none_returns_empty(self):
+        """所有 tf 结果均为 None → 返回空列表。"""
+        mon = self._make_monitor()
+        rows = [{
+            "coin": "BTC",
+            "tfs": {"1H": None, "4H": None},
+            "agg": {},
+        }]
+        recs = mon.to_bb_records(rows, now_ms=1_000_000)
+        assert recs == []
+
+    def test_now_ms_used_as_ts(self):
+        """now_ms 参数正确传入为 ts 字段。"""
+        mon = self._make_monitor()
+        now = 9_999_999_999_999
+        rows = [{"coin": "BTC", "tfs": {"1H": _make_analyze_result()}, "agg": {}}]
+        recs = mon.to_bb_records(rows, now_ms=now)
+        assert recs[0][2] == now

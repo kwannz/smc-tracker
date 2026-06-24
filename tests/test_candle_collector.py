@@ -24,7 +24,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from smc_tracker.storage.db import Store
 from smc_tracker.bitget.rest import BitgetREST, GRANULARITY_MS
 from smc_tracker.models import Candle
-from smc_tracker.monitor.candle_collector import BitgetCandleCollector
+from smc_tracker.monitor.candle_collector import BitgetCandleCollector, _clean_candles
 
 
 # ============================================================
@@ -316,3 +316,313 @@ class TestBitgetCandleCollector:
 
         # 行数不应翻倍
         assert store.count_candles("SOL", "15m") == 8
+
+
+# ============================================================
+# _clean_candles 清洗层测试
+# ============================================================
+
+class TestCleanCandles:
+    """_clean_candles 数据质量守卫：NaN/inf/负价/h<l/ts去重 过滤契约。"""
+
+    def _make_candle(
+        self,
+        ts: int = 1_700_000_000_000,
+        o: float = 100.0,
+        h: float = 101.0,
+        l: float = 99.0,
+        c: float = 100.5,
+        v: float = 1000.0,
+        coin: str = "BTC",
+        tf: str = "1H",
+    ) -> Candle:
+        """构造单根 Candle（用于清洗测试）。"""
+        return Candle(
+            coin=coin,
+            interval=tf,
+            open_time_ms=ts,
+            close_time_ms=ts + 3_600_000,
+            o=o, h=h, l=l, c=c, v=v, n=0,
+        )
+
+    def test_clean_empty_list(self):
+        """空列表输入 → 返回空列表，不崩溃。"""
+        assert _clean_candles([]) == []
+
+    def test_clean_valid_candles_pass_through(self):
+        """全合法 K 线，全部保留。"""
+        candles = [
+            self._make_candle(ts=1_000_000 + i * 3_600_000)
+            for i in range(5)
+        ]
+        result = _clean_candles(candles)
+        assert len(result) == 5
+
+    def test_clean_negative_price_rejected(self):
+        """价格 ≤ 0 的行被过滤。"""
+        candles = [
+            self._make_candle(ts=1_000_000, o=-1.0),    # o<0
+            self._make_candle(ts=2_000_000, h=0.0),     # h=0
+            self._make_candle(ts=3_000_000),              # 合法
+        ]
+        result = _clean_candles(candles)
+        assert len(result) == 1
+        assert result[0].open_time_ms == 3_000_000
+
+    def test_clean_h_lt_l_rejected(self):
+        """h < l 的行被过滤（价格逻辑非法）。"""
+        candles = [
+            self._make_candle(ts=1_000_000, h=99.0, l=101.0),  # h < l
+            self._make_candle(ts=2_000_000),                     # 合法
+        ]
+        result = _clean_candles(candles)
+        assert len(result) == 1
+        assert result[0].open_time_ms == 2_000_000
+
+    def test_clean_duplicate_ts_keeps_last(self):
+        """同 open_time_ms 的多行：保留后者（覆盖语义，REST 最新值更可信）。"""
+        ts = 1_000_000
+        c1 = self._make_candle(ts=ts, v=111.0)
+        c2 = self._make_candle(ts=ts, v=222.0)  # 后者（更新值）
+        result = _clean_candles([c1, c2])
+        assert len(result) == 1
+        assert result[0].v == pytest.approx(222.0)
+
+    def test_clean_output_ascending_order(self):
+        """清洗后输出按 open_time_ms 严格升序。"""
+        candles = [
+            self._make_candle(ts=3_000_000),
+            self._make_candle(ts=1_000_000),
+            self._make_candle(ts=2_000_000),
+        ]
+        result = _clean_candles(candles)
+        assert len(result) == 3
+        for i in range(1, len(result)):
+            assert result[i].open_time_ms > result[i - 1].open_time_ms
+
+    def test_clean_nan_price_rejected(self):
+        """NaN 价格（to_float 转 0.0）→ 被过滤（o=NaN 等价 o<=0）。"""
+        import math
+        c_nan = self._make_candle(ts=1_000_000, o=float("nan"))
+        c_ok  = self._make_candle(ts=2_000_000)
+        result = _clean_candles([c_nan, c_ok])
+        assert len(result) == 1
+        assert result[0].open_time_ms == 2_000_000
+
+    def test_clean_all_dirty_returns_empty(self):
+        """全脏行 → 返回空列表。"""
+        candles = [
+            self._make_candle(ts=1_000_000, o=-1.0),
+            self._make_candle(ts=2_000_000, h=0.0),
+            self._make_candle(ts=3_000_000, h=50.0, l=100.0),  # h < l
+        ]
+        result = _clean_candles(candles)
+        assert result == []
+
+    def test_clean_zero_volume_allowed(self):
+        """v=0 的行允许通过（成交量为 0 是合法的低流动性状态）。"""
+        candle = self._make_candle(ts=1_000_000, v=0.0)
+        result = _clean_candles([candle])
+        assert len(result) == 1
+
+    def test_clean_inf_price_rejected(self):
+        """inf 价格 → 被 to_float 转 0.0，过滤。"""
+        c_inf = self._make_candle(ts=1_000_000, o=float("inf"))
+        c_ok  = self._make_candle(ts=2_000_000)
+        result = _clean_candles([c_inf, c_ok])
+        assert len(result) == 1
+
+
+# ============================================================
+# collect_batch 增量轮转测试
+# ============================================================
+
+class _FakeStore:
+    """FakeStore：只记录 upsert_candles 调用（用于 collect_batch 测试）。"""
+    def __init__(self) -> None:
+        self.upserted: list[tuple] = []
+
+    def upsert_candles(self, rows) -> None:
+        self.upserted.extend(rows)
+
+
+class TestCollectBatch:
+    """BitgetCandleCollector.collect_batch 增量轮转采集契约。"""
+
+    def _make_collector(
+        self,
+        coin_to_symbol: dict,
+        store: _FakeStore | None = None,
+    ) -> BitgetCandleCollector:
+        return BitgetCandleCollector(
+            coin_to_symbol=coin_to_symbol,
+            timeframes=["1H"],
+            bars=5,
+            store=store or _FakeStore(),
+        )
+
+    @pytest.mark.asyncio
+    async def test_collect_batch_basic_offset_advance(self, monkeypatch):
+        """collect_batch(offset=0, batch_size=2)：采集 coins[0:2]，返回 offset=2。"""
+        coins = {"BTC": "BTCUSDT", "ETH": "ETHUSDT", "SOL": "SOLUSDT"}
+        fetched_coins: list[str] = []
+
+        async def fake_klines(self_bg, symbol, tf, bars=1000, coin=""):
+            fetched_coins.append(coin)
+            return _make_candles(coin, tf, 5)
+
+        monkeypatch.setattr(BitgetREST, "klines", fake_klines)
+
+        store = _FakeStore()
+        collector = self._make_collector(coins, store)
+        next_offset = await collector.collect_batch(0, 2)
+
+        assert next_offset == 2
+        assert len(set(fetched_coins)) == 2  # 只采了 2 个币
+
+    @pytest.mark.asyncio
+    async def test_collect_batch_wraparound(self, monkeypatch):
+        """offset 接近末尾时环绕到列表头部。"""
+        coins = {"A": "AUSDT", "B": "BUSDT", "C": "CUSDT"}
+        fetched_coins: list[str] = []
+
+        async def fake_klines(self_bg, symbol, tf, bars=1000, coin=""):
+            fetched_coins.append(coin)
+            return _make_candles(coin, tf, 3)
+
+        monkeypatch.setattr(BitgetREST, "klines", fake_klines)
+
+        store = _FakeStore()
+        collector = self._make_collector(coins, store)
+        # offset=2, batch_size=2 → 取 coins[2] + coins[0]（环绕）
+        next_offset = await collector.collect_batch(2, 2)
+
+        # 环绕后 next_offset = (2+2)%3 = 1
+        assert next_offset == 1
+        # 采集了 2 个币（coins[2] + coins[0] 环绕）
+        assert len(set(fetched_coins)) == 2
+
+    @pytest.mark.asyncio
+    async def test_collect_batch_empty_coins_returns_zero(self, monkeypatch):
+        """coin_to_symbol 为空时，返回 0，不崩溃。"""
+        async def fake_klines(self_bg, symbol, tf, bars=1000, coin=""):
+            return []
+
+        monkeypatch.setattr(BitgetREST, "klines", fake_klines)
+
+        store = _FakeStore()
+        collector = self._make_collector({}, store)
+        next_offset = await collector.collect_batch(0, 10)
+        assert next_offset == 0
+
+    @pytest.mark.asyncio
+    async def test_collect_batch_upsert_called(self, monkeypatch):
+        """collect_batch 落库前调用 store.upsert_candles（数据已写入）。"""
+        coins = {"BTC": "BTCUSDT", "ETH": "ETHUSDT"}
+
+        async def fake_klines(self_bg, symbol, tf, bars=1000, coin=""):
+            return _make_candles(coin, tf, 4)
+
+        monkeypatch.setattr(BitgetREST, "klines", fake_klines)
+
+        store = _FakeStore()
+        collector = self._make_collector(coins, store)
+        await collector.collect_batch(0, 2)
+
+        assert len(store.upserted) > 0  # 已有数据落库
+
+    @pytest.mark.asyncio
+    async def test_collect_batch_exception_swallowed(self, monkeypatch):
+        """单 coin 异常被吞掉，其余 coin 继续，不崩溃。"""
+        coins = {"FAIL": "FAILUSDT", "ETH": "ETHUSDT"}
+        fetched: list[str] = []
+
+        async def fake_klines(self_bg, symbol, tf, bars=1000, coin=""):
+            fetched.append(coin)
+            if coin == "FAIL":
+                raise RuntimeError("模拟异常")
+            return _make_candles(coin, tf, 3)
+
+        monkeypatch.setattr(BitgetREST, "klines", fake_klines)
+
+        store = _FakeStore()
+        collector = self._make_collector(coins, store)
+        # 不应抛异常
+        next_offset = await collector.collect_batch(0, 2)
+        assert next_offset >= 0  # 完成，返回有效 offset
+
+    @pytest.mark.asyncio
+    async def test_collect_batch_clean_dirty_rows(self, monkeypatch):
+        """脏行（负价）经 _clean_candles 过滤后不进 DB。"""
+        from smc_tracker.bitget.rest import GRANULARITY_MS as _GM
+        gran_ms = _GM["1H"]
+
+        def _make_mixed() -> list[Candle]:
+            """返回混合行：1 根脏（o=-1）+ 3 根合法。"""
+            base_ms = 1_700_000_000_000
+            out = []
+            # 脏行
+            out.append(Candle(
+                coin="BTC", interval="1H",
+                open_time_ms=base_ms,
+                close_time_ms=base_ms + gran_ms,
+                o=-1.0, h=101.0, l=99.0, c=100.0, v=1000.0, n=0,
+            ))
+            # 合法行
+            for i in range(1, 4):
+                ts = base_ms + i * gran_ms
+                out.append(Candle(
+                    coin="BTC", interval="1H",
+                    open_time_ms=ts,
+                    close_time_ms=ts + gran_ms,
+                    o=100.0 + i, h=102.0 + i, l=98.0 + i, c=101.0 + i,
+                    v=1000.0 + i, n=0,
+                ))
+            return out
+
+        async def fake_klines(self_bg, symbol, tf, bars=1000, coin=""):
+            return _make_mixed()
+
+        monkeypatch.setattr(BitgetREST, "klines", fake_klines)
+
+        store = _FakeStore()
+        collector = self._make_collector({"BTC": "BTCUSDT"}, store)
+        await collector.collect_batch(0, 1)
+
+        # 脏行（o=-1）被过滤，仅 3 合法行落库
+        assert len(store.upserted) == 3
+
+    @pytest.mark.asyncio
+    async def test_collect_once_also_uses_clean(self, monkeypatch):
+        """collect_once 也经过 _clean_candles：脏行不落库。"""
+        from smc_tracker.bitget.rest import GRANULARITY_MS as _GM
+        gran_ms = _GM["1H"]
+        base_ms = 1_700_000_000_000
+
+        async def fake_klines(self_bg, symbol, tf, bars=1000, coin=""):
+            return [
+                Candle(coin=coin, interval=tf,
+                       open_time_ms=base_ms, close_time_ms=base_ms + gran_ms,
+                       o=0.0, h=101.0, l=99.0, c=100.0, v=1000.0, n=0),  # 脏（o=0）
+                Candle(coin=coin, interval=tf,
+                       open_time_ms=base_ms + gran_ms, close_time_ms=base_ms + 2 * gran_ms,
+                       o=100.0, h=101.0, l=99.0, c=100.5, v=1000.0, n=0),  # 合法
+            ]
+
+        monkeypatch.setattr(BitgetREST, "klines", fake_klines)
+
+        from pathlib import Path
+        import tempfile
+        from smc_tracker.storage.db import Store as _Store
+        tmp = Path(tempfile.mkdtemp()) / "t.db"
+        store = _Store(tmp)
+        collector = BitgetCandleCollector(
+            coin_to_symbol={"BTC": "BTCUSDT"},
+            timeframes=["1H"],
+            bars=10,
+            store=store,
+        )
+        total = await collector.collect_once()
+        # 只有 1 根合法
+        assert total == 1
+        assert store.count_candles("BTC", "1H") == 1

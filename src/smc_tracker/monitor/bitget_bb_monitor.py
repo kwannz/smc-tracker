@@ -140,6 +140,37 @@ class BitgetBBMonitor:
         rows.sort(key=lambda r: abs(r["agg"]["consensus_pct"] - 50), reverse=True)
         return rows
 
+    def to_bb_records(self, rows: list[dict], now_ms: int) -> list[tuple]:
+        """把 refresh() 返回的每币每 tf 的 analyze_tf 结果展平成 bb_levels 行。
+
+        纯函数（无 I/O，无副作用）：接受 rows（即 refresh() 返回值），
+        把每个有效 analyze_tf 结果转成 (coin, tf, now_ms, upper, mid, lower, pct_b, squeeze) 元组。
+        result 为 None 的 tf 跳过（采集失败、DB 不足等情况），不写脏行。
+
+        Args:
+            rows:   refresh() 返回值（list[dict]，每条含 coin/tfs:{tf:analyze_tf_result}）
+            now_ms: 当前时间戳（毫秒），作为 bb_levels 的 ts 字段
+
+        Returns:
+            list[tuple]，每行 8 列：(coin, tf, ts, upper, mid, lower, pct_b, squeeze)
+            squeeze 为 int（0 or 1）。
+        """
+        records: list[tuple] = []
+        for row in rows:
+            coin = row.get("coin", "")
+            tfs: dict = row.get("tfs") or {}
+            for tf, result in tfs.items():
+                if result is None:
+                    continue  # 采集失败或数据不足，跳过
+                upper = result.get("upper")
+                mid   = result.get("mid")
+                lower = result.get("lower")
+                pct_b = result.get("pct_b")
+                squeeze_raw = result.get("squeeze", False)
+                squeeze = 1 if squeeze_raw else 0
+                records.append((coin, tf, now_ms, upper, mid, lower, pct_b, squeeze))
+        return records
+
     def render(self, rows: list[dict], now_ms: int) -> str | None:
         """渲染布林带多周期压力/支撑卡片。
 
