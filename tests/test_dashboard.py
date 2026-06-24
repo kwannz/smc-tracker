@@ -1314,6 +1314,428 @@ def test_existing_harmonic_tests_still_pass():
             assert f in row, f"新功能不应删除旧字段: {f}"
 
 
+# ---------------------------------------------------------------------------
+# 新: build_harmonic_list / build_coin_detail / render_harmonic_detail_html
+# ---------------------------------------------------------------------------
+
+from smc_tracker.dashboard import build_harmonic_list, build_coin_detail, render_harmonic_detail_html  # noqa: E402
+from smc_tracker.dashboard import _HARMONIC_KEYS  # noqa: E402
+
+
+def _store_with_harmonic_multi() -> tuple:
+    """建含多币谐波数据的临时 Store（BTC/ETH/XAU）及对应 bb_levels 和 candles。"""
+    import tempfile
+    from pathlib import Path
+    d = tempfile.mkdtemp()
+    s = Store(Path(d) / "t.db")
+    now_ms = 1_700_000_000_000
+
+    # 插入 BTC completed(long,0.82) + ETH forming(short,0.65) + XAU completed(long,0.78)
+    # 注意：recent_harmonic_setups() 用 WHERE ts=MAX(ts) 过滤，故所有行必须使用相同 ts
+    s.insert_harmonic_setups([
+        (now_ms, "BTC", "1h", "completed", "Gartley", "long",
+         65000.0, 64500.0, 64800.0, 63000.0, 67000.0, 69000.0,
+         2.5, 0.82, "✓", "✓ 买压", "XA=0.618", 64000.0, 65200.0,
+         1, 60000.0, 10, 70000.0, 15, 55000.0, 20, 65000.0, 25, 64500.0),
+        (now_ms, "ETH", "4h", "forming", "Bat", "short",
+         3500.0, None, None, None, None, None, None,
+         0.65, "?", "", "BC=0.886", 3450.0, 3550.0,
+         None, None, None, None, None, None, None, None, None, None),
+        (now_ms, "XAU", "1h", "completed", "Gartley", "long",
+         2350.0, 2340.0, 2350.0, 2300.0, 2400.0, 2450.0,
+         2.0, 0.78, "✓", "✓ 买压", "XA=0.618", 2330.0, 2360.0,
+         1, 2200.0, 10, 2450.0, 15, 2280.0, 20, 2420.0, 25, 2340.0),
+    ])
+
+    # 插入 BTC bb_levels（两个周期）
+    s.insert_bb_levels([
+        ("BTC", "1h", now_ms, 66000.0, 65000.0, 64000.0, 0.6, False),
+        ("BTC", "4h", now_ms, 68000.0, 65500.0, 63000.0, 0.4, True),
+    ])
+
+    # 插入 BTC candles（5根 1h K线）
+    s.upsert_candles([
+        ("BTC", "1h", now_ms - 300_000, 64800.0, 65200.0, 64600.0, 65100.0, 1000.0),
+        ("BTC", "1h", now_ms - 240_000, 65100.0, 65400.0, 64900.0, 65300.0, 1200.0),
+        ("BTC", "1h", now_ms - 180_000, 65300.0, 65500.0, 65000.0, 65200.0, 900.0),
+        ("BTC", "1h", now_ms - 120_000, 65200.0, 65600.0, 64800.0, 64900.0, 1100.0),
+        ("BTC", "1h", now_ms - 60_000,  64900.0, 65100.0, 64700.0, 65000.0, 800.0),
+    ])
+    s.conn.commit()
+    return s, now_ms
+
+
+# ---- build_harmonic_list ----
+
+def test_build_harmonic_list_returns_list():
+    """build_harmonic_list 返回 list。"""
+    s, _ = _store_with_harmonic_multi()
+    result = build_harmonic_list(s)
+    s.close()
+    assert isinstance(result, list)
+
+
+def test_build_harmonic_list_has_all_coins():
+    """每个出现在 recent_harmonic_setups 中的 coin 都应有一条汇总行。"""
+    s, _ = _store_with_harmonic_multi()
+    result = build_harmonic_list(s)
+    s.close()
+    coins = {r["coin"] for r in result}
+    assert "BTC" in coins
+    assert "ETH" in coins
+    assert "XAU" in coins
+
+
+def test_build_harmonic_list_structure():
+    """每项含必要字段，类型正确。"""
+    s, _ = _store_with_harmonic_multi()
+    result = build_harmonic_list(s)
+    s.close()
+    for r in result:
+        assert "coin" in r
+        assert "asset_class" in r and r["asset_class"] in ("tradfi", "crypto")
+        assert "best_conf" in r
+        assert "direction" in r
+        assert "n_setups" in r and isinstance(r["n_setups"], int) and r["n_setups"] >= 1
+        assert "has_completed" in r and isinstance(r["has_completed"], bool)
+
+
+def test_build_harmonic_list_sorted_by_conf_desc():
+    """按 best_conf 降序排列（BTC 0.82 > XAU 0.78 > ETH 0.65）。"""
+    s, _ = _store_with_harmonic_multi()
+    result = build_harmonic_list(s)
+    s.close()
+    confs = [r["best_conf"] for r in result if r["best_conf"] is not None]
+    assert confs == sorted(confs, reverse=True), f"应按置信降序排列，实得 {confs}"
+
+
+def test_build_harmonic_list_has_completed_flag():
+    """BTC/XAU 是 completed → has_completed=True；ETH 是 forming → has_completed=False。"""
+    s, _ = _store_with_harmonic_multi()
+    result = build_harmonic_list(s)
+    s.close()
+    by_coin = {r["coin"]: r for r in result}
+    assert by_coin["BTC"]["has_completed"] is True
+    assert by_coin["ETH"]["has_completed"] is False
+    assert by_coin["XAU"]["has_completed"] is True
+
+
+def test_build_harmonic_list_asset_class_xau():
+    """XAU → asset_class='tradfi'。"""
+    s, _ = _store_with_harmonic_multi()
+    result = build_harmonic_list(s)
+    s.close()
+    by_coin = {r["coin"]: r for r in result}
+    assert by_coin["XAU"]["asset_class"] == "tradfi"
+    assert by_coin["BTC"]["asset_class"] == "crypto"
+
+
+def test_build_harmonic_list_empty_store():
+    """空库时返回 []，不抛异常。"""
+    s = _store_empty()
+    result = build_harmonic_list(s)
+    s.close()
+    assert result == []
+
+
+# ---- build_coin_detail ----
+
+def test_build_coin_detail_returns_dict():
+    """build_coin_detail 返回 dict，含必要顶层键。"""
+    s, _ = _store_with_harmonic_multi()
+    result = build_coin_detail(s, "BTC")
+    s.close()
+    assert isinstance(result, dict)
+    for key in ("coin", "asset_class", "tf", "tfs_available", "candles", "setups", "sr", "history"):
+        assert key in result, f"缺少键: {key}"
+
+
+def test_build_coin_detail_coin_field():
+    """coin 字段与参数一致。"""
+    s, _ = _store_with_harmonic_multi()
+    result = build_coin_detail(s, "BTC")
+    s.close()
+    assert result["coin"] == "BTC"
+
+
+def test_build_coin_detail_asset_class():
+    """BTC → crypto；XAU → tradfi。"""
+    s, _ = _store_with_harmonic_multi()
+    btc = build_coin_detail(s, "BTC")
+    xau = build_coin_detail(s, "XAU")
+    s.close()
+    assert btc["asset_class"] == "crypto"
+    assert xau["asset_class"] == "tradfi"
+
+
+def test_build_coin_detail_tf_defaults_to_first_setup():
+    """tf 未传时，应等于该币在 recent_harmonic_setups 中第一个 setup 的 tf。"""
+    s, _ = _store_with_harmonic_multi()
+    result = build_coin_detail(s, "BTC")
+    s.close()
+    # BTC setup tf='1h'
+    assert result["tf"] == "1h"
+
+
+def test_build_coin_detail_tfs_available():
+    """tfs_available 是该币所有 setup 的 tf 列表（不重复）。"""
+    s, _ = _store_with_harmonic_multi()
+    result = build_coin_detail(s, "BTC")
+    s.close()
+    assert isinstance(result["tfs_available"], list)
+    assert "1h" in result["tfs_available"]
+
+
+def test_build_coin_detail_candles_structure():
+    """candles 是 list of [ts, o, h, l, c, v]（已插入5根）。"""
+    s, _ = _store_with_harmonic_multi()
+    result = build_coin_detail(s, "BTC", tf="1h")
+    s.close()
+    candles = result["candles"]
+    assert isinstance(candles, list)
+    assert len(candles) == 5
+    for c in candles:
+        assert len(c) == 6, f"蜡烛行应有6列，实得{len(c)}"
+        assert all(v is not None for v in c), "蜡烛值不应为 None"
+
+
+def test_build_coin_detail_setups_structure():
+    """setups 含 BTC 1h 的谐波 setup，含 XABCD 点。"""
+    s, _ = _store_with_harmonic_multi()
+    result = build_coin_detail(s, "BTC", tf="1h")
+    s.close()
+    setups = result["setups"]
+    assert len(setups) >= 1
+    setup = setups[0]
+    for field in _HARMONIC_KEYS:
+        assert field in setup, f"setup 缺少字段: {field}"
+    assert "asset_class" in setup
+    # XABCD 点有值（BTC completed 行含完整 XABCD）
+    assert setup["x_px"] == 60000.0
+    assert setup["d_px"] == 64500.0
+
+
+def test_build_coin_detail_sr():
+    """sr 含 BTC bb_levels（两个周期）。"""
+    s, _ = _store_with_harmonic_multi()
+    result = build_coin_detail(s, "BTC")
+    s.close()
+    sr = result["sr"]
+    assert isinstance(sr, list)
+    assert len(sr) == 2
+    for item in sr:
+        for field in ("tf", "upper", "lower", "pct_b", "squeeze"):
+            assert field in item, f"sr 条目缺少字段: {field}"
+
+
+def test_build_coin_detail_history():
+    """history 含该币历史形态 list[dict]（BTC 有1条）。"""
+    s, _ = _store_with_harmonic_multi()
+    result = build_coin_detail(s, "BTC")
+    s.close()
+    history = result["history"]
+    assert isinstance(history, list)
+    assert len(history) >= 1
+    assert history[0]["coin"] == "BTC"
+
+
+def test_build_coin_detail_empty_store():
+    """空库时各字段为空 list，不抛。"""
+    s = _store_empty()
+    result = build_coin_detail(s, "NONEXISTENT")
+    s.close()
+    assert result["candles"] == []
+    assert result["setups"] == []
+    assert result["sr"] == []
+    assert result["history"] == []
+
+
+def test_build_coin_detail_unknown_tf():
+    """传入不存在的 tf 时 candles=[]，不抛。"""
+    s, _ = _store_with_harmonic_multi()
+    result = build_coin_detail(s, "BTC", tf="NOPE")
+    s.close()
+    assert result["candles"] == []
+
+
+# ---- render_harmonic_detail_html ----
+
+def _detail_list_state() -> list[dict]:
+    """合成 list_state（供 render_harmonic_detail_html 首屏注入）。"""
+    return [
+        {"coin": "BTC", "asset_class": "crypto",  "best_conf": 0.82,
+         "direction": "long",  "n_setups": 1, "has_completed": True},
+        {"coin": "XAU", "asset_class": "tradfi",  "best_conf": 0.78,
+         "direction": "long",  "n_setups": 1, "has_completed": True},
+        {"coin": "ETH", "asset_class": "crypto",  "best_conf": 0.65,
+         "direction": "short", "n_setups": 1, "has_completed": False},
+    ]
+
+
+def test_render_harmonic_detail_html_returns_str():
+    """render_harmonic_detail_html 返回非空字符串。"""
+    html = render_harmonic_detail_html(_detail_list_state())
+    assert isinstance(html, str) and len(html) > 100
+
+
+def test_render_harmonic_detail_html_doctype():
+    """应是完整独立页面（含 <!DOCTYPE html>）。"""
+    html = render_harmonic_detail_html([])
+    assert "<!DOCTYPE html>" in html or "<!doctype html>" in html.lower()
+
+
+def test_render_harmonic_detail_html_dark_theme():
+    """含深色主题 CSS 变量 --bg。"""
+    html = render_harmonic_detail_html([])
+    assert "--bg" in html
+
+
+def test_render_harmonic_detail_html_no_cdn():
+    """自包含：不含外部 CDN/http 链接（w3.org SVG 命名空间除外）。"""
+    import re
+    html = render_harmonic_detail_html(_detail_list_state())
+    for kw in ("cdn.", "unpkg.com", "jsdelivr", "googleapis"):
+        assert kw not in html, f"不应含外部资源: {kw}"
+    bad = [m for m in re.findall(r'https?://[^\s"\'<>]+', html)
+           if "w3.org/2000/svg" not in m]
+    assert not bad, f"不应含外部链接: {bad[:3]}"
+
+
+def test_render_harmonic_detail_html_svg_elements():
+    """模板 JS 中应含 SVG 核心元素 <svg、<rect、<line、<polyline（蜡烛图定义）。"""
+    html = render_harmonic_detail_html(_detail_list_state())
+    for tag in ("<svg", "<rect", "<line", "<polyline"):
+        assert tag in html, f"HTML 应含 SVG 元素: {tag}"
+
+
+def test_render_harmonic_detail_html_candle_word():
+    """HTML 含「蜡烛」字样（表明渲染函数注释/label 存在）。"""
+    html = render_harmonic_detail_html(_detail_list_state())
+    assert "蜡烛" in html
+
+
+def test_render_harmonic_detail_html_tf_tab():
+    """HTML 含周期 tab 相关 JS（tfs_available）。"""
+    html = render_harmonic_detail_html(_detail_list_state())
+    assert "tfs_available" in html or "tab" in html.lower()
+
+
+def test_render_harmonic_detail_html_bullbear_labels():
+    """HTML 含「看多」和「看空」方向标签（JS 定义中）。"""
+    html = render_harmonic_detail_html(_detail_list_state())
+    assert "看多" in html
+    assert "看空" in html
+
+
+def test_render_harmonic_detail_html_tradfi_badge():
+    """HTML 含「TradFi」和「加密」徽章定义（JS 中 badgeHtml 或等效函数）。"""
+    html = render_harmonic_detail_html(_detail_list_state())
+    assert "TradFi" in html
+    assert "加密" in html
+
+
+def test_render_harmonic_detail_html_orderflow():
+    """HTML 含「订单流」字样（setup detail 或 explainer）。"""
+    html = render_harmonic_detail_html(_detail_list_state())
+    assert "订单流" in html
+
+
+def test_render_harmonic_detail_html_disclaimer():
+    """HTML 含「确认层非投资建议」诚实声明。"""
+    html = render_harmonic_detail_html(_detail_list_state())
+    assert "确认层非投资建议" in html or "非投资建议" in html
+
+
+def test_render_harmonic_detail_html_set_interval():
+    """HTML 含 setInterval（5s 轮询）。"""
+    html = render_harmonic_detail_html([])
+    assert "setInterval" in html
+
+
+def test_render_harmonic_detail_html_api_list_fetch():
+    """HTML 拉取 /api/harmonic/list（左面板刷新）。"""
+    html = render_harmonic_detail_html([])
+    assert "/api/harmonic/list" in html
+
+
+def test_render_harmonic_detail_html_api_coin_fetch():
+    """HTML 拉取 /api/harmonic/coin/（右面板详情）。"""
+    html = render_harmonic_detail_html([])
+    assert "/api/harmonic/coin/" in html
+
+
+def test_render_harmonic_detail_html_no_residual_double_braces():
+    """模板解转义完整：不含残留 {{ 。"""
+    html = render_harmonic_detail_html(_detail_list_state())
+    assert "{{" not in html, "残留 {{ → 模板转义不完整"
+
+
+def test_render_harmonic_detail_html_initial_state_injected():
+    """__INITIAL_STATE__ 占位符已被替换为可解析 JSON。"""
+    import json as _json, re as _re
+    html = render_harmonic_detail_html(_detail_list_state())
+    assert "__INITIAL_STATE__" not in html
+    m = _re.search(r"const S\s*=\s*(\[.*?\]);", html, _re.S)
+    assert m, "未找到注入的 const S（应为 JSON array）"
+    parsed = _json.loads(m.group(1))
+    assert isinstance(parsed, list)
+    assert parsed[0]["coin"] == "BTC"
+
+
+def test_render_harmonic_detail_html_filter_buttons():
+    """HTML 含过滤按钮：全部/加密/TradFi/有完整形态。"""
+    html = render_harmonic_detail_html(_detail_list_state())
+    assert "全部" in html
+    assert "有完整形态" in html
+
+
+def test_render_harmonic_detail_html_none_as_dash():
+    """JS 工具函数中 null → '—'（fmtN 或等效守卫）。"""
+    html = render_harmonic_detail_html([])
+    # 验证 JS 中有对 null/undefined 的守卫，返回 em dash
+    assert "—" in html or "&#x2014;" in html
+
+
+def test_render_harmonic_detail_html_prz_band():
+    """HTML JS 中含 PRZ（潜在反转区带）相关代码。"""
+    html = render_harmonic_detail_html(_detail_list_state())
+    assert "prz" in html.lower() or "PRZ" in html
+
+
+# ---- 路由注册（smoke: serve 中路由已声明，不起真实服务）----
+
+def test_serve_registers_harmonic_list_route():
+    """serve 函数源码中应含 /api/harmonic/list 路由声明。"""
+    import inspect
+    from smc_tracker import dashboard as _dash
+    src = inspect.getsource(_dash.serve)
+    assert "/api/harmonic/list" in src, "serve() 应含 /api/harmonic/list 路由"
+
+
+def test_serve_registers_harmonic_coin_route():
+    """serve 函数源码中应含 /api/harmonic/coin 路由声明。"""
+    import inspect
+    from smc_tracker import dashboard as _dash
+    src = inspect.getsource(_dash.serve)
+    assert "/api/harmonic/coin" in src, "serve() 应含 /api/harmonic/coin 路由"
+
+
+def test_serve_registers_harmonic2_route():
+    """serve 函数源码中应含 /harmonic2 路由声明。"""
+    import inspect
+    from smc_tracker import dashboard as _dash
+    src = inspect.getsource(_dash.serve)
+    assert "/harmonic2" in src, "serve() 应含 /harmonic2 路由"
+
+
+def test_serve_still_has_old_harmonic_route():
+    """旧 /harmonic 路由在 serve() 中必须保留（不破坏现有用户入口）。"""
+    import inspect
+    from smc_tracker import dashboard as _dash
+    src = inspect.getsource(_dash.serve)
+    assert '"/harmonic"' in src or "'/harmonic'" in src, "旧 /harmonic 路由应保留"
+
+
 if __name__ == "__main__":
     for name, fn in list(globals().items()):
         if name.startswith("test_") and callable(fn):
