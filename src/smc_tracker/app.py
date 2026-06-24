@@ -389,7 +389,7 @@ class TradingSystem:
                 self._ta_seen[coin] = now
                 print(f"[{_ts(now)}] 📐 {self.ta_signal.fmt(sig)}{self._price_tag(coin)}")
                 if self.cfg.digest.enabled:
-                    self.hl_digest.add_bias(coin, sig.direction == "long", "TA")
+                    self.hl_digest.add_bias(coin, sig["direction"] == "long", "TA")
                 self._emit("ta", f"[{_ts(now)}] {self.ta_signal.fmt(sig)}{self._price_tag(coin)}")
         ze = self.zones.get(coin)
         if ze is None:
