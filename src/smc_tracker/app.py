@@ -1466,20 +1466,33 @@ class TradingSystem:
                 is_cold = coverage < _COLD_THRESHOLD
                 if is_cold:
                     log.info(
-                        "K线采集冷启动模式：已覆盖 %d/%d 币（%.1f%%），batch_size=%d，连续回填",
-                        covered, _total_coins, coverage * 100, _COLD_BATCH,
+                        "K线采集冷启动模式：已覆盖 %d/%d 币（%.1f%%），优先采集未覆盖币，连续回填",
+                        covered, _total_coins, coverage * 100,
                     )
 
-            batch_size = _COLD_BATCH if is_cold else _WARM_BATCH
-
             try:
-                self._collect_offset = await self.candle_collector.collect_batch(
-                    self._collect_offset, batch_size)
-                log.info(
-                    "K线批量采集落 DB（offset→%d，batch=%d，%s）",
-                    self._collect_offset, batch_size,
-                    "冷启动" if is_cold else "稳态",
-                )
+                if is_cold and _probe_tf:
+                    # 冷启动：优先采集 DB 中缺数据的币（每批最多 _COLD_BATCH 个）
+                    # 保证每批必然新增覆盖，避免盲目轮转浪费在已覆盖区。
+                    # uncovered_symbols 基于 probe_tf 查询；个别币超时会被 _fetch_one
+                    # 的 retry_bars 重试逻辑跳过，下轮再试，诚实不假装成功。
+                    uncovered = self.candle_collector.uncovered_symbols(_probe_tf)
+                    # 每批取前 _COLD_BATCH 个未覆盖币；若全部已覆盖则 probe_tf 已达标，
+                    # 但其它 tf 可能还有缺口——此时 is_cold=False 不会进入此分支。
+                    batch_subset = uncovered[:_COLD_BATCH]
+                    n_written = await self.candle_collector.collect_symbols(batch_subset)
+                    log.info(
+                        "K线冷启动采集：本批 %d 个未覆盖币，写入 %d 根（probe_tf=%s）",
+                        len(batch_subset), n_written, _probe_tf,
+                    )
+                else:
+                    # 稳态：原有 offset 轮转逻辑，完全向后兼容
+                    self._collect_offset = await self.candle_collector.collect_batch(
+                        self._collect_offset, _WARM_BATCH)
+                    log.info(
+                        "K线批量采集落 DB（offset→%d，batch=%d，稳态）",
+                        self._collect_offset, _WARM_BATCH,
+                    )
             except Exception as exc:  # noqa: BLE001
                 log.warning("K线采集失败: %s", exc)
 

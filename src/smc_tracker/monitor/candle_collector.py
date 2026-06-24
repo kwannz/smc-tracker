@@ -2,11 +2,15 @@
 
 设计原则：
   - 共享单一 BitgetREST session（async with），避免 N 个 coin×tf 各建 TCP 连接。
-  - asyncio.Semaphore 限流并发（默认 4），防 429 限流。
+  - asyncio.Semaphore 限流并发（默认 8），防 429 限流。
+    * 实证：Bitget K 线接口在谐波侧 _SEMA=8 多轮 0 次 429，有并发余量；原 4 并发导致
+      120 币×7tf=840 请求单轮需 3.5~10.5 分钟，8 并发可减半。
   - 单 coin/tf 异常 log.warning 吞掉，不中断其它组合。
   - 复用 bitget.rest.klines（含分页回填 + 429 重试），不重造轮子。
   - 写入通过 store.upsert_candles（INSERT OR REPLACE），跨重启持久，去重安全。
   - collect_batch：增量轮转采集，每次取 batch_size 个币，offset 滚动覆盖全集（661 币分多轮）。
+  - collect_symbols：指定币子集采集（供冷启动优先采集未覆盖币）。
+  - uncovered_symbols：查询 DB 中指定 tf 缺数据的 (coin, symbol) 列表，冷启动时优先这些币。
   - _clean_candles：数据质量守卫——拒 NaN/inf、ts 严格递增去重、价格>0、h>=l。
   - 超时重试：单 coin/tf TimeoutError 时以 retry_bars 减小分页页数重试 1 次（指数退避不无限重试）。
   - 冷启动检测：covered_coin_count 供调用方判断 DB 覆盖度，加速批量填满阶段。
@@ -100,7 +104,7 @@ class BitgetCandleCollector:
         timeframes: list[str],
         bars: int,
         store: Any,
-        sema_limit: int = 4,
+        sema_limit: int = 8,
         retry_bars: int = 100,
     ) -> None:
         self.coin_to_symbol = coin_to_symbol
@@ -142,6 +146,86 @@ class BitgetCandleCollector:
             )
         except Exception:  # noqa: BLE001
             return 0
+
+    def uncovered_symbols(self, tf: str) -> list[tuple[str, str]]:
+        """返回 coin_to_symbol 中该 tf 在 DB 无任何数据的 (coin, symbol) 列表。
+
+        冷启动加速用：先查哪些币缺数据，collect_symbols 优先采集这些币，
+        保证每批必然新增覆盖，而非盲目轮转到已有数据的高 vol 区浪费时间。
+
+        鸭子类型兜底：
+          - store 有 conn（SQLite）：单次 SELECT DISTINCT coin 查已覆盖集合，O(覆盖数)。
+          - store 有 count_candles：逐 coin 查询（慢但正确）。
+          - store 无上述属性：返回全部 coin（等价"全部未覆盖"，不崩溃）。
+
+        Args:
+            tf: K 线周期，如 "1H"
+
+        Returns:
+            DB 中该 tf 无数据的 (coin, symbol) 列表；异常时返回全部（不崩溃）。
+        """
+        all_pairs = list(self.coin_to_symbol.items())
+        if not all_pairs:
+            return []
+
+        try:
+            conn = getattr(self.store, "conn", None)
+            if conn is not None:
+                # 快速路径：一次 SQL 查出所有已覆盖 coin
+                rows = conn.execute(
+                    "SELECT DISTINCT coin FROM bitget_candles WHERE tf=?",
+                    (tf,),
+                ).fetchall()
+                covered_set: set[str] = {r[0] for r in rows}
+                return [(coin, sym) for coin, sym in all_pairs if coin not in covered_set]
+
+            # 慢速路径：duck-type count_candles 逐 coin 判断
+            count_fn = getattr(self.store, "count_candles", None)
+            if count_fn is not None:
+                return [
+                    (coin, sym) for coin, sym in all_pairs
+                    if count_fn(coin, tf) == 0
+                ]
+
+            # 最后兜底：无任何查询手段，保守返回全部（视作全部未覆盖）
+            return all_pairs
+
+        except Exception:  # noqa: BLE001
+            # 异常时保守返回全部（不崩溃，下轮 DB 可能恢复正常）
+            return all_pairs
+
+    async def collect_symbols(
+        self,
+        symbols_subset: list[tuple[str, str]],
+    ) -> int:
+        """采集指定 (coin, symbol) 子集的所有 timeframes K 线，清洗后 upsert。
+
+        冷启动优先采集未覆盖币的入口。与 collect_batch 不同：直接接受"要采哪些币"列表，
+        不关心 offset，专为"我知道要采这批"场景设计。
+
+        Args:
+            symbols_subset: 要采集的 (coin, symbol) 列表（由 uncovered_symbols 提供）
+
+        Returns:
+            本批总写入根数。symbols_subset 为空时返回 0。
+        """
+        if not symbols_subset:
+            return 0
+
+        sema = asyncio.Semaphore(self.sema_limit)
+        total = 0
+
+        async with BitgetREST() as bg:
+            tasks = [
+                self._fetch_one(bg, sema, coin, symbol, tf)
+                for coin, symbol in symbols_subset
+                for tf in self.timeframes
+            ]
+            results = await asyncio.gather(*tasks, return_exceptions=False)
+            for n in results:
+                total += n
+
+        return total
 
     async def collect_once(self) -> int:
         """采集所有 coin×tf 的 K 线并写入 DB，返回总写入根数。
