@@ -1219,8 +1219,9 @@ class TradingSystem:
         """
         if not self.cfg.bollinger.enabled or self.bb_monitor is None:
             return
+        # 启动后短延迟即首轮（等采集器填 DB ~40s），避免重启后长时间空窗；之后每 interval 一轮
+        await asyncio.sleep(90.0)
         while not self._stopping:
-            await asyncio.sleep(self.cfg.bollinger.interval_sec)
             try:
                 now = int(time.time() * 1000)
                 rows = await self.bb_monitor.refresh(now)
@@ -1230,6 +1231,7 @@ class TradingSystem:
                     self._push_harmonic(card)   # 独立 TA 通道（与 HL 分开）
             except Exception as exc:  # noqa: BLE001
                 log.warning("布林带周期推送失败: %s", exc)
+            await asyncio.sleep(self.cfg.bollinger.interval_sec)
 
     async def _periodic_harmonic_board(self) -> None:
         """周期推送 Bitget 永续多周期谐波形态前瞻卡片（默认 15 分钟）。
@@ -1239,10 +1241,9 @@ class TradingSystem:
         """
         if not self.cfg.harmonic.enabled or self.harmonic_monitor is None:
             return
-        # 相位错开：与 BB 板（同为 interval_sec 周期）偏移半周期，避免两板同刻爆发回填请求撞 429
-        await asyncio.sleep(self.cfg.harmonic.interval_sec / 2)
+        # 启动后短延迟即首轮（错峰 BB +60s，等采集器填 DB），首轮即落库出数据，避免 /harmonic 长空窗
+        await asyncio.sleep(150.0)
         while not self._stopping:
-            await asyncio.sleep(self.cfg.harmonic.interval_sec)
             try:
                 now = int(time.time() * 1000)
                 rows = await self.harmonic_monitor.refresh(now)
@@ -1259,6 +1260,7 @@ class TradingSystem:
                     log.warning("谐波 setups 落库失败: %s", db_exc)
             except Exception as exc:  # noqa: BLE001
                 log.warning("谐波形态周期推送失败: %s", exc)
+            await asyncio.sleep(self.cfg.harmonic.interval_sec)
 
     async def _periodic_solana(self, every: float = 120.0) -> None:
         """SOL meme 供应量监控（mint/burn）。较长间隔，避开公开 RPC 限流。"""
