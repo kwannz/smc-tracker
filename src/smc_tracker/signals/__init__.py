@@ -11,6 +11,7 @@ from .efficacy import SignalEfficacy, KindEfficacy, wilson_interval
 from .risk import PositionSize, compute_position_size
 from .knn_validator import KNNVerdict, validate_direction
 from .trade_setup import TradeSetup, build_setups
+from .orderflow_confirm import OrderflowConfirm, confirm_setup
 
 __all__ = ["Signal", "SignalEngine", "DivergenceDetector", "DivergenceSignal",
            "ConsensusSignal", "CoinPositioning", "WhaleConsensus", "positioning",
@@ -21,4 +22,5 @@ __all__ = ["Signal", "SignalEngine", "DivergenceDetector", "DivergenceSignal",
            "SignalEfficacy", "KindEfficacy", "wilson_interval",
            "PositionSize", "compute_position_size",
            "KNNVerdict", "validate_direction",
-           "TradeSetup", "build_setups"]
+           "TradeSetup", "build_setups",
+           "OrderflowConfirm", "confirm_setup"]

@@ -878,3 +878,270 @@ class TestHarmonicInjectionNoCollision:
         assert gartley_bullet_lines[0] != gartley_bullet_lines[1], (
             "两个 Gartley-bull 行内容相同，存在 setup 注入碰撞"
         )
+
+
+# ── 订单流确认接入谐波监控测试（TDD 新增） ──────────────────────────────────────
+
+
+class _FakeOB:
+    """伪订单簿提供者（鸭子类型）：模拟 HLOrderbookMonitor 接口。
+
+    confirming_wall 返回一堵大墙；book_imbalance 返回同向失衡（long=正，short=负）。
+    """
+
+    def __init__(
+        self,
+        *,
+        wall_notional: float = 800_000.0,
+        wall_dist_pct: float = 0.008,
+        imbalance: float = 0.42,   # 正=bid 占优=支持 long；负=ask 占优=支持 short
+        has_wall: bool = True,
+    ) -> None:
+        self._wall_notional = wall_notional
+        self._wall_dist_pct = wall_dist_pct
+        self._imbalance = imbalance
+        self._has_wall = has_wall
+
+    def confirming_wall(
+        self, coin: str, price: float, side: str, tol_pct: float = 0.015
+    ) -> dict | None:
+        if not self._has_wall:
+            return None
+        return {
+            "notional": self._wall_notional,
+            "dist_pct": self._wall_dist_pct,
+            "side": side,
+            "price": price * (1 - self._wall_dist_pct),
+        }
+
+    def book_imbalance(self, coin: str) -> dict[str, float]:
+        return {"imbalance": self._imbalance}
+
+
+def _make_completed_row_with_setup(
+    *,
+    direction: str = "long",
+    entry_lo: float = 60200.0,
+    entry_hi: float = 60650.0,
+    confidence: float = 0.72,
+    orderflow=None,  # 预注入 orderflow（None=未注入，由 monitor 注入）
+) -> list[dict]:
+    """构造含 completed setup 的 rows，支持预注入 orderflow。"""
+    from smc_tracker.signals.trade_setup import TradeSetup
+    setup = TradeSetup(
+        coin="BTC", tf="4H", direction=direction, pattern="Gartley",
+        completed=True, entry_lo=entry_lo, entry_hi=entry_hi,
+        stop=59000.0, target1=62500.0, target2=65000.0, rr=2.0,
+        fib_note="D=形态定义比率位(0.786·XA 等，非独立确认)",
+        knn_supports=True, knn_note="KNN≈随机基线",
+        position_qty=0.003, position_notional=180.0,
+        confidence=confidence, note="诚实标注",
+        src_key=f"C|Gartley|{direction}|60400.0",
+        orderflow=orderflow,  # 预注入（或 None 由 monitor 层注入）
+    )
+    hit_direction = "bull" if direction == "long" else "bear"
+    return [
+        {
+            "coin": "BTC",
+            "symbol": "BTCUSDT",
+            "price": 62538.5,
+            "tf": "4H",
+            "completed": [
+                {
+                    "pattern": "Gartley",
+                    "direction": hit_direction,
+                    "prz": (entry_lo, entry_hi),
+                    "completed": True,
+                    "confidence": confidence,
+                    "confluence": 3,
+                    "points": {"D": (99, 60400.0)},
+                    "setup": setup,
+                }
+            ],
+            "forming": [],
+        }
+    ]
+
+
+class TestOrderflowConfirmIntegration:
+    """订单流确认接入谐波监控 render 的集成测试（注意：render 本身是纯函数，
+    orderflow 已在 _fetch_tf/refresh 中注入到 setup.orderflow；
+    这里模拟预注入路径，测试 render 对 orderflow 的显示逻辑）。"""
+
+    def setup_method(self) -> None:
+        self.monitor = HarmonicMonitor(
+            coin_to_symbol={"BTC": "BTCUSDT"},
+            timeframes=["4H"],
+            bars=300,
+            order=3,
+            tol=0.05,
+            top_n=10,
+        )
+
+    def test_orderflow_confirmed_shows_checkmark(self) -> None:
+        """orderflow.confirmed=True → 卡片含「📊订单流✓」。"""
+        from smc_tracker.signals.orderflow_confirm import OrderflowConfirm
+        of = OrderflowConfirm(
+            confirmed=True, wall_usd=800_000.0, wall_dist_pct=0.008,
+            imbalance=0.42, note="测试确认"
+        )
+        rows = _make_completed_row_with_setup(orderflow=of)
+        card = self.monitor.render(rows, _NOW_MS)
+        assert card is not None
+        assert "📊订单流✓" in card, f"确认墙应显示「📊订单流✓」，卡片:\n{card}"
+
+    def test_orderflow_confirmed_shows_wall_usd_no_scientific(self) -> None:
+        """确认行包含墙名义额，且价格非科学计数法。"""
+        from smc_tracker.signals.orderflow_confirm import OrderflowConfirm
+        of = OrderflowConfirm(
+            confirmed=True, wall_usd=800_000.0, wall_dist_pct=0.008,
+            imbalance=0.42, note="测试"
+        )
+        rows = _make_completed_row_with_setup(orderflow=of)
+        card = self.monitor.render(rows, _NOW_MS)
+        assert card is not None
+        assert "e+" not in card.lower(), f"卡片含科学计数法:\n{card}"
+        assert "e-" not in card.lower(), f"卡片含科学计数法:\n{card}"
+        # 墙名义额 800000 以某种格式出现（fmt_px）
+        assert "800" in card, f"墙名义额 800000 未出现在卡片:\n{card}"
+
+    def test_orderflow_unconfirmed_shows_cross(self) -> None:
+        """orderflow 非 None 但 confirmed=False → 卡片含「📊订单流✗」。"""
+        from smc_tracker.signals.orderflow_confirm import OrderflowConfirm
+        of = OrderflowConfirm(
+            confirmed=False, wall_usd=0.0, wall_dist_pct=1.0,
+            imbalance=0.0, note="PRZ处无同向墙"
+        )
+        rows = _make_completed_row_with_setup(orderflow=of)
+        card = self.monitor.render(rows, _NOW_MS)
+        assert card is not None
+        assert "📊订单流✗" in card, f"未确认应显示「📊订单流✗」，卡片:\n{card}"
+
+    def test_orderflow_none_no_marker(self) -> None:
+        """setup.orderflow=None → 卡片不显示订单流标记行（无数据，诚实不显示）。"""
+        rows = _make_completed_row_with_setup(orderflow=None)
+        card = self.monitor.render(rows, _NOW_MS)
+        assert card is not None
+        assert "📊订单流" not in card, (
+            f"orderflow=None 时不应显示订单流行，卡片:\n{card}"
+        )
+
+    def test_ob_provider_none_no_crash(self) -> None:
+        """ob_provider=None → render 不崩溃，不显示订单流行（诚实）。"""
+        monitor_no_ob = HarmonicMonitor(
+            coin_to_symbol={"BTC": "BTCUSDT"},
+            timeframes=["4H"],
+            bars=300,
+            order=3,
+            tol=0.05,
+            top_n=10,
+            ob_provider=None,  # 无数据提供者
+        )
+        rows = _make_completed_row_with_setup(orderflow=None)
+        card = monitor_no_ob.render(rows, _NOW_MS)
+        assert card is not None, "ob_provider=None 时 render 不应返回 None（有 setup）"
+        assert "📊订单流" not in card, (
+            f"ob_provider=None 时不应显示订单流行，卡片:\n{card}"
+        )
+
+    def test_ob_provider_accepted_in_constructor(self) -> None:
+        """HarmonicMonitor 接受 ob_provider 参数，存储为属性。"""
+        fake_ob = _FakeOB()
+        monitor = HarmonicMonitor(
+            coin_to_symbol={"BTC": "BTCUSDT"},
+            timeframes=["4H"],
+            bars=300,
+            order=3,
+            tol=0.05,
+            top_n=10,
+            ob_provider=fake_ob,
+        )
+        assert monitor.ob_provider is fake_ob, (
+            f"ob_provider 应存储为属性，实际: {monitor.ob_provider!r}"
+        )
+
+    def test_subtitle_mentions_orderflow_intent(self) -> None:
+        """卡片副标题（第3行）含订单流确认相关词（领先意图 × PRZ 完整闭环描述）。"""
+        rows = _make_completed_row_with_setup()
+        card = self.monitor.render(rows, _NOW_MS)
+        assert card is not None
+        lines = card.splitlines()
+        # 第3行（index=2）是新增的订单流副标题
+        subtitle2 = lines[2] if len(lines) > 2 else ""
+        of_keywords = ("订单流", "领先意图", "PRZ", "spoof", "确认")
+        has_kw = any(kw in subtitle2 for kw in of_keywords)
+        assert has_kw, (
+            f"第3行副标题应含订单流说明，实际: {subtitle2!r}"
+        )
+
+    def test_confirmed_setup_confidence_boosted(self) -> None:
+        """订单流确认的 setup 置信 ×1.1（封顶 0.90），未确认不 boost。
+
+        注意：render 是纯函数，不 boost；boost 发生在 _fetch_tf（refresh 层）。
+        这里测试 FakeOB 通过 refresh 路径注入后置信被 boost 的行为，
+        通过构造预设置信验证 render 正确显示 boosted 值。
+        """
+        from smc_tracker.signals.orderflow_confirm import OrderflowConfirm
+        # 模拟 refresh 已 boost：base 0.72 × 1.1 = 0.792 → 显示 79%
+        of = OrderflowConfirm(
+            confirmed=True, wall_usd=500_000.0, wall_dist_pct=0.005,
+            imbalance=0.30, note="已确认"
+        )
+        # 预注入已 boost 的置信（0.792）
+        from smc_tracker.signals.trade_setup import TradeSetup
+        setup_boosted = TradeSetup(
+            coin="BTC", tf="4H", direction="long", pattern="Gartley",
+            completed=True, entry_lo=60200.0, entry_hi=60650.0,
+            stop=59000.0, target1=62500.0, target2=65000.0, rr=2.0,
+            fib_note="D=形态定义比率位",
+            knn_supports=True, knn_note="样本足",
+            position_qty=0.003, position_notional=180.0,
+            confidence=0.792,  # 0.72 × 1.1
+            note="诚实",
+            src_key="C|Gartley|long|60400.0",
+            orderflow=of,
+        )
+        rows = [
+            {
+                "coin": "BTC", "symbol": "BTCUSDT", "price": 62538.5, "tf": "4H",
+                "completed": [
+                    {
+                        "pattern": "Gartley", "direction": "bull",
+                        "prz": (60200.0, 60650.0), "completed": True,
+                        "confidence": 0.792, "confluence": 3,
+                        "points": {"D": (99, 60400.0)},
+                        "setup": setup_boosted,
+                    }
+                ],
+                "forming": [],
+            }
+        ]
+        card = self.monitor.render(rows, _NOW_MS)
+        assert card is not None
+        # 置信显示 79%（int(0.792*100)=79）
+        assert "79" in card, f"boosted 置信 79% 应出现在卡片:\n{card}"
+        assert "📊订单流✓" in card, "确认 setup 应显示订单流✓"
+
+    def test_confirmed_shows_bid_label_for_long(self) -> None:
+        """long 方向确认行显示 bid 墙标签。"""
+        from smc_tracker.signals.orderflow_confirm import OrderflowConfirm
+        of = OrderflowConfirm(
+            confirmed=True, wall_usd=600_000.0, wall_dist_pct=0.007,
+            imbalance=0.38, note="bid墙确认"
+        )
+        rows = _make_completed_row_with_setup(direction="long", orderflow=of)
+        card = self.monitor.render(rows, _NOW_MS)
+        assert card is not None
+        assert "bid" in card, f"long 方向确认行应含 bid，卡片:\n{card}"
+
+    def test_confirmed_shows_ask_label_for_short(self) -> None:
+        """short 方向确认行显示 ask 墙标签。"""
+        from smc_tracker.signals.orderflow_confirm import OrderflowConfirm
+        of = OrderflowConfirm(
+            confirmed=True, wall_usd=600_000.0, wall_dist_pct=0.007,
+            imbalance=-0.38, note="ask墙确认"
+        )
+        rows = _make_completed_row_with_setup(direction="short", orderflow=of)
+        card = self.monitor.render(rows, _NOW_MS)
+        assert card is not None
+        assert "ask" in card, f"short 方向确认行应含 ask，卡片:\n{card}"

@@ -20,11 +20,12 @@
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Any
+from dataclasses import dataclass, field
+from typing import TYPE_CHECKING, Any
 
 from ..indicators.fibonacci import fib_levels, nearest_fib
 from .knn_validator import validate_direction
+from .orderflow_confirm import OrderflowConfirm
 from .risk import RiskPlan, compute_position_size, compute_risk
 
 # ── 诚实免责声明（所有 setup note 都含此项，CLAUDE.md §二） ───────────────────
@@ -66,6 +67,9 @@ class TradeSetup:
         src_key: 唯一来源标识，防止同名形态注入碰撞（🔴-1 修复）。
                  completed → f"C|{pattern}|{direction}|{D_idx}"（D_idx=D点价格）
                  forming   → f"F|{pattern}|{direction}|{round(prz_lo, 8)}"
+        orderflow: 订单流确认结果（monitor 层注入，build_setups 默认 None）。
+                   confirmed=True 表示 PRZ 处有同向挂单墙+失衡确认；None=无订单流数据。
+                   ⚠诚实：墙可能 spoof/吸收≠必反转，仅辅助确认非保证。
     """
     coin: str
     tf: str
@@ -86,6 +90,8 @@ class TradeSetup:
     confidence: float
     note: str
     src_key: str  # 🔴-1: 唯一来源标识，用于注入精确匹配
+    # 订单流确认（monitor 层注入；build_setups 纯函数无 ob_provider，留 None）
+    orderflow: OrderflowConfirm | None = field(default=None)
 
 
 def _direction_map(harmonic_direction: str) -> str | None:

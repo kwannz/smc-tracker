@@ -181,6 +181,35 @@ class HLOrderbookMonitor:
             for coin, sides in self._walls.items()
         }
 
+    def confirming_wall(
+        self, coin: str, price: float, side: str, tol_pct: float = 0.015
+    ) -> dict | None:
+        """返回 coin 在 side 侧、距 price 不超过 tol_pct 的**最大**挂单墙（确认 PRZ 的领先意图）。
+
+        side: "bid"（看多 setup 找支撑墙）/ "ask"（看空找压制墙）。
+        无符合墙 → None。返回 {"px":float, "notional":float, "n":int, "dist_pct":float}。
+
+        诚实定位：墙可能 spoof（虚挂）/吸收 ≠ 必反转，仅作 PRZ 确认层，非独立信号。
+        price <= 0 → None（防止除零/负价格无意义查询）。
+        """
+        if price <= 0:
+            return None
+
+        side_walls = self._walls.get(coin, {}).get(side, {})
+        if not side_walls:
+            return None
+
+        # 筛选距 price 不超过 tol_pct 的档位，按 notional 降序取最大
+        best: dict | None = None
+        best_notional = -1.0
+        for px, (notional, n) in side_walls.items():
+            dist_pct = abs(px - price) / price
+            if dist_pct <= tol_pct and notional > best_notional:
+                best_notional = notional
+                best = {"px": px, "notional": notional, "n": n, "dist_pct": dist_pct}
+
+        return best
+
     # ---- 落库 ----
     def flush(self) -> int:
         """墙事件缓冲批量落库，清空缓冲；返回落库行数。store=None 时仅清空缓冲。"""

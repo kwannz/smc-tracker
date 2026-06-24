@@ -161,6 +161,78 @@ def test_flush_with_store():
         store.close()
 
 
+# ---- confirming_wall 新查询方法 ----
+
+def _make_mon_with_walls(walls_data: dict) -> HLOrderbookMonitor:
+    """构造带预填 _walls 的 monitor（无 WS 连接）。"""
+    ws = _FakeWS()
+    mon = HLOrderbookMonitor(["BTC", "ETH"], ws, store=None)
+    for coin, sides in walls_data.items():
+        for side, pxmap in sides.items():
+            mon._walls[coin][side] = pxmap
+    return mon
+
+
+def test_confirming_wall_hit():
+    """BTC bid px=100，查询 price=100.5，tol=1.5% → 命中，dist_pct 正确。"""
+    mon = _make_mon_with_walls({"BTC": {"bid": {100.0: (2_000_000.0, 5)}, "ask": {}}})
+    result = mon.confirming_wall("BTC", price=100.5, side="bid", tol_pct=0.015)
+    assert result is not None, "应命中 px=100 的墙"
+    assert result["px"] == 100.0
+    assert abs(result["notional"] - 2_000_000.0) < 1e-6
+    assert result["n"] == 5
+    # dist_pct = |100 - 100.5| / 100.5 ≈ 0.004975
+    expected_dist = abs(100.0 - 100.5) / 100.5
+    assert abs(result["dist_pct"] - expected_dist) < 1e-8
+
+
+def test_confirming_wall_too_far_returns_none():
+    """墙距 price 超过 tol_pct → 返回 None。"""
+    mon = _make_mon_with_walls({"BTC": {"bid": {80.0: (2_000_000.0, 3)}, "ask": {}}})
+    # |80 - 100| / 100 = 20%，远超 1.5%
+    result = mon.confirming_wall("BTC", price=100.0, side="bid", tol_pct=0.015)
+    assert result is None
+
+
+def test_confirming_wall_wrong_side_returns_none():
+    """墙在 bid 侧，查询 ask 侧 → 返回 None。"""
+    mon = _make_mon_with_walls({"BTC": {"bid": {100.0: (2_000_000.0, 3)}, "ask": {}}})
+    result = mon.confirming_wall("BTC", price=100.0, side="ask", tol_pct=0.015)
+    assert result is None
+
+
+def test_confirming_wall_invalid_price_returns_none():
+    """price <= 0 → 返回 None（防止零/负价格导致除零）。"""
+    mon = _make_mon_with_walls({"BTC": {"bid": {100.0: (2_000_000.0, 3)}, "ask": {}}})
+    assert mon.confirming_wall("BTC", price=0.0, side="bid") is None
+    assert mon.confirming_wall("BTC", price=-5.0, side="bid") is None
+
+
+def test_confirming_wall_unknown_coin_returns_none():
+    """coin 未订阅/无墙数据 → 返回 None。"""
+    mon = _make_mon_with_walls({})
+    result = mon.confirming_wall("UNKNOWN", price=100.0, side="bid")
+    assert result is None
+
+
+def test_confirming_wall_picks_largest_notional():
+    """多个 px 均在 tol 范围内，返回 notional 最大的那个。"""
+    # price=100, tol=5%: px=97(dist=3%)、px=103(dist=3%) 均在范围内
+    mon = _make_mon_with_walls({
+        "ETH": {
+            "ask": {
+                103.0: (500_000.0, 2),   # 小墙
+                97.0: (3_000_000.0, 8),  # 大墙（notional 更大）
+            },
+            "bid": {},
+        }
+    })
+    result = mon.confirming_wall("ETH", price=100.0, side="ask", tol_pct=0.05)
+    assert result is not None
+    assert result["px"] == 97.0   # notional 最大的是 97.0
+    assert result["notional"] == 3_000_000.0
+
+
 if __name__ == "__main__":
     import pytest
 

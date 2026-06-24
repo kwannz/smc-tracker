@@ -23,6 +23,7 @@ from typing import Any
 
 from ..bitget.rest import BitgetREST
 from ..indicators.harmonic import analyze_candles
+from ..signals.orderflow_confirm import confirm_setup as _confirm_setup
 from ..signals.trade_setup import TradeSetup, build_setups
 from ..util import fmt_px, fmt_ts
 
@@ -59,7 +60,7 @@ class HarmonicMonitor:
     """
     __slots__ = (
         "coin_to_symbol", "timeframes", "bars", "order", "tol", "top_n",
-        "account_usd", "risk_pct", "target_rr",
+        "account_usd", "risk_pct", "target_rr", "ob_provider",
     )
 
     def __init__(
@@ -73,6 +74,7 @@ class HarmonicMonitor:
         account_usd: float = 10_000.0,
         risk_pct: float = 0.01,
         target_rr: float = 2.0,
+        ob_provider: Any | None = None,
     ) -> None:
         self.coin_to_symbol = coin_to_symbol
         self.timeframes = timeframes
@@ -83,6 +85,9 @@ class HarmonicMonitor:
         self.account_usd = account_usd
         self.risk_pct = risk_pct
         self.target_rr = target_rr
+        # 订单流确认提供者（鸭子类型：需有 confirming_wall + book_imbalance）
+        # None=无数据（HL l2Book 未覆盖的币），confirm_setup 返回 None，诚实不崩
+        self.ob_provider = ob_provider
 
     async def refresh(self, now_ms: int) -> list[dict]:
         """并发拉取所有币种 × 周期 K 线，分析谐波形态，返回有形态的行。
@@ -124,6 +129,24 @@ class HarmonicMonitor:
                         _setup_index: dict[str, TradeSetup] = {
                             s.src_key: s for s in all_setups
                         }
+
+                        # 订单流确认：对每条 completed setup 注入 orderflow，
+                        # confirmed 的 setup 置信 ×1.1（封顶 0.90）
+                        # ob_provider=None 或无数据则跳过（诚实，不崩）
+                        if self.ob_provider is not None:
+                            for s in all_setups:
+                                if s.completed:
+                                    of = _confirm_setup(
+                                        s.coin,
+                                        s.direction,
+                                        s.entry_lo,
+                                        s.entry_hi,
+                                        self.ob_provider,
+                                    )
+                                    s.orderflow = of
+                                    if of is not None and of.confirmed:
+                                        # 订单流确认 boost 置信（领先意图×PRZ，诚实封顶）
+                                        s.confidence = min(0.90, s.confidence * 1.1)
 
                         # 🔴-1: 注入 setup 到每条 completed hit（按 src_key 精确匹配）
                         for hit in result.get("completed") or []:
@@ -267,6 +290,7 @@ class HarmonicMonitor:
         lines: list[str] = [
             f"🔷 谐波形态前瞻 [{ts}] (数据源: Bitget永续 · 谐波PRZ)",
             f"近窗 {total} 个形态（完整形态含可执行进场/止损/止盈/仓位；成形=前瞻PRZ；枢轴需右确认，C/D 滞后~order根）",
+            "完整形态含订单流确认(领先意图×PRZ)；⚠订单流仅辅助，墙可能spoof/吸收≠必反转",
         ]
 
         # ---- 成形中（前瞻预测）区块 ----
@@ -340,6 +364,19 @@ class HarmonicMonitor:
                     lines.append(line)
                     # fib_note 附注行（缩进）
                     lines.append(f"   {setup.fib_note}")
+                    # 订单流确认标记行（仅 completed setup 才有）
+                    of = setup.orderflow
+                    if of is not None:
+                        # 侧别：long→bid墙；short→ask墙
+                        side_label = "bid" if setup.direction == "long" else "ask"
+                        if of.confirmed:
+                            lines.append(
+                                f"  📊订单流✓({side_label}墙{fmt_px(of.wall_usd)}"
+                                f" 失衡{of.imbalance:+.2f})"
+                            )
+                        else:
+                            lines.append("  📊订单流✗(PRZ无同向墙)")
+                    # of is None → 无订单流数据，不显示（诚实：该币未被 ob_provider 覆盖）
                 else:
                     # 无 setup（劣质 setup 被 compute_risk 过滤）→ 退化为旧 PRZ 行
                     d_info = hit.get("points", {}).get("D")

@@ -678,6 +678,7 @@ class TradingSystem:
                     account_usd=self.cfg.harmonic.account_usd,
                     risk_pct=self.cfg.harmonic.risk_pct,
                     target_rr=self.cfg.harmonic.target_rr,
+                    ob_provider=self.orderbook_monitor,  # 订单流确认层（HL l2Book，主流币）
                 )
                 log.info("谐波监控器已建，top_%d 币: %s", harm_n, list(harm_c2s.keys())[:6])
 

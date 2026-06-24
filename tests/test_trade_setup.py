@@ -626,3 +626,74 @@ class TestStopUsesX:
         assert 100.0 <= s.stop <= 106.0, (
             f"forming long stop={s.stop:.2f} 应基于 prz_lo=105"
         )
+
+
+# ── 测试 12：orderflow 字段新增（订单流确认接入） ────────────────────────────────
+
+class TestOrderflowField:
+    """TradeSetup 新增 orderflow 字段，默认 None，build_setups 纯函数不注入。"""
+
+    def test_orderflow_field_exists(self):
+        """TradeSetup dataclass 有 orderflow 字段。"""
+        import dataclasses
+        fields = {f.name for f in dataclasses.fields(TradeSetup)}
+        assert "orderflow" in fields, "TradeSetup 缺少 orderflow 字段"
+
+    def test_orderflow_field_default_none(self):
+        """TradeSetup.orderflow 字段默认值为 None。"""
+        import dataclasses
+        for f in dataclasses.fields(TradeSetup):
+            if f.name == "orderflow":
+                # dataclass field default 或 default_factory
+                default_val = f.default
+                default_fac = f.default_factory  # type: ignore[attr-defined]
+                is_none_default = (
+                    default_val is None
+                    or (default_val is dataclasses.MISSING and default_fac is dataclasses.MISSING)
+                )
+                # default=None 表示字段有默认值 None
+                assert default_val is None, (
+                    f"orderflow 字段默认值应为 None，实际: {default_val!r}"
+                )
+                break
+
+    def test_build_setups_orderflow_is_none(self):
+        """build_setups 产出的 setup.orderflow 默认 None（纯函数，无 ob_provider）。"""
+        candles = _make_candles(120)
+        harmonic = _gartley_bull_harmonic()
+        setups = build_setups("BTC", "1h", candles, harmonic)
+        for s in setups:
+            assert s.orderflow is None, (
+                f"build_setups 产出的 setup.orderflow 应为 None，实际: {s.orderflow!r}"
+            )
+
+    def test_orderflow_field_accepts_none_assignment(self):
+        """orderflow 字段可赋值为 None（slots 模式，确保 setattr 不崩）。"""
+        candles = _make_candles(120)
+        harmonic = _gartley_bull_harmonic()
+        setups = build_setups("BTC", "1h", candles, harmonic)
+        if not setups:
+            pytest.skip("无 setup 产出，跳过赋值测试")
+        s = setups[0]
+        s.orderflow = None  # 不应抛 AttributeError（slots 字段赋值）
+        assert s.orderflow is None
+
+    def test_orderflow_field_accepts_orderflow_confirm(self):
+        """orderflow 字段可赋值为 OrderflowConfirm 实例（模拟 monitor 层注入）。"""
+        from smc_tracker.signals.orderflow_confirm import OrderflowConfirm
+        candles = _make_candles(120)
+        harmonic = _gartley_bull_harmonic()
+        setups = build_setups("BTC", "1h", candles, harmonic)
+        if not setups:
+            pytest.skip("无 setup 产出，跳过注入测试")
+        s = setups[0]
+        of = OrderflowConfirm(
+            confirmed=True,
+            wall_usd=500_000.0,
+            wall_dist_pct=0.008,
+            imbalance=0.35,
+            note="测试注入",
+        )
+        s.orderflow = of
+        assert s.orderflow is of
+        assert s.orderflow.confirmed is True
