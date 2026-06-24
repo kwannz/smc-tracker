@@ -218,7 +218,8 @@ class HarmonicMonitor:
 
                     return (coin, symbol, tf, result)
                 except Exception as exc:  # noqa: BLE001
-                    log.warning("谐波数据拉取失败 %s/%s: %s", coin, tf, exc)
+                    # repr(exc)：无消息异常(TimeoutError() 等)str() 为空无法诊断，repr 必含类型(§三-3)
+                    log.warning("谐波数据拉取失败 %s/%s: %r", coin, tf, exc)
                     return (coin, symbol, tf, None)
 
         # 共享单一 BitgetREST session（T1：避免每 币×周期 新建会话的 N+1 握手/限流放大）

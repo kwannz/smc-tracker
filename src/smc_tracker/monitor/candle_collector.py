@@ -191,8 +191,10 @@ class BitgetCandleCollector:
                 self.store.upsert_candles(rows)
                 return len(rows)
             except Exception as exc:  # noqa: BLE001
+                # 用 repr(exc) 而非 str(exc)：无消息异常(TimeoutError()/ClientError() 等)
+                # str() 为空会打出 "原因: "(空白，无法诊断)；repr 必含类型名，可诊断(§三-3)。
                 log.warning(
-                    "candle_collector: coin=%s tf=%s 采集失败，跳过。原因: %s",
+                    "candle_collector: coin=%s tf=%s 采集失败，跳过。原因: %r",
                     coin, tf, exc,
                 )
                 return 0

@@ -25,6 +25,13 @@ Handler = Callable[[dict, list, int], Any]
 
 WS_URL = "wss://ws.bitget.com/v2/ws/public"
 
+# 单条 subscribe 消息的 args 上限（分批阈值）。
+# 实证根因：all_perp(数百币 × trade/oi/candle)重连时若把全部订阅塞进一条
+# {"op":"subscribe","args":[...665+...]} 巨型消息，Bitget 服务端拒收并直接断链
+# （日志 "no close frame received or sent"）→ 重连风暴 → 数据流卡死。
+# 分批每条 ≤50 项（保守值，远低于服务端单消息上限），批间让出 event loop，稳定大 universe。
+_SUBSCRIBE_CHUNK = 50
+
 
 @dataclass(frozen=True, slots=True)
 class BitgetSub:
@@ -101,11 +108,21 @@ class BitgetWSClient:
     async def _send(self, subs: list[BitgetSub]) -> None:
         if self._conn is None or not subs:
             return
-        msg = {"op": "subscribe", "args": [s.to_arg() for s in subs]}
-        try:
-            await asyncio.wait_for(self._conn.send(orjson.dumps(msg).decode()), timeout=10)
-        except Exception as e:  # noqa: BLE001 — 超时/断链不阻塞，由 run() 重连
-            log.warning("Bitget 订阅发送失败/超时: %s", e)
+        # 分批：全永续(数百币)单条巨型 subscribe 消息会被 Bitget 服务端拒收并断链
+        # （WS 重连风暴根因）。每批 ≤_SUBSCRIBE_CHUNK 项，批间小睡让出 event loop，避免瞬时洪峰。
+        n = len(subs)
+        for i in range(0, n, _SUBSCRIBE_CHUNK):
+            chunk = subs[i:i + _SUBSCRIBE_CHUNK]
+            msg = {"op": "subscribe", "args": [s.to_arg() for s in chunk]}
+            try:
+                await asyncio.wait_for(self._conn.send(orjson.dumps(msg).decode()), timeout=10)
+            except Exception as e:  # noqa: BLE001 — 超时/断链不阻塞，由 run() 重连
+                log.warning("Bitget 订阅发送失败/超时(批 %d，已发 %d/%d): %s",
+                            i // _SUBSCRIBE_CHUNK, i, n, e)
+                return
+            # 多批时批间让步（单批/小 universe 不 sleep，零额外延迟）
+            if n > _SUBSCRIBE_CHUNK:
+                await asyncio.sleep(0.05)
 
     async def _ping_loop(self) -> None:
         while True:

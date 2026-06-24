@@ -772,7 +772,10 @@ class TradingSystem:
                     store=self.store,   # 优先读 DB K线缓存，不足回退 live（减 API/跨重启持久）
                     forward_provider=self.harmonic_forward,  # 前瞻置信（OI/funding；completed+forming）
                 )
-                log.info("谐波监控器已建，top_%d 币: %s", harm_n, list(harm_c2s.keys())[:6])
+                # 日志用真实纳入扫描的币数 len(harm_c2s)（all_perp 下=全永续；含并入 collected），
+                # 不用 harm_n（=cfg.top_n，仅 top_n 模式语义），避免 all_perp 误显 "top_12"。
+                log.info("谐波监控器已建，纳入扫描 %d 币(mode=%s): %s",
+                         len(harm_c2s), harm_umode, list(harm_c2s.keys())[:6])
 
             # ---- 谐波 K线 WS 增量驱动（B1+B2）：可选实时性层（harmonic.realtime_ws=True 时启用）----
             # realtime_ws=False 时跳过，行为不变（纯 periodic refresh 模式，向后兼容）。

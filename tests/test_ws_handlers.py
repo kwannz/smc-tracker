@@ -64,6 +64,42 @@ def test_hl_distinct_handlers_both_kept():
     assert len(c._handlers["trades"]) == 2       # 不同 handler 各保留
 
 
+def test_bitget_send_batches_large_sub_list():
+    """全永续(数百币)重连时 _send 必须分批，避免单条超大 subscribe 消息被服务端断链。
+
+    历史 bug（实跑暴露 WS 重连风暴根因）：run() 重连时 `_send(list(self._subs))` 把全部
+    订阅塞进一条 {"op":"subscribe","args":[...665+...]} 巨型消息；all_perp(665币×trade/oi)
+    下 Bitget 服务端拒收并直接断链（日志 "no close frame received or sent"）→ 重连 → 又发
+    巨型消息 → 风暴循环 → K线/成交数据流卡死。修复：每条消息 args ≤ _SUBSCRIBE_CHUNK 分批。
+    top_12 时只 12 项小消息，所以历史一直没暴露此 bug。
+    """
+    import asyncio
+
+    import orjson
+
+    from smc_tracker.bitget.ws_client import _SUBSCRIBE_CHUNK
+
+    b = BitgetWSClient()
+    sent: list[dict] = []
+
+    class _FakeConn:
+        async def send(self, raw):
+            sent.append(orjson.loads(raw))
+
+    b._conn = _FakeConn()
+    subs = [BitgetSub(channel="trade", inst_id=f"C{i}USDT") for i in range(120)]
+    asyncio.run(b._send(subs))
+
+    # 120 / 50 = 至少 3 条消息（分批，非单条巨型）
+    assert len(sent) >= 3, f"应分批发送，实际只发了 {len(sent)} 条"
+    for m in sent:
+        assert m["op"] == "subscribe"
+        assert 0 < len(m["args"]) <= _SUBSCRIBE_CHUNK, f"单条 args={len(m['args'])} 超上限"
+    # 订阅守恒：不丢不重，全部 120 个都发出
+    total = sum(len(m["args"]) for m in sent)
+    assert total == 120, f"订阅丢失/重复：发出 {total}，应 120"
+
+
 if __name__ == "__main__":
     for name, fn in list(globals().items()):
         if name.startswith("test_") and callable(fn):
