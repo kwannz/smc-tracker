@@ -1478,14 +1478,18 @@ def build_coin_detail(store: Any, coin: str, tf: str | None = None) -> dict:
     """组装指定 coin（和 tf）的详情数据：蜡烛/setup/S/R/历史。
 
     tf 缺省时取该币在 recent_harmonic_setups 中首个 setup 的 tf。
+    tfs_available 固定返回 7 周期（15m/30m/1H/4H/12H/1D/1W），无论该周期是否有形态。
+    无形态周期的 setups=[]，candles 仍尝试拉取（让前端显示 K 线）。
     表缺/空时各字段返回 []，不抛。
     """
     from .asset_class import asset_class as _asset_class
 
-    # 1. 读该币全部最新 setup 行（按 tf 过滤）
+    # 固定 7 周期 tab（来自 HarmonicCfg.timeframes，前端始终显示完整周期导航）
+    _FIXED_TFS = ["15m", "30m", "1H", "4H", "12H", "1D", "1W"]
+
+    # 1. 读该币全部最新 setup 行（所有 tf）
     all_setups: list[dict] = []
-    tfs_available: list[str] = []
-    resolved_tf = tf
+    first_setup_tf: str = ""
     try:
         for r in store.recent_harmonic_setups():
             d = _row_to_dict(r, _HARMONIC_KEYS)
@@ -1493,30 +1497,27 @@ def build_coin_detail(store: Any, coin: str, tf: str | None = None) -> dict:
                 continue
             d["asset_class"] = _asset_class(coin)
             all_setups.append(d)
-            t = d.get("tf") or ""
-            if t and t not in tfs_available:
-                tfs_available.append(t)
+            if not first_setup_tf:
+                first_setup_tf = d.get("tf") or ""
     except Exception:  # noqa: BLE001
         pass
 
-    # tf 缺省 → 用该币第一个 setup 的 tf
-    if not resolved_tf:
-        resolved_tf = tfs_available[0] if tfs_available else ""
+    # tf 缺省 → 用该币第一个 setup 的 tf；若无 setup，取固定列表第一个
+    resolved_tf: str = tf or first_setup_tf or _FIXED_TFS[0]
 
     # 只保留目标 tf 的 setup
     setups = [d for d in all_setups if d.get("tf") == resolved_tf]
 
-    # 2. 蜡烛（200 根）
+    # 2. 蜡烛（200 根）——无形态的周期也拉（K 线仍有意义）
     candles: list[list] = []
-    if resolved_tf:
-        try:
-            raw_candles = store.get_candles(coin, resolved_tf, 200)
-            candles = [
-                [c.open_time_ms, c.o, c.h, c.l, c.c, c.v]
-                for c in raw_candles
-            ]
-        except Exception:  # noqa: BLE001
-            pass
+    try:
+        raw_candles = store.get_candles(coin, resolved_tf, 200)
+        candles = [
+            [c.open_time_ms, c.o, c.h, c.l, c.c, c.v]
+            for c in raw_candles
+        ]
+    except Exception:  # noqa: BLE001
+        pass
 
     # 3. S/R（该币所有 tf 的最新 bb_levels）
     sr: list[dict] = []
@@ -1546,7 +1547,8 @@ def build_coin_detail(store: Any, coin: str, tf: str | None = None) -> dict:
         "coin": coin,
         "asset_class": _asset_class(coin),
         "tf": resolved_tf,
-        "tfs_available": tfs_available,
+        # 固定 7 周期 tab，不受「是否有形态」影响（前端按此列表渲染完整导航）
+        "tfs_available": _FIXED_TFS,
         "candles": candles,
         "setups": setups,
         "sr": sr,
@@ -2233,7 +2235,10 @@ function renderSrTable(sr){{
 
 // ---- Setup 明细（右侧栏 kv 表）----
 function renderSetupDetail(setups){{
-  if(!setups||!setups.length)return'<span class="none">（该周期无 setup）</span>';
+  if(!setups||!setups.length)return'<div style="color:var(--t2);padding:12px 0;line-height:1.6">'+
+    '<span style="font-weight:600;color:var(--amber)">该周期暂无谐波形态</span><br>'+
+    '<span style="font-size:12px">当前周期未检测到符合条件的 XABCD 谐波结构。<br>'+
+    '可查看左侧 K 线走势，或切换其他周期查看已检测到的形态。</span></div>';
   const su=setups[0];
   const entry=su.entry_lo!=null||su.entry_hi!=null
     ?(fmtN(su.entry_lo,4)+' ~ '+fmtN(su.entry_hi,4)):'—';
@@ -2939,7 +2944,7 @@ function renderCoinList(s){{
     const fundingVal=info.funding!=null
       ?(parseFloat(info.funding)*100).toFixed(4)+'%':'—';
     const oiStr=fmtUsd(info.oi_size!=null?info.oi_size:null);
-    return '<div class="hl-coin-row" onclick="selectCoin(\''+esc(r.coin)+'\')">'
+    return '<div class="hl-coin-row" onclick="selectCoin(\\''+esc(r.coin)+'\\')">'
       +'<div class="hl-coin-row-top">'
       +'<span class="hl-coin-name">'+esc(r.coin)+'</span>'
       +'<span class="hl-coin-price mono" style="color:'+barColor+'">'

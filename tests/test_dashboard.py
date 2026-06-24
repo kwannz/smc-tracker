@@ -1492,12 +1492,20 @@ def test_build_coin_detail_tf_defaults_to_first_setup():
 
 
 def test_build_coin_detail_tfs_available():
-    """tfs_available 是该币所有 setup 的 tf 列表（不重复）。"""
+    """tfs_available 固定返回 7 周期（15m/30m/1H/4H/12H/1D/1W），不受形态存在与否影响。
+
+    原合约（数据驱动，仅含有 setup 的周期）已改为「固定 7 周期」合约——
+    前端始终显示完整周期导航，无形态周期显示 K 线 + 提示文案。
+    """
     s, _ = _store_with_harmonic_multi()
     result = build_coin_detail(s, "BTC")
     s.close()
     assert isinstance(result["tfs_available"], list)
-    assert "1h" in result["tfs_available"]
+    # 固定 7 周期，与 HarmonicCfg.timeframes 一致
+    assert result["tfs_available"] == ["15m", "30m", "1H", "4H", "12H", "1D", "1W"], (
+        f"tfs_available 应为固定 7 周期，实得: {result['tfs_available']}"
+    )
+    assert len(result["tfs_available"]) == 7
 
 
 def test_build_coin_detail_candles_structure():
@@ -2018,6 +2026,105 @@ def test_render_hl_html_no_residual_double_braces_with_data():
     state = _state_with_top_addresses()
     html = render_hl_html(state)
     assert "{{" not in html, "有数据时不应残留 {{"
+
+
+# ---------------------------------------------------------------------------
+# 新增 TDD：固定 7 周期 tab（用户需求：谐波页每币始终显示 15m/30m/1H/4H/12H/1D/1W）
+# ---------------------------------------------------------------------------
+
+def test_build_coin_detail_tfs_always_7():
+    """build_coin_detail 无论该币有多少个周期的形态，tfs_available 始终 7 个。
+
+    用例：BTC 只有 1h setup，但 tfs_available 仍返回固定 7 周期列表。
+    """
+    s, _ = _store_with_harmonic_multi()
+    result = build_coin_detail(s, "BTC")
+    s.close()
+    assert len(result["tfs_available"]) == 7, (
+        f"tfs_available 应固定 7 个周期，实得 {len(result['tfs_available'])}: {result['tfs_available']}"
+    )
+
+
+def test_build_coin_detail_tfs_exact_order():
+    """tfs_available 顺序固定为 ['15m','30m','1H','4H','12H','1D','1W']。"""
+    s, _ = _store_with_harmonic_multi()
+    result = build_coin_detail(s, "ETH")  # ETH 只有 4h setup
+    s.close()
+    assert result["tfs_available"] == ["15m", "30m", "1H", "4H", "12H", "1D", "1W"], (
+        f"tfs_available 顺序不对: {result['tfs_available']}"
+    )
+
+
+def test_build_coin_detail_no_setup_tf_returns_empty_setups():
+    """对无形态的周期（BTC 无 15m setup），setups=[] 但函数不抛。
+
+    当用户点击 15m tab（BTC 无 15m 形态），setups 应为空，前端显示「该周期暂无谐波形态」。
+    """
+    s, _ = _store_with_harmonic_multi()
+    # BTC 只有 1h setup，30m 周期无形态
+    result = build_coin_detail(s, "BTC", tf="30m")
+    s.close()
+    assert result["coin"] == "BTC"
+    assert result["tf"] == "30m"
+    assert result["setups"] == [], f"BTC 30m 无形态，setups 应为 []，实得 {result['setups']}"
+    # tfs_available 仍是固定 7 个
+    assert len(result["tfs_available"]) == 7
+
+
+def test_build_coin_detail_no_setup_tf_still_fetches_candles():
+    """无形态周期也尝试拉取 K 线（K 线对无形态周期仍有参考意义）。
+
+    此测试验证：candles 字段是 list（可为空，取决于 DB 是否有该周期 K 线），不抛异常。
+    """
+    s, _ = _store_with_harmonic_multi()
+    # 30m 周期：BTC 无 setup，也无 candles（未插入） → candles=[]，不抛
+    result = build_coin_detail(s, "BTC", tf="30m")
+    s.close()
+    assert isinstance(result["candles"], list), "candles 应为 list（无 K 线时为空 list）"
+
+
+def test_build_coin_detail_empty_store_tfs_still_7():
+    """空库时 tfs_available 仍返回固定 7 周期（不因无数据而退化为空列表）。"""
+    s = _store_empty()
+    result = build_coin_detail(s, "NONEXISTENT")
+    s.close()
+    assert result["tfs_available"] == ["15m", "30m", "1H", "4H", "12H", "1D", "1W"], (
+        f"空库时 tfs_available 应为固定 7 周期，实得: {result['tfs_available']}"
+    )
+
+
+def test_render_harmonic_detail_html_has_7_tf_tabs_marker():
+    """render_harmonic_detail_html 模板含固定 7 周期 tab 相关 JS 代码标记。
+
+    前端用 tfs_available（固定 7 项）渲染 tab 按钮。模板应含 7 个周期名称中至少 5 个
+    （15m/1H/4H/1D/1W），或含 tfs_available 遍历逻辑（tf-tab 类名）。
+    """
+    html = render_harmonic_detail_html(_detail_list_state())
+    # 固定 7 周期的代表性周期名应出现在模板中（作为 JS 字符串字面量或注释）
+    # 注：模板用 JS 动态渲染 tab，周期名通过后端 API 数据注入，不一定硬编码在模板里
+    # 至少应含 tf-tab CSS 类名（用于渲染 tab 按钮）
+    assert "tf-tab" in html, "模板应含 tf-tab CSS 类名（用于渲染周期 tab 按钮）"
+    # 含 tfs_available 变量名（从 API 响应读取固定 7 周期）
+    assert "tfs_available" in html, "模板应含 tfs_available（固定 7 周期来源）"
+
+
+def test_render_harmonic_detail_html_no_setup_message():
+    """render_harmonic_detail_html 模板含「该周期暂无谐波形态」提示文案（JS 中）。
+
+    当用户切换到无形态周期时，前端应显示诚实提示而非空白。
+    """
+    html = render_harmonic_detail_html(_detail_list_state())
+    assert "该周期暂无谐波形态" in html, (
+        "模板应含「该周期暂无谐波形态」文案（在 renderSetupDetail 无 setup 时显示）"
+    )
+
+
+def test_render_harmonic_detail_html_no_candle_message():
+    """render_harmonic_detail_html 模板含「未采集」K 线提示文案（renderSvgCandles 无数据时）。"""
+    html = render_harmonic_detail_html(_detail_list_state())
+    assert "未采集" in html, (
+        "模板应含「未采集」字样（renderSvgCandles 无 K 线数据时的诚实提示）"
+    )
 
 
 if __name__ == "__main__":
