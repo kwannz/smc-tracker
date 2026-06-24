@@ -26,6 +26,9 @@
   passed**。**Opus 验证发现 2 gap → 派 Sonnet 收口(af3d9f99)**:① 热路径 O(n) 反向映射重建(全币种违纪)→
   预建 O(1);② on_update 未接 insert_harmonic_setups(实时算了不落库=空转)→ app.py 填回调端到端落库 +
   落库协调(不破坏 recent_harmonic_setups 全量快照)。
+- [x] B1 **完成(loop#6,Opus 验证 + 固化 d4cbfca)**:2 gap 已收口(O(1) 预建映射 + on_update 端到端推送);
+  落库协调=实时层只推送通知不写库(保 dashboard 全量快照),**全量 1859 passed**。诚实:页面实时读取(per-coin
+  latest)是 B2 单独做。known limit:all_perp+harmonic_collected 动态加币需重新 attach(预存架构限制)。
 - [ ] B2 dashboard 谐波页从 5s 轮询 → 更实时(SSE/WS 推送或更短轮询 + LIVE 脉冲)。
 - [ ] B3 forming 形态实时逼近 PRZ 告警(harmonic_forward / forming_approach 已有骨架,接全币种)。
 
@@ -63,6 +66,19 @@
 - [ ] D3 **谐波页优先**用新设计重写(浅色金融终端风 + IBM Plex + 三栏:harmList 侧栏 / 大蜡烛图含 XABCD-PRZ-FVG /
   右栏 Setup+S-R+KNN),接 `build_coin_detail` + 实时刷新(配合 B1)。**与 A2/B1 协同后做(避免 dashboard 竞态)**。
 
+### H. HL 系统(聪明钱地址追踪)—— 用户「完善完整开发 hl 系统」(与谐波并列)
+- [x] H1 **评分/协同确定性强化已实现**(WF B2/B3,commit 2e4575d):`smart_money_score` 魔数外置 config +
+  最小样本守卫(Wilson 下界);`address_correlation` 协同加显著性(二项/超几何 null model → lift/p-value)+
+  计数按活跃度归一(消高频偏向)。**B3 协同已审通过(loop#8)**:cooccur_stats null model 正确
+  (expected=a·b/total,二项右尾 p-value log 空间防下溢 + 大 n 正态近似,n=0 守卫)+ 测试诚信
+  (随机追涨人群被过滤、真协同保留,非走过场)。B2 评分配置化待审(测试全绿)。
+- [ ] H2 **HL 前端落地**:设计稿聪明钱追踪部分(line 67-286)原生重写 —— 三栏:左 `coins`(币+净流向)/
+  中 大图+`flowBars`(净主动流)+`coinPositions`(庄持仓)/右 `consensus`/`consTable`+`divergence`+`whales`+
+  `events`+`onchain`+`breaks`(挂单墙)。复用 D3 设计 token(同终端)+ 现有 dashboard HL API(数据现成)。D3 谐波页后做。
+- [ ] H3 **HL 前瞻**:资金流加速度(2阶导平滑)/OI 方向化速度/挂单意图(WF C 路线 OFI/oi_velocity/funding 已实现)
+  接 HL 聪明钱信号 —— 从「回看庄做过什么」→「前瞻资金正往哪 positioning」(CLAUDE.md 产品方向)。
+- [ ] H4 系统 tab 统一:设计稿 header 的 [HL 系统 | 谐波系统] 切换 → 统一 SPA(D2 合并,原生)。
+
 ### E. 固化与门禁
 - [ ] E1 固化已完成全绿工作(SFG-KNN + fail-closed,本地 git 提交,非部署)。
 - [ ] E2 部署门禁:本地全绿 + 全接入 + 网页排版无问题 → **用户批准** → 部署服务器。
@@ -93,3 +109,7 @@
   (热路径 O(n) + on_update 空转不落库)→ 派 Sonnet 收口;**C 前瞻方法对标**(模型知识+开源:forming 实时投影/
   多周期 PRZ 共振/forward_confirm 订单流领先/完成率诚实≈随机)写入 C 段,指导 C2/B3/C3。下一步:B1 收口核验
   → C2 全币种 forward_confirm 或 D3 谐波页重写。
+- 2026-06-24 loop#7(Opus 规划,与 D3 后台执行并行零冲突):B1 完成验证(1859 全绿)+ 固化(d4cbfca);
+  派 Sonnet 执行 **D3 谐波页原生重写**(a10efa1c,设计系统三栏 + 全币种列表);**补 HL 系统段 H1-H4**
+  (回应用户「完善 hl 系统」并列要求:H1 评分/协同强化已实现待审,H2 HL 前端落地,H3 HL 前瞻 positioning,
+  H4 系统 tab 统一)。下一步:D3 核验 + 截图自查排版 → C1 收口 / C2 全币种 / H2 HL 前端。

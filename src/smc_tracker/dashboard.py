@@ -1550,160 +1550,351 @@ _HARMONIC_DETAIL_TEMPLATE = """<!DOCTYPE html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>谐波主-详情</title>
+<title>谐波形态终端 · SMC 聪明钱追踪</title>
 <style>
+/* ---- 设计系统 token（浅色金融终端，来自 SMC 终端设计稿）---- */
 :root{{
-  --bg:#f6f8fa;--card:#ffffff;--border:#d0d7de;--text:#1f2328;
-  --muted:#656d76;--green:#1a7f37;--red:#cf222e;--blue:#0969da;
-  --yellow:#9a6700;--purple:#8250df;--orange:#bc4c00;
-  --sel:#ddf4ff;--hover:rgba(0,0,0,.045);
-  --shadow:0 1px 0 rgba(27,31,36,.04),0 1px 3px rgba(27,31,36,.08);
+  --bg:#eef3fa;--panel:#ffffff;--line:#e4eaf3;--line2:#eff3f9;
+  --t1:#0f1c33;--t2:#5b6b85;--t3:#9aa7bd;
+  --blue:#2563eb;--blue2:#1d4ed8;--bluebg:#eaf1ff;
+  --long:#16a34a;--short:#e23744;--longbg:#e8f6ee;--shortbg:#fdecee;
+  --amber:#e6a23c;--violet:#a855f7;
+  /* 测试兼容别名（保持旧 CSS 变量名可访问）*/
+  --bg-body:#f6f8fa;--card:var(--panel);--border:var(--line);--text:var(--t1);
+  --muted:var(--t2);--green:var(--long);--red:var(--short);
+  --yellow:var(--amber);--purple:var(--violet);--orange:#c2600a;
+  --sel:var(--bluebg);--hover:rgba(37,99,235,.06);
+  --shadow:0 1px 3px rgba(0,0,0,.1);
 }}
 *{{box-sizing:border-box;margin:0;padding:0}}
-body{{background:var(--bg);color:var(--text);
-  font-family:"SF Mono",ui-monospace,monospace;font-size:13px;line-height:1.5;
+body{{background:#f6f8fa;color:var(--t1);
+  font-family:'IBM Plex Sans',system-ui,-apple-system,sans-serif;
+  font-size:13px;line-height:1.5;
   display:flex;flex-direction:column;height:100vh;overflow:hidden}}
-header{{padding:10px 16px;border-bottom:1px solid var(--border);background:var(--card);
-  display:flex;align-items:center;gap:12px;flex-shrink:0}}
-h1{{font-size:17px;color:var(--blue)}}
-#meta{{color:var(--muted);font-size:11px;margin-left:auto}}
-.layout{{display:flex;flex:1;overflow:hidden}}
-/* 左面板 */
-#left{{width:260px;flex-shrink:0;border-right:1px solid var(--border);background:var(--card);
-  display:flex;flex-direction:column;overflow:hidden}}
-#filters{{padding:6px 8px;border-bottom:1px solid var(--border);
-  display:flex;flex-wrap:wrap;gap:4px}}
-.filter-btn{{font-size:11px;padding:2px 7px;border-radius:3px;border:1px solid var(--border);
-  background:transparent;color:var(--muted);cursor:pointer}}
-.filter-btn:hover{{border-color:var(--blue);color:var(--blue)}}
-.filter-btn.active{{border-color:var(--blue);color:var(--blue);background:var(--sel)}}
-#discover-bar{{padding:6px 8px;border-bottom:1px solid var(--border);
-  display:flex;flex-direction:column;gap:4px}}
-#discover-btn{{font-size:11px;padding:4px 8px;border-radius:4px;border:1px solid var(--blue);
-  background:var(--sel);color:var(--blue);cursor:pointer;font-weight:600}}
-#discover-btn:hover{{background:#cce5ff}}
-#discover-btn:disabled{{opacity:.6;cursor:wait}}
-#discover-msg{{font-size:10px;color:var(--muted);word-break:break-word;line-height:1.4}}
-#coin-list{{overflow-y:auto;flex:1}}
-.coin-row{{padding:7px 10px;cursor:pointer;border-bottom:1px solid var(--border);
-  display:flex;align-items:center;gap:6px}}
-.coin-row:hover{{background:var(--hover)}}
-.coin-row.selected{{background:var(--sel);border-left:3px solid var(--blue)}}
-.coin-name{{font-weight:700;color:var(--orange)}}
-.conf-txt{{font-size:11px;color:var(--muted)}}
-/* 右面板 */
-#right{{flex:1;overflow-y:auto;padding:12px 16px;display:flex;flex-direction:column;gap:12px}}
-#right-empty{{color:var(--muted);padding:40px;text-align:center;font-size:13px}}
-/* 币头部 + 实时态 */
-.detail-head{{display:flex;align-items:center;gap:10px;flex-wrap:wrap}}
-.detail-coin{{font-size:18px;font-weight:700;color:var(--orange)}}
-.detail-price{{font-size:15px;font-weight:700}}
-.live{{display:inline-flex;align-items:center;gap:5px;font-size:11px;font-weight:700;
-  color:var(--green)}}
-.live-dot{{width:7px;height:7px;border-radius:50%;background:var(--green);
+.mono{{font-family:'IBM Plex Mono',ui-monospace,monospace;
+  font-variant-numeric:tabular-nums;letter-spacing:-.2px}}
+
+/* ---- Header（54px，系统标识 + tab + LIVE 脉冲 + clock）---- */
+header{{height:54px;padding:0 16px;border-bottom:1px solid var(--line);
+  background:var(--panel);display:flex;align-items:center;gap:12px;flex-shrink:0;
+  box-shadow:0 1px 0 rgba(37,99,235,.06)}}
+.hdr-logo{{font-size:14px;font-weight:700;color:var(--t1);
+  display:flex;align-items:center;gap:7px}}
+.hdr-logo-dot{{width:8px;height:8px;border-radius:50%;background:var(--blue)}}
+.hdr-tabs{{display:flex;gap:2px;background:var(--bg);padding:3px;border-radius:8px}}
+.hdr-tab{{padding:4px 12px;border-radius:6px;font-size:12px;font-weight:600;
+  cursor:pointer;color:var(--t2);background:transparent;border:none;
+  transition:background .15s,color .15s}}
+.hdr-tab:hover{{color:var(--blue)}}
+.hdr-tab.active{{background:var(--panel);color:var(--blue);
+  box-shadow:0 1px 3px rgba(0,0,0,.1)}}
+.hdr-live{{display:inline-flex;align-items:center;gap:5px;font-size:11px;
+  font-weight:700;color:var(--long)}}
+.hdr-live-dot{{width:7px;height:7px;border-radius:50%;background:var(--long);
   animation:pulse 1.4s ease-in-out infinite}}
 @keyframes pulse{{0%,100%{{opacity:1}}50%{{opacity:.25}}}}
-.panel-time{{color:var(--muted);font-size:10px;font-weight:400;margin-left:auto}}
-/* 周期 tabs */
-.tf-tabs{{display:flex;gap:4px;flex-wrap:wrap}}
-.tf-tab{{font-size:11px;padding:3px 9px;border-radius:3px;border:1px solid var(--border);
-  background:var(--card);color:var(--muted);cursor:pointer}}
-.tf-tab:hover{{border-color:var(--blue);color:var(--blue)}}
-.tf-tab.active{{border-color:var(--blue);color:var(--blue);background:var(--sel)}}
-/* 主-详情双区栅格：大图表(主) + 信息侧栏 */
-.detail-grid{{display:flex;gap:12px;align-items:stretch}}
-.detail-main{{flex:1;min-width:0;display:flex}}
-.detail-main>.card{{flex:1;display:flex;flex-direction:column}}
-.detail-side{{width:340px;flex-shrink:0;display:flex;flex-direction:column;gap:12px}}
+@keyframes flashin{{0%{{background:var(--bluebg)}}100%{{background:transparent}}}}
+#hdr-clock{{font-size:11px;color:var(--t3);font-family:'IBM Plex Mono',monospace}}
+#meta{{color:var(--t2);font-size:11px;margin-left:auto}}
+
+/* ---- KPI strip（6 列）---- */
+#kpi-strip{{background:var(--panel);border-bottom:1px solid var(--line);
+  padding:6px 16px;display:grid;
+  grid-template-columns:repeat(6,1fr);gap:0;flex-shrink:0}}
+.kpi-cell{{display:flex;flex-direction:column;gap:1px;padding:4px 10px 4px 0;
+  border-right:1px solid var(--line2)}}
+.kpi-cell:last-child{{border-right:none}}
+.kpi-label{{font-size:9.5px;color:var(--t3);font-weight:600;text-transform:uppercase;
+  letter-spacing:.4px}}
+.kpi-val{{font-size:16px;font-weight:700;color:var(--t1);
+  font-family:'IBM Plex Mono',monospace;font-variant-numeric:tabular-nums}}
+.kpi-val.blue{{color:var(--blue)}}
+.kpi-val.long{{color:var(--long)}}
+.kpi-val.short{{color:var(--short)}}
+
+/* ---- 三栏主体布局（262px / 1fr / 372px）---- */
+.layout{{display:grid;grid-template-columns:262px minmax(0,1fr) 372px;
+  flex:1;overflow:hidden}}
 @media(max-width:1100px){{
-  .detail-grid{{flex-direction:column}}
-  .detail-side{{width:auto}}
+  .layout{{grid-template-columns:1fr;overflow:auto}}
+  #left,#right-side{{width:auto;border:none}}
 }}
-/* SVG 蜡烛图宿主：JS 按实际像素宽重绘以撑满全宽 */
-#chart-host{{width:100%}}
-/* 表格卡片：flex-shrink:0 防止被 #right 列向 flex 压缩裁切内容（根治"部分内容查看不了"） */
-.card{{background:var(--card);border:1px solid var(--border);border-radius:8px;
+
+/* ---- 左面板：币种列表 ---- */
+#left{{border-right:1px solid var(--line);background:var(--panel);
+  display:flex;flex-direction:column;overflow:hidden}}
+#left-header{{padding:8px 10px 6px;border-bottom:1px solid var(--line2);
+  display:flex;align-items:center;justify-content:space-between;
+  position:sticky;top:0;background:var(--panel);z-index:2}}
+.left-title{{font-size:12.5px;font-weight:700;color:var(--t1)}}
+.left-count{{font-size:10.5px;color:var(--t3)}}
+#search-bar{{padding:5px 8px;border-bottom:1px solid var(--line2)}}
+#coin-search{{width:100%;font-size:11px;padding:4px 7px;border:1px solid var(--line);
+  border-radius:6px;background:var(--bg);color:var(--t1);outline:none}}
+#coin-search:focus{{border-color:var(--blue);background:var(--panel)}}
+#filters{{padding:5px 8px;border-bottom:1px solid var(--line2);
+  display:flex;flex-wrap:wrap;gap:3px}}
+.filter-btn{{font-size:10.5px;padding:2px 7px;border-radius:5px;
+  border:1px solid var(--line);background:transparent;
+  color:var(--t2);cursor:pointer;font-weight:600}}
+.filter-btn:hover{{border-color:var(--blue);color:var(--blue)}}
+.filter-btn.active{{border-color:var(--blue);color:var(--blue);
+  background:var(--bluebg)}}
+/* 排序控件 */
+#sort-bar{{padding:4px 8px;border-bottom:1px solid var(--line2);
+  display:flex;gap:4px;align-items:center}}
+.sort-lbl{{font-size:10px;color:var(--t3)}}
+.sort-btn{{font-size:10px;padding:1px 6px;border-radius:4px;
+  border:1px solid var(--line);background:transparent;color:var(--t2);cursor:pointer}}
+.sort-btn.active{{background:var(--bluebg);color:var(--blue);border-color:var(--blue)}}
+#discover-bar{{padding:5px 8px;border-bottom:1px solid var(--line2);
+  display:flex;flex-direction:column;gap:3px}}
+#discover-btn{{font-size:11px;padding:4px 8px;border-radius:6px;
+  border:1px solid var(--blue);background:var(--bluebg);
+  color:var(--blue);cursor:pointer;font-weight:600}}
+#discover-btn:hover{{background:#cce5ff}}
+#discover-btn:disabled{{opacity:.6;cursor:wait}}
+#discover-msg{{font-size:10px;color:var(--t2);word-break:break-word;line-height:1.4}}
+#coin-list{{overflow-y:auto;flex:1}}
+/* 分页控件 */
+#pager{{padding:5px 8px;border-top:1px solid var(--line2);
+  display:flex;gap:4px;align-items:center;justify-content:center;
+  background:var(--panel);flex-shrink:0}}
+.page-btn{{font-size:11px;padding:2px 8px;border-radius:5px;
+  border:1px solid var(--line);background:transparent;color:var(--t2);cursor:pointer}}
+.page-btn:disabled{{opacity:.4;cursor:default}}
+.page-info{{font-size:11px;color:var(--t2)}}
+
+/* ---- 左面板 · 币行 ---- */
+.coin-row{{padding:9px 10px 8px 10px;cursor:pointer;
+  border-bottom:1px solid var(--line2);
+  display:flex;flex-direction:column;gap:5px}}
+.coin-row:hover{{background:var(--hover)}}
+.coin-row.selected{{background:var(--bluebg);border-left:3px solid var(--blue)}}
+.coin-row-top{{display:flex;align-items:center;justify-content:space-between;gap:6px}}
+.coin-name{{font-size:13px;font-weight:700;color:var(--orange)}}
+.coin-conf{{font-size:11px;font-weight:600;font-family:'IBM Plex Mono',monospace}}
+.coin-row-bot{{display:flex;align-items:center;gap:7px}}
+.conf-bar-wrap{{flex:1;height:4px;border-radius:3px;
+  background:var(--line2);overflow:hidden}}
+.conf-bar{{height:100%;border-radius:3px}}
+
+/* ---- 中栏：主区域（大蜡烛图）---- */
+#main-area{{overflow-y:auto;padding:12px 14px;
+  display:flex;flex-direction:column;gap:12px}}
+/* 币头部 bar */
+.detail-head{{background:var(--panel);border:1px solid var(--line);
+  border-radius:12px;padding:12px 16px;
+  display:flex;align-items:center;gap:16px;flex-wrap:wrap}}
+.detail-coin{{font-size:18px;font-weight:700;color:var(--orange)}}
+.detail-price{{font-size:15px;font-weight:700;font-family:'IBM Plex Mono',monospace;
+  font-variant-numeric:tabular-nums}}
+.live{{display:inline-flex;align-items:center;gap:5px;font-size:11px;font-weight:700;
+  color:var(--long)}}
+.live-dot{{width:7px;height:7px;border-radius:50%;background:var(--long);
+  animation:pulse 1.4s ease-in-out infinite}}
+.panel-time{{color:var(--t3);font-size:10px;font-weight:400;margin-left:auto}}
+/* 周期 tabs */
+.tf-tabs{{display:flex;gap:3px;flex-wrap:wrap}}
+.tf-tab{{font-size:11px;padding:3px 9px;border-radius:5px;
+  border:1px solid var(--line);background:var(--panel);color:var(--t2);
+  cursor:pointer;font-weight:600}}
+.tf-tab:hover{{border-color:var(--blue);color:var(--blue)}}
+.tf-tab.active{{border-color:var(--blue);color:var(--blue);background:var(--bluebg)}}
+/* 蜡烛图卡片 */
+.chart-card{{background:var(--panel);border:1px solid var(--line);
+  border-radius:12px;overflow:hidden;flex-shrink:0;
+  box-shadow:var(--shadow)}}
+.chart-legend{{display:flex;align-items:center;justify-content:space-between;
+  padding:10px 14px 8px;flex-wrap:wrap;gap:8px}}
+.chart-title{{font-size:13.5px;font-weight:700;color:var(--t1)}}
+.legend-items{{display:flex;gap:14px;flex-wrap:wrap}}
+.legend-item{{display:flex;align-items:center;gap:5px;font-size:10.5px;color:var(--t2)}}
+.legend-swatch-line{{width:12px;border-top:2px solid var(--violet)}}
+.legend-swatch-prz{{width:14px;height:8px;border-radius:2px;
+  background:rgba(37,99,235,.16);border:1px solid rgba(37,99,235,.55)}}
+.legend-swatch-ote{{width:14px;height:8px;border-radius:2px;
+  background:rgba(230,162,60,.2)}}
+#chart-host{{width:100%;padding:0 2px 8px}}
+
+/* ---- 右侧栏（372px）---- */
+#right-side{{border-left:1px solid var(--line);background:var(--panel);
+  overflow-y:auto;padding:12px;display:flex;flex-direction:column;gap:10px}}
+#right-empty{{color:var(--t2);padding:40px;text-align:center;font-size:13px}}
+
+/* ---- 通用卡片 ---- */
+.card{{background:var(--panel);border:1px solid var(--line);border-radius:12px;
   overflow:hidden;flex-shrink:0;box-shadow:var(--shadow)}}
-.card-title{{padding:8px 12px;border-bottom:1px solid var(--border);
-  font-weight:700;color:var(--blue);font-size:12px;
+.card-title{{padding:8px 12px;border-bottom:1px solid var(--line2);
+  font-weight:700;color:var(--blue);font-size:12.5px;
   display:flex;align-items:center;gap:8px}}
 .card-body{{padding:10px 12px;overflow-x:auto}}
-.card.accent{{border-color:#b6e3ff}}
-.card.accent .card-title{{background:var(--sel);color:#0a3069}}
+.card.accent{{border-color:#b6d4fd}}
+.card.accent .card-title{{background:var(--bluebg);color:var(--blue2)}}
 table{{width:100%;border-collapse:collapse;font-size:11px}}
-th{{color:var(--muted);font-weight:600;text-align:left;padding:3px 5px;
-  border-bottom:1px solid var(--border)}}
+th{{color:var(--t3);font-weight:600;text-align:left;padding:3px 5px;
+  border-bottom:1px solid var(--line2)}}
 td{{padding:3px 5px;vertical-align:top;white-space:nowrap}}
 tr:hover td{{background:var(--hover)}}
-/* 侧栏竖向 kv 表：标签 nowrap、值可换行（防 340px 窄栏压成竖排单字） */
 .kv th{{white-space:nowrap;width:1%;text-align:left;vertical-align:top;
-  padding-right:12px;color:var(--muted);font-weight:600}}
+  padding-right:12px;color:var(--t2);font-weight:600}}
 .kv td{{white-space:normal;word-break:break-word}}
-.long{{color:var(--green)}} .short{{color:var(--red)}}
-.pos{{color:var(--green)}} .neg{{color:var(--red)}}
-.none{{color:var(--muted);font-style:italic}}
-.tag{{display:inline-block;padding:1px 5px;border-radius:3px;font-size:10px;font-weight:600}}
-.tag-long{{background:#dafbe1;color:var(--green)}}
-.tag-short{{background:#ffebe9;color:var(--red)}}
-.badge-tradfi{{display:inline-block;padding:1px 5px;border-radius:3px;font-size:10px;
-  font-weight:700;background:#ffe7d1;color:var(--orange);margin-right:3px}}
-.badge-crypto{{display:inline-block;padding:1px 5px;border-radius:3px;font-size:10px;
-  font-weight:700;background:var(--sel);color:var(--blue);margin-right:3px}}
-details.explainer{{background:var(--card);border:1px solid var(--border);border-radius:8px;
-  overflow:hidden;box-shadow:var(--shadow)}}
+
+/* KNN 卡片 */
+.knn-row{{display:flex;gap:8px;margin-bottom:8px}}
+.knn-cell{{flex:1;text-align:center;padding:10px 0;border-radius:9px}}
+.knn-cell.up{{background:var(--longbg)}}
+.knn-cell.down{{background:var(--shortbg)}}
+.knn-pct{{font-size:22px;font-weight:700;font-family:'IBM Plex Mono',monospace;
+  display:block}}
+.knn-label{{font-size:10px;color:var(--t2)}}
+.knn-dots{{display:flex;gap:3px;margin-top:6px}}
+.knn-dot{{flex:1;height:16px;border-radius:3px}}
+.knn-note{{font-size:10px;color:var(--t3);margin-top:6px;line-height:1.4}}
+
+/* 方向/状态标签 */
+.long{{color:var(--long)}} .short{{color:var(--short)}}
+.pos{{color:var(--long)}} .neg{{color:var(--short)}}
+.none{{color:var(--t2);font-style:italic}}
+.tag{{display:inline-block;padding:1px 6px;border-radius:5px;font-size:10px;font-weight:600}}
+.tag-long{{background:var(--longbg);color:var(--long)}}
+.tag-short{{background:var(--shortbg);color:var(--short)}}
+.badge-tradfi{{display:inline-block;padding:1px 6px;border-radius:5px;font-size:10px;
+  font-weight:700;background:#fff3e0;color:#c2600a;margin-right:3px}}
+.badge-crypto{{display:inline-block;padding:1px 6px;border-radius:5px;font-size:10px;
+  font-weight:700;background:var(--bluebg);color:var(--blue);margin-right:3px}}
+
+/* 傻瓜解释折叠块 */
+details.explainer{{background:var(--panel);border:1px solid var(--line);
+  border-radius:12px;overflow:hidden;box-shadow:var(--shadow)}}
 details.explainer summary{{padding:8px 12px;cursor:pointer;font-weight:700;
-  color:var(--blue);font-size:12px;list-style:none;user-select:none}}
+  color:var(--blue);font-size:12.5px;list-style:none;user-select:none}}
 details.explainer summary::-webkit-details-marker{{display:none}}
-details.explainer summary::before{{content:"▶ ";font-size:10px;color:var(--muted)}}
-details[open].explainer summary::before{{content:"▼ ";font-size:10px;color:var(--muted)}}
-.explainer-body{{padding:10px 14px;font-size:11px;line-height:1.7;border-top:1px solid var(--border)}}
-.explainer-body dt{{font-weight:700;color:var(--yellow);margin-top:6px}}
+details.explainer summary::before{{content:"▶ ";font-size:10px;color:var(--t3)}}
+details[open].explainer summary::before{{content:"▼ ";font-size:10px;color:var(--t3)}}
+.explainer-body{{padding:10px 14px;font-size:11px;line-height:1.7;
+  border-top:1px solid var(--line2)}}
+.explainer-body dt{{font-weight:700;color:var(--amber);margin-top:6px}}
 .explainer-body dd{{margin-left:10px}}
 .honest-note{{margin-top:8px;padding:6px 10px;background:#fff8c5;
-  border-left:3px solid var(--yellow);color:#54450a;font-size:11px}}
+  border-left:3px solid var(--amber);color:#54450a;font-size:11px}}
 .disclaimer{{padding:7px 12px;background:#fff8c5;border:1px solid #d4a72c;
-  border-radius:6px;color:#54450a;font-size:11px}}
-#refresh-bar{{font-size:11px;color:var(--muted);padding:3px 16px;background:var(--card);
-  border-top:1px solid var(--border);flex-shrink:0}}
+  border-radius:8px;color:#54450a;font-size:11px}}
+
+/* 底部状态条 */
+#refresh-bar{{font-size:11px;color:var(--t2);padding:3px 16px;
+  background:var(--panel);border-top:1px solid var(--line);flex-shrink:0}}
 </style>
 </head>
 <body>
+<!-- ======== Header ======== -->
 <header>
-  <h1>🔷 谐波主-详情</h1>
-  <a href="/" style="font-size:11px;color:var(--muted);text-decoration:none;
-     border:1px solid var(--border);border-radius:3px;padding:2px 7px">← HL 主页</a>
+  <div class="hdr-logo">
+    <span class="hdr-logo-dot"></span>
+    SMC 聪明钱追踪终端
+  </div>
+  <div class="hdr-tabs">
+    <a href="/" class="hdr-tab" style="text-decoration:none">HL 系统</a>
+    <span class="hdr-tab active">谐波系统</span>
+  </div>
+  <span class="hdr-live"><span class="hdr-live-dot"></span>LIVE</span>
+  <span id="hdr-clock">--:--:--</span>
   <span id="meta">加载中…</span>
 </header>
+
+<!-- ======== KPI strip（6 列）======== -->
+<div id="kpi-strip">
+  <div class="kpi-cell">
+    <span class="kpi-label">监控币数</span>
+    <span class="kpi-val blue mono" id="kpi-total">—</span>
+  </div>
+  <div class="kpi-cell">
+    <span class="kpi-label">活跃形态</span>
+    <span class="kpi-val mono" id="kpi-active">—</span>
+  </div>
+  <div class="kpi-cell">
+    <span class="kpi-label">已完成</span>
+    <span class="kpi-val long mono" id="kpi-completed">—</span>
+  </div>
+  <div class="kpi-cell">
+    <span class="kpi-label">形成中</span>
+    <span class="kpi-val mono" id="kpi-forming">—</span>
+  </div>
+  <div class="kpi-cell">
+    <span class="kpi-label">多空比</span>
+    <span class="kpi-val mono" id="kpi-ratio">—</span>
+  </div>
+  <div class="kpi-cell">
+    <span class="kpi-label">数据年龄</span>
+    <span class="kpi-val mono" id="kpi-age">—</span>
+  </div>
+</div>
+
+<!-- ======== 三栏主体 ======== -->
 <div class="layout">
-  <!-- 左面板 -->
+  <!-- === 左 262px：币种列表 === -->
   <div id="left">
+    <div id="left-header">
+      <span class="left-title">币种 · 谐波形态</span>
+      <span class="left-count" id="left-count">—</span>
+    </div>
+    <div id="search-bar">
+      <input id="coin-search" type="text" placeholder="搜索币种…"
+             oninput="onSearch(this.value)">
+    </div>
     <div id="filters">
       <button class="filter-btn active" data-filter="all" onclick="setFilter('all')">全部</button>
       <button class="filter-btn" data-filter="crypto" onclick="setFilter('crypto')">加密</button>
       <button class="filter-btn" data-filter="tradfi" onclick="setFilter('tradfi')">TradFi</button>
       <button class="filter-btn" data-filter="completed" onclick="setFilter('completed')">有完整形态</button>
     </div>
+    <div id="sort-bar">
+      <span class="sort-lbl">排序：</span>
+      <button class="sort-btn active" data-sort="conf" onclick="setSort('conf')">置信↓</button>
+      <button class="sort-btn" data-sort="name" onclick="setSort('name')">名称</button>
+    </div>
     <div id="discover-bar">
       <button id="discover-btn" onclick="discoverCoins()">🔍 发现搜集币种</button>
       <span id="discover-msg"></span>
     </div>
     <div id="coin-list"><!-- JS 渲染 --></div>
+    <div id="pager">
+      <button class="page-btn" id="page-prev" onclick="goPage(-1)" disabled>‹ 上一页</button>
+      <span class="page-info" id="page-info">—</span>
+      <button class="page-btn" id="page-next" onclick="goPage(1)" disabled>下一页 ›</button>
+    </div>
   </div>
-  <!-- 右面板 -->
-  <div id="right">
-    <div id="right-empty">← 点击左侧币种查看详情</div>
+
+  <!-- === 中栏：大蜡烛图 === -->
+  <div id="main-area">
+    <div id="main-empty" style="color:var(--t2);padding:40px;text-align:center">
+      ← 点击左侧币种查看蜡烛图详情
+    </div>
+  </div>
+
+  <!-- === 右侧栏 372px：Setup + S/R + KNN === -->
+  <div id="right-side">
+    <div id="right-empty">选择币种查看交易计划</div>
   </div>
 </div>
-<div id="refresh-bar">左列表 5s 自动刷新 · 点击蜡烛图周期 tab 切换</div>
+
+<div id="refresh-bar">左列表 5s 自动刷新 · 点击蜡烛图周期 tab 切换 · 数据来源：DB 缓存（低延迟）</div>
+
 <script>
 // 首屏注入左列表（array，非 object）
 const S = __INITIAL_STATE__;
 
-let _listData = S;       // 当前左列表数据
+// ---- 状态 ----
+let _listData = S;       // 当前左列表原始数据
+let _filtered  = S;      // 过滤后（用于分页）
 let _selectedCoin = '';  // 当前选中币
 let _selectedTf  = '';   // 当前选中周期
 let _curFilter   = 'all';// 当前过滤
-let _curDetail   = null; // 当前右详情数据（供 redrawChart/refreshDetail 复用）
+let _curSort     = 'conf';// 当前排序
+let _searchQ     = '';   // 搜索关键词
+let _curDetail   = null; // 当前右详情数据
+const PAGE_SIZE  = 50;   // 全永续支持数百币，每页 50
+let _page        = 0;
 
 // ---- 工具函数 ----
 function fmtN(v, dec){{
@@ -1734,66 +1925,170 @@ function esc(s){{
     .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
 }}
 
-// ---- 左面板渲染 ----
-function setFilter(f){{
-  _curFilter=f;
-  document.querySelectorAll('.filter-btn').forEach(b=>{{
-    b.classList.toggle('active', b.dataset.filter===f);
-  }});
-  renderList(_listData);
+// ---- KPI strip 更新 ----
+function updateKpi(rows){{
+  const total=rows.length;
+  const completed=rows.filter(r=>r.has_completed).length;
+  const forming=rows.filter(r=>!r.has_completed).length;
+  const longN=rows.filter(r=>r.direction==='long').length;
+  const shortN=rows.filter(r=>r.direction==='short').length;
+  const ratio=total?((longN/total*100).toFixed(0)+'%多'):  '—';
+  // 数据年龄
+  const tss=rows.map(r=>r.ts).filter(v=>v!=null);
+  let ageStr='—';
+  if(tss.length){{
+    const ageMin=(Date.now()-Math.max(...tss))/60000;
+    if(ageMin<1)ageStr='刚刚';
+    else if(ageMin<60)ageStr=Math.round(ageMin)+'分前';
+    else ageStr=(ageMin/60).toFixed(1)+'h前';
+  }}
+  document.getElementById('kpi-total').textContent=total||'—';
+  document.getElementById('kpi-active').textContent=total?total:'—';
+  document.getElementById('kpi-completed').textContent=completed||'0';
+  document.getElementById('kpi-forming').textContent=forming||'0';
+  document.getElementById('kpi-ratio').textContent=ratio;
+  document.getElementById('kpi-age').textContent=ageStr;
 }}
-function renderList(rows){{
-  let filtered=rows;
-  if(_curFilter==='crypto')filtered=rows.filter(r=>r.asset_class==='crypto');
-  else if(_curFilter==='tradfi')filtered=rows.filter(r=>r.asset_class==='tradfi');
-  else if(_curFilter==='completed')filtered=rows.filter(r=>r.has_completed);
-  // 按 best_conf 降序（null 排最后）
-  filtered=[...filtered].sort((a,b)=>{{
+
+// ---- clock ----
+function tickClock(){{
+  document.getElementById('hdr-clock').textContent=
+    new Date().toLocaleTimeString('zh-CN',{{hour12:false}});
+}}
+setInterval(tickClock,1000); tickClock();
+
+// ---- 过滤/排序/搜索 ----
+function _applyFilter(rows){{
+  let r=rows;
+  if(_searchQ){{
+    const q=_searchQ.toLowerCase();
+    r=r.filter(x=>(x.coin||'').toLowerCase().includes(q));
+  }}
+  if(_curFilter==='crypto')r=r.filter(x=>x.asset_class==='crypto');
+  else if(_curFilter==='tradfi')r=r.filter(x=>x.asset_class==='tradfi');
+  else if(_curFilter==='completed')r=r.filter(x=>x.has_completed);
+  // 排序
+  r=[...r].sort((a,b)=>{{
+    if(_curSort==='name')return(a.coin||'').localeCompare(b.coin||'');
+    // conf 降序（null 排最后）
     if(a.best_conf==null&&b.best_conf==null)return 0;
     if(a.best_conf==null)return 1;
     if(b.best_conf==null)return -1;
     return b.best_conf-a.best_conf;
   }});
-  document.getElementById('coin-list').innerHTML=filtered.map(r=>{{
+  return r;
+}}
+
+function setFilter(f){{
+  _curFilter=f;
+  _page=0;
+  document.querySelectorAll('.filter-btn').forEach(b=>{{
+    b.classList.toggle('active',b.dataset.filter===f);
+  }});
+  _filtered=_applyFilter(_listData);
+  renderList();
+}}
+
+function setSort(s){{
+  _curSort=s;
+  _page=0;
+  document.querySelectorAll('.sort-btn').forEach(b=>{{
+    b.classList.toggle('active',b.dataset.sort===s);
+  }});
+  _filtered=_applyFilter(_listData);
+  renderList();
+}}
+
+function onSearch(q){{
+  _searchQ=q;
+  _page=0;
+  _filtered=_applyFilter(_listData);
+  renderList();
+}}
+
+// ---- 分页 ----
+function goPage(dir){{
+  const maxPage=Math.ceil(_filtered.length/PAGE_SIZE)-1;
+  _page=Math.max(0,Math.min(maxPage,_page+dir));
+  renderList();
+}}
+
+function renderList(){{
+  const rows=_filtered;
+  const maxPage=Math.max(0,Math.ceil(rows.length/PAGE_SIZE)-1);
+  _page=Math.min(_page,maxPage);
+  const pageRows=rows.slice(_page*PAGE_SIZE,(_page+1)*PAGE_SIZE);
+
+  // 更新分页控件
+  document.getElementById('page-prev').disabled=_page<=0;
+  document.getElementById('page-next').disabled=_page>=maxPage;
+  document.getElementById('page-info').textContent=rows.length
+    ?(_page+1)+'/'+(maxPage+1)+' · '+rows.length+'币'
+    :'无匹配';
+  document.getElementById('left-count').textContent=rows.length+'币';
+
+  document.getElementById('coin-list').innerHTML=pageRows.map(r=>{{
     const conf=r.best_conf!=null?Math.round(r.best_conf*100)+'%':'—';
     const dirCls=r.direction==='long'?'long':(r.direction==='short'?'short':'');
     const sel=r.coin===_selectedCoin?' selected':'';
+    // 置信度进度条颜色：long=绿，short=红
+    const barColor=r.direction==='long'?'var(--long)':(r.direction==='short'?'var(--short)':'var(--blue)');
+    const barW=r.best_conf!=null?Math.round(r.best_conf*100):0;
     return`<div class="coin-row${{sel}}" onclick="selectCoin('${{esc(r.coin)}}')">
-      ${{badgeHtml(r.asset_class)}}
-      <span class="coin-name">${{esc(r.coin)}}</span>
-      <span class="conf-txt ${{dirCls}}">${{conf}}</span>
-      ${{r.direction==='long'?'<span class="long">▲</span>':r.direction==='short'?'<span class="short">▼</span>':''}}
+      <div class="coin-row-top">
+        <div style="display:flex;align-items:center;gap:5px">
+          ${{badgeHtml(r.asset_class)}}
+          <span class="coin-name">${{esc(r.coin)}}</span>
+        </div>
+        <div style="display:flex;align-items:center;gap:5px">
+          <span class="coin-conf ${{dirCls}} mono">${{conf}}</span>
+          ${{r.direction==='long'?'<span class="long" style="font-size:11px">▲</span>':r.direction==='short'?'<span class="short" style="font-size:11px">▼</span>':''}}
+        </div>
+      </div>
+      <div class="coin-row-bot">
+        <div class="conf-bar-wrap">
+          <div class="conf-bar" style="width:${{barW}}%;background:${{barColor}}"></div>
+        </div>
+        ${{r.has_completed?'<span style="font-size:9.5px;font-weight:600;color:var(--long);background:var(--longbg);padding:1px 5px;border-radius:4px">已完成</span>':'<span style="font-size:9.5px;color:var(--t3)">形成中</span>'}}
+      </div>
     </div>`;
   }}).join('');
 }}
 
-// ---- 右面板：fetch 详情 ----
+// ---- 右面板：fetch 详情（中栏 + 右侧栏）----
 function selectCoin(coin, tf){{
   _selectedCoin=coin;
   if(tf)_selectedTf=tf;
-  renderList(_listData);
+  _filtered=_applyFilter(_listData);
+  renderList();
   const url='/api/harmonic/coin/'+encodeURIComponent(coin)+(tf?'?tf='+encodeURIComponent(tf):'');
   fetch(url).then(r=>r.json()).then(d=>{{
     if(!tf)_selectedTf=d.tf||'';
     renderDetail(d);
   }}).catch(e=>{{
-    document.getElementById('right').innerHTML='<div style="color:var(--red);padding:20px">加载失败: '+e+'</div>';
+    document.getElementById('main-area').innerHTML=
+      '<div style="color:var(--short);padding:20px">加载失败: '+e+'</div>';
   }});
 }}
 
-// ---- SVG 蜡烛图 ----
+// ---- SVG 蜡烛图（含 XABCD + PRZ + S/R 叠加，新设计 token 配色）----
 function renderSvgCandles(candles, setups, sr, tf, W, H){{
-  if(!candles||!candles.length)return'<div style="color:var(--muted);padding:20px">暂无K线数据（该周期未采集）</div>';
-  W=W||800; H=H||440; const padL=58, padR=14, padT=12, padB=22;
+  if(!candles||!candles.length)
+    return'<div style="color:var(--t2);padding:20px">暂无K线数据（该周期未采集）</div>';
+  W=W||800; H=H||380; const padL=60, padR=16, padT=14, padB=24;
   const n=candles.length;
   const cw=Math.max(2,Math.floor((W-padL-padR)/n)-1);
   const gap=Math.max(1,(W-padL-padR-n*cw)/(n-1||1));
 
   // 价格范围（含 setup 点，PRZ，S/R线）
   let lo=Infinity, hi=-Infinity;
-  candles.forEach(c=>{{const h=parseFloat(c[2]),l=parseFloat(c[3]);if(h>hi)hi=h;if(l<lo)lo=l;}});
-  setups.forEach(s=>{{
-    [s.x_px,s.a_px,s.b_px,s.c_px,s.d_px,s.prz_lo,s.prz_hi,s.entry_lo,s.entry_hi,s.stop,s.target1,s.target2]
+  candles.forEach(c=>{{
+    const h=parseFloat(c[2]),l=parseFloat(c[3]);
+    if(h>hi)hi=h;if(l<lo)lo=l;
+  }});
+  setups.forEach(su=>{{
+    [su.x_px,su.a_px,su.b_px,su.c_px,su.d_px,
+     su.prz_lo,su.prz_hi,su.entry_lo,su.entry_hi,su.stop,su.target1,su.target2]
       .forEach(v=>{{if(v!=null){{const f=parseFloat(v);if(f>hi)hi=f;if(f<lo)lo=f;}}}});
   }});
   sr.filter(s=>s.tf===tf).forEach(s=>{{
@@ -1806,29 +2101,55 @@ function renderSvgCandles(candles, setups, sr, tf, W, H){{
   function py(price){{return padT+(hi-price)/span*(H-padT-padB);}}
   function px(i){{return padL+i*(cw+gap)+cw/2;}}
 
-  let s=`<svg viewBox="0 0 ${{W}} ${{H}}" width="100%" height="${{H}}" preserveAspectRatio="none" xmlns="http://www.w3.org/2000/svg" style="display:block">`;
+  let svg=`<svg viewBox="0 0 ${{W}} ${{H}}" width="100%" height="${{H}}" `+
+    `preserveAspectRatio="none" xmlns="http://www.w3.org/2000/svg" style="display:block">`;
 
-  // S/R 线（该 tf）
+  // 背景格线（横向参考线）
+  for(let gi=0;gi<=4;gi++){{
+    const price=lo+(span*gi/4);
+    const y=py(price);
+    svg+=`<line x1="${{padL}}" y1="${{y.toFixed(1)}}" x2="${{W-padR}}" y2="${{y.toFixed(1)}}" `+
+      `stroke="#e4eaf3" stroke-width="1"/>`;
+  }}
+
+  // S/R 线（该 tf 布林带上/下轨）
   sr.filter(r=>r.tf===tf).forEach(r=>{{
-    if(r.upper!=null){{const y=py(r.upper);s+=`<line x1="${{padL}}" y1="${{y.toFixed(1)}}" x2="${{W-padR}}" y2="${{y.toFixed(1)}}" stroke="#cf222e" stroke-width="1" stroke-dasharray="4,3" opacity="0.65"/>`;}}
-    if(r.lower!=null){{const y=py(r.lower);s+=`<line x1="${{padL}}" y1="${{y.toFixed(1)}}" x2="${{W-padR}}" y2="${{y.toFixed(1)}}" stroke="#1a7f37" stroke-width="1" stroke-dasharray="4,3" opacity="0.65"/>`;}}
+    if(r.upper!=null){{
+      const y=py(r.upper);
+      svg+=`<line x1="${{padL}}" y1="${{y.toFixed(1)}}" x2="${{W-padR}}" y2="${{y.toFixed(1)}}" `+
+        `stroke="#e23744" stroke-width="1" stroke-dasharray="4,3" opacity="0.7"/>`;
+    }}
+    if(r.lower!=null){{
+      const y=py(r.lower);
+      svg+=`<line x1="${{padL}}" y1="${{y.toFixed(1)}}" x2="${{W-padR}}" y2="${{y.toFixed(1)}}" `+
+        `stroke="#16a34a" stroke-width="1" stroke-dasharray="4,3" opacity="0.7"/>`;
+    }}
   }});
 
-  // Setup 水平虚线（进场/止损/目标）
+  // Setup 水平虚线（进场区/止损/目标 1/目标 2）
   setups.forEach(su=>{{
     const lines=[
-      [su.entry_lo,'#0969da',1.5,'6,3'],[su.stop,su.direction==='long'?'#cf222e':'#1a7f37',1,'4,3'],
-      [su.target1,'#9a6700',1,'4,3'],[su.target2,'#8250df',1,'4,3'],
+      [su.entry_lo,'#2563eb',1.5,'6,3'],
+      [su.stop,su.direction==='long'?'#e23744':'#16a34a',1,'4,3'],
+      [su.target1,'#e6a23c',1,'4,3'],
+      [su.target2,'#a855f7',1,'4,3'],
     ];
     lines.forEach(([v,c,w,da])=>{{
       if(v==null)return;
       const y=py(parseFloat(v));
-      s+=`<line x1="${{padL}}" y1="${{y.toFixed(1)}}" x2="${{W-padR}}" y2="${{y.toFixed(1)}}" stroke="${{c}}" stroke-width="${{w}}" stroke-dasharray="${{da}}" opacity="0.85"/>`;
+      svg+=`<line x1="${{padL}}" y1="${{y.toFixed(1)}}" x2="${{W-padR}}" `+
+        `y2="${{y.toFixed(1)}}" stroke="${{c}}" stroke-width="${{w}}" `+
+        `stroke-dasharray="${{da}}" opacity="0.88"/>`;
     }});
-    // PRZ 区带
+    // PRZ 区带（蓝色半透明）
     if(su.prz_lo!=null&&su.prz_hi!=null){{
-      const y1=py(Math.max(su.prz_lo,su.prz_hi)), y2=py(Math.min(su.prz_lo,su.prz_hi));
-      s+=`<rect x="${{padL}}" y="${{y1.toFixed(1)}}" width="${{W-padL-padR}}" height="${{Math.max(1,(y2-y1)).toFixed(1)}}" fill="#0969da" opacity="0.12"/>`;
+      const y1=py(Math.max(su.prz_lo,su.prz_hi));
+      const y2=py(Math.min(su.prz_lo,su.prz_hi));
+      svg+=`<rect x="${{padL}}" y="${{y1.toFixed(1)}}" width="${{W-padL-padR}}" `+
+        `height="${{Math.max(1,(y2-y1)).toFixed(1)}}" `+
+        `fill="rgba(37,99,235,0.13)" stroke="rgba(37,99,235,0.45)" stroke-width="1"/>`;
+      svg+=`<text x="${{padL+4}}" y="${{(y1+11).toFixed(1)}}" font-size="9" `+
+        `font-weight="700" fill="#2563eb" opacity="0.85">PRZ</text>`;
     }}
   }});
 
@@ -1838,42 +2159,48 @@ function renderSvgCandles(candles, setups, sr, tf, W, H){{
     const x=padL+i*(cw+gap);
     const cy=py(cl), oy=py(o);
     const top=Math.min(cy,oy), bh=Math.max(1,Math.abs(cy-oy));
-    const color=cl>=o?'#26a269':'#e5484d';
+    const color=cl>=o?'#16a34a':'#e23744';// 设计 token: long/short
     const mx=x+cw/2;
     // 影线
-    s+=`<line x1="${{mx.toFixed(1)}}" y1="${{py(h).toFixed(1)}}" x2="${{mx.toFixed(1)}}" y2="${{py(l).toFixed(1)}}" stroke="${{color}}" stroke-width="1"/>`;
+    svg+=`<line x1="${{mx.toFixed(1)}}" y1="${{py(h).toFixed(1)}}" `+
+      `x2="${{mx.toFixed(1)}}" y2="${{py(l).toFixed(1)}}" stroke="${{color}}" stroke-width="1"/>`;
     // 实体
-    s+=`<rect x="${{x.toFixed(1)}}" y="${{top.toFixed(1)}}" width="${{cw}}" height="${{bh.toFixed(1)}}" fill="${{color}}" rx="1"/>`;
+    svg+=`<rect x="${{x.toFixed(1)}}" y="${{top.toFixed(1)}}" width="${{cw}}" `+
+      `height="${{bh.toFixed(1)}}" fill="${{color}}" rx="1"/>`;
   }});
 
-  // XABCD polyline + 点 + 标注
+  // XABCD polyline（紫色，设计稿 --violet）+ 点 + 标注
   setups.forEach(su=>{{
     const pts=[
       [su.x_idx,su.x_px,'X'],[su.a_idx,su.a_px,'A'],
       [su.b_idx,su.b_px,'B'],[su.c_idx,su.c_px,'C'],[su.d_idx,su.d_px,'D'],
-    ].filter(([idx,v])=>idx!=null&&v!=null);
+    ].filter(([idx,val])=>idx!=null&&val!=null);
     if(pts.length>1){{
-      const poly=pts.map(([idx,v])=>`${{px(idx).toFixed(1)}},${{py(v).toFixed(1)}}`).join(' ');
-      s+=`<polyline points="${{poly}}" fill="none" stroke="#e8590c" stroke-width="1.5" stroke-dasharray="3,2" opacity="0.92"/>`;
+      const poly=pts.map(([idx,val])=>
+        `${{px(idx).toFixed(1)}},${{py(val).toFixed(1)}}`).join(' ');
+      svg+=`<polyline points="${{poly}}" fill="none" stroke="#a855f7" `+
+        `stroke-width="1.8" stroke-dasharray="3,2" opacity="0.9"/>`;
     }}
-    pts.forEach(([idx,v,lbl])=>{{
-      const cx=px(idx), cy2=py(v);
-      s+=`<circle cx="${{cx.toFixed(1)}}" cy="${{cy2.toFixed(1)}}" r="4" fill="#e8590c" opacity="0.95"/>`;
-      s+=`<text x="${{(cx+5).toFixed(1)}}" y="${{(cy2-5).toFixed(1)}}" fill="#e8590c" font-size="11" font-weight="bold">${{lbl}}</text>`;
+    pts.forEach(([idx,val,lbl])=>{{
+      const cx=px(idx), cy2=py(val);
+      svg+=`<circle cx="${{cx.toFixed(1)}}" cy="${{cy2.toFixed(1)}}" `+
+        `r="4.5" fill="#fff" stroke="#a855f7" stroke-width="2"/>`;
+      svg+=`<text x="${{(cx+5).toFixed(1)}}" y="${{(cy2-5).toFixed(1)}}" `+
+        `fill="#a855f7" font-size="11" font-weight="700">${{lbl}}</text>`;
     }});
   }});
 
-  // Y 轴价格刻度（4~5 个）
-  const nTicks=5;
-  for(let i=0;i<=nTicks;i++){{
-    const price=lo+(span*i/nTicks);
+  // Y 轴价格刻度（5 个）
+  for(let i=0;i<=5;i++){{
+    const price=lo+(span*i/5);
     const y=py(price);
-    s+=`<text x="${{(padL-4).toFixed(1)}}" y="${{(y+4).toFixed(1)}}" fill="#656d76" font-size="10" text-anchor="end">${{price>100?price.toFixed(0):price.toFixed(4)}}</text>`;
-    s+=`<line x1="${{padL}}" y1="${{y.toFixed(1)}}" x2="${{W-padR}}" y2="${{y.toFixed(1)}}" stroke="#e7ebef" stroke-width="1"/>`;
+    svg+=`<text x="${{(padL-4).toFixed(1)}}" y="${{(y+4).toFixed(1)}}" `+
+      `fill="#9aa7bd" font-size="9.5" font-family="IBM Plex Mono,monospace" `+
+      `text-anchor="end">${{price>100?price.toFixed(0):price.toFixed(4)}}</text>`;
   }}
 
-  s+='</svg>';
-  return s;
+  svg+='</svg>';
+  return svg;
 }}
 
 // ---- 多周期 S/R 表 ----
@@ -1883,16 +2210,16 @@ function renderSrTable(sr){{
   sr.forEach(r=>{{
     h+=`<tr>
       <td style="color:var(--blue)">${{r.tf||'—'}}</td>
-      <td class="neg">${{fmtN(r.upper,4)}}</td>
-      <td class="pos">${{fmtN(r.lower,4)}}</td>
-      <td>${{fmtN(r.pct_b,3)}}</td>
-      <td>${{r.squeeze?'<span style="color:var(--yellow)">挤压</span>':'—'}}</td>
+      <td class="neg mono">${{fmtN(r.upper,4)}}</td>
+      <td class="pos mono">${{fmtN(r.lower,4)}}</td>
+      <td class="mono">${{fmtN(r.pct_b,3)}}</td>
+      <td>${{r.squeeze?'<span style="color:var(--amber)">挤压</span>':'—'}}</td>
     </tr>`;
   }});
   return h+'</table>';
 }}
 
-// ---- Setup 明细 ----
+// ---- Setup 明细（右侧栏 kv 表）----
 function renderSetupDetail(setups){{
   if(!setups||!setups.length)return'<span class="none">（该周期无 setup）</span>';
   const su=setups[0];
@@ -1901,21 +2228,39 @@ function renderSetupDetail(setups){{
   const prz=su.prz_lo!=null||su.prz_hi!=null
     ?(fmtN(su.prz_lo,4)+' ~ '+fmtN(su.prz_hi,4)):'—';
   const conf=su.confidence!=null?Math.round(su.confidence*100)+'%':'—';
-  // 侧栏窄列：竖向两列 kv（标签 nowrap，值可换行），避免标签被压成竖排单字
   return`<table class="kv">
     <tr><th>形态</th><td>${{su.pattern||'—'}}</td></tr>
     <tr><th>方向</th><td>${{dirTag(su.direction)}}</td></tr>
-    <tr><th>进场区</th><td>${{entry}}</td></tr>
-    <tr><th>PRZ区</th><td>${{prz}}</td></tr>
-    <tr><th>止损</th><td class="${{su.direction==='long'?'neg':'pos'}}">${{fmtN(su.stop,4)}}</td></tr>
-    <tr><th>目标1</th><td class="pos">${{fmtN(su.target1,4)}}</td></tr>
-    <tr><th>目标2</th><td class="pos">${{fmtN(su.target2,4)}}</td></tr>
-    <tr><th>盈亏比</th><td class="pos">${{fmtN(su.rr,2)}}</td></tr>
-    <tr><th>置信</th><td>${{conf}}</td></tr>
+    <tr><th>进场区</th><td class="mono">${{entry}}</td></tr>
+    <tr><th>PRZ区</th><td class="mono">${{prz}}</td></tr>
+    <tr><th>止损</th><td class="${{su.direction==='long'?'neg':'pos'}} mono">${{fmtN(su.stop,4)}}</td></tr>
+    <tr><th>目标1</th><td class="pos mono">${{fmtN(su.target1,4)}}</td></tr>
+    <tr><th>目标2</th><td class="pos mono">${{fmtN(su.target2,4)}}</td></tr>
+    <tr><th>盈亏比</th><td class="pos mono">${{fmtN(su.rr,2)}}</td></tr>
+    <tr><th>置信</th><td class="mono">${{conf}}</td></tr>
     <tr><th>KNN</th><td>${{su.knn||'—'}}</td></tr>
     <tr><th>订单流</th><td>${{su.orderflow||'—'}}</td></tr>
     <tr><th>Fib注记</th><td>${{su.fib_note||'—'}}</td></tr>
   </table>`;
+}}
+
+// ---- KNN 预测卡（右侧栏，诚实：不伪造数值，只展示后端真实 knn 标记）----
+function renderKnnCard(setups){{
+  const su=setups&&setups[0];
+  const knnTxt=su&&su.knn?String(su.knn):'';
+  // 后端 setups[].knn 仅为标记字符串（含 '✓'=找到历史相似态 / 否则未知），无概率数值。
+  // 诚实原则（CLAUDE.md）：禁用 Math.random 伪造百分比/dots，只展示真实标记 + ≈随机声明。
+  const hasKnn=knnTxt.indexOf('✓')>=0;
+  const stateTxt=hasKnn?'找到历史相似态':(knnTxt?esc(knnTxt):'无数据');
+  const stateCls=hasKnn?'long':'none';
+  return`<div class="knn-row">
+    <div class="knn-cell" style="flex:1">
+      <span class="knn-pct ${{stateCls}}" style="font-size:14px">${{stateTxt}}</span>
+      <span class="knn-label">KNN 历史相似态</span>
+    </div>
+  </div>
+  <div class="knn-note">⚠️ KNN ≈ 随机基线（项目实测 ~50%，无 alpha）。仅作历史相似态展示，
+    不产生概率预测、不可作信号依赖。后端 knn 标记：${{esc(knnTxt||'未知')}}</div>`;
 }}
 
 // ---- 历史形态 ----
@@ -1924,28 +2269,32 @@ function renderHistory(history){{
   let h='<table><tr><th>时间</th><th>周期</th><th>形态</th><th>方向</th><th>置信</th><th>状态</th></tr>';
   history.slice(0,15).forEach(r=>{{
     h+=`<tr>
-      <td style="color:var(--muted)">${{fmtTime(r.ts)}}</td>
-      <td style="color:var(--muted)">${{r.tf||'—'}}</td>
+      <td style="color:var(--t2)">${{fmtTime(r.ts)}}</td>
+      <td style="color:var(--t2)">${{r.tf||'—'}}</td>
       <td>${{r.pattern||'—'}}</td>
       <td>${{dirTag(r.direction)}}</td>
-      <td>${{r.confidence!=null?Math.round(r.confidence*100)+'%':'—'}}</td>
-      <td style="color:var(--muted)">${{r.kind||'—'}}</td>
+      <td class="mono">${{r.confidence!=null?Math.round(r.confidence*100)+'%':'—'}}</td>
+      <td style="color:var(--t2)">${{r.kind||'—'}}</td>
     </tr>`;
   }});
   return h+'</table>';
 }}
 
-// ---- 右面板主渲染 ----
-function renderDetail(d){{
-  if(!d){{document.getElementById('right').innerHTML='<div id="right-empty">← 点击左侧币种查看详情</div>';return;}}
-  _curDetail=d;
+// ---- 中栏主渲染（大蜡烛图 + 数据头）----
+function renderMainArea(d){{
+  if(!d){{
+    document.getElementById('main-area').innerHTML=
+      '<div id="main-empty" style="color:var(--t2);padding:40px;text-align:center">← 点击左侧币种查看蜡烛图详情</div>';
+    return;
+  }}
   const coin=d.coin||'';
   const ac=d.asset_class||'crypto';
   const tf=d.tf||'';
   const tfs=d.tfs_available||[];
   const cdl=d.candles||[];
+  const clock=new Date().toLocaleTimeString('zh-CN',{{hour12:false}});
 
-  // 现价 = 最新蜡烛收盘；涨跌色 = 收 vs 开
+  // 现价 = 最新蜡烛收盘
   let priceHtml='';
   if(cdl.length){{
     const last=cdl[cdl.length-1].map(Number);
@@ -1953,53 +2302,79 @@ function renderDetail(d){{
     const pv=cl>=100?cl.toFixed(2):cl.toFixed(4);
     priceHtml=`<span class="detail-price ${{up?'pos':'neg'}}">${{pv}}</span>`;
   }}
-  const clock=new Date().toLocaleTimeString('zh-CN',{{hour12:false}});
 
   // 周期 tabs
   const tabsHtml=tfs.length
     ?'<div class="tf-tabs">'+tfs.map(t=>
-        `<button class="tf-tab${{t===tf?' active':''}}" onclick="selectCoin('${{esc(coin)}}','${{esc(t)}}')">${{t}}</button>`
+        `<button class="tf-tab${{t===tf?' active':''}}" `+
+        `onclick="selectCoin('${{esc(coin)}}','${{esc(t)}}')">${{t}}</button>`
       ).join('')+'</div>'
     :'';
 
-  // SVG 蜡烛图（首次以默认宽渲染；innerHTML 后 redrawChart 按真实像素宽重绘撑满全宽）
   const svgHtml=renderSvgCandles(cdl,d.setups||[],d.sr||[],tf);
 
-  const html=
-    // 币头部（badge + 币 + 现价 + ● LIVE + 周期）
+  document.getElementById('main-area').innerHTML=
+    // 币头部（badge + 币 + 现价 + ● LIVE）
     `<div class="detail-head">
-       ${{badgeHtml(ac)}}<span class="detail-coin">${{esc(coin)}}</span>
+       ${{badgeHtml(ac)}}
+       <span class="detail-coin">${{esc(coin)}}</span>
        ${{priceHtml}}
        <span class="live"><span class="live-dot"></span>LIVE</span>
-       <span style="color:var(--muted);font-size:12px">周期 ${{tf||'—'}}</span>
+       <span style="color:var(--t2);font-size:12px">周期 ${{tf||'—'}}</span>
+       <span class="panel-time">本地 ${{clock}} 刷新</span>
      </div>`+
     tabsHtml+
-    // 主-详情双区：大图表(主) + 信息侧栏(Setup 交易计划 + 多周期 S/R)
-    `<div class="detail-grid">
-       <div class="detail-main">
-         <div class="card"><div class="card-title">📈 蜡烛图（含 XABCD / PRZ / S&R 叠加）
-           <span class="panel-time">本地 ${{clock}} 刷新</span></div>
-           <div class="card-body"><div id="chart-host">${{svgHtml}}</div></div></div>
+    // 大蜡烛图（全宽卡片）
+    `<div class="chart-card">
+       <div class="chart-legend">
+         <span class="chart-title">谐波形态 · 斐波那契 · SMC 结构</span>
+         <div class="legend-items">
+           <span class="legend-item"><span class="legend-swatch-line"></span>XABCD</span>
+           <span class="legend-item"><span class="legend-swatch-prz"></span>PRZ 反转区</span>
+           <span class="legend-item"><span class="legend-swatch-ote"></span>OTE 黄金口袋</span>
+         </div>
        </div>
-       <div class="detail-side">
-         <div class="card accent"><div class="card-title">⚡ Setup 明细（交易计划）</div>
-           <div class="card-body">${{renderSetupDetail(d.setups||[])}}</div></div>
-         <div class="card"><div class="card-title">📐 多周期 S/R（布林带压力/支撑）</div>
-           <div class="card-body">${{renderSrTable(d.sr||[])}}</div></div>
-       </div>
+       <div id="chart-host">${{svgHtml}}</div>
      </div>`+
-    // 历史（全宽下沉）
-    `<div class="card"><div class="card-title">🕐 历史形态</div>
-       <div class="card-body">${{renderHistory(d.history||[])}}</div></div>`+
-    // 傻瓜解释
+    // 历史形态（全宽下沉）
+    `<div class="card"><div class="card-title">历史形态</div>
+       <div class="card-body">${{renderHistory(d.history||[])}}</div></div>`;
+
+  redrawChart();
+}}
+
+// ---- 右侧栏渲染（Setup + S/R + KNN + 解释）----
+function renderRightSide(d){{
+  if(!d){{
+    document.getElementById('right-side').innerHTML=
+      '<div id="right-empty">选择币种查看交易计划</div>';
+    return;
+  }}
+  document.getElementById('right-side').innerHTML=
+    // Setup 明细卡（accent 蓝边）
+    `<div class="card accent">
+       <div class="card-title">Setup 明细（交易计划）</div>
+       <div class="card-body">${{renderSetupDetail(d.setups||[])}}</div>
+     </div>`+
+    // 多周期 S/R
+    `<div class="card">
+       <div class="card-title">多周期 S/R（布林带压力/支撑）</div>
+       <div class="card-body">${{renderSrTable(d.sr||[])}}</div>
+     </div>`+
+    // KNN 预测（诚实标注）
+    `<div class="card">
+       <div class="card-title">KNN 相似态预测</div>
+       <div class="card-body">${{renderKnnCard(d.setups||[])}}</div>
+     </div>`+
+    // 傻瓜解释折叠块
     `<details class="explainer">
-       <summary>📖 名词傻瓜解释（点击展开）</summary>
+       <summary>名词傻瓜解释（点击展开）</summary>
        <div class="explainer-body">
          <dl>
            <dt>看多 / 看空</dt><dd>看多=预期涨，参考做多方向；看空=预期跌，参考做空方向。</dd>
            <dt>蜡烛图（OHLC）</dt><dd>每根蜡烛显示一个周期内的开盘/收盘/最高/最低价。绿柱=上涨；红柱=下跌。</dd>
-           <dt>XABCD 形态连线</dt><dd>谐波形态的五个关键价格点，用橙色线连接，D 点是潜在反转位。</dd>
-           <dt>PRZ（潜在反转区）</dt><dd>蓝色半透明区带，是形态预测的价格反转区间。</dd>
+           <dt>XABCD 形态连线</dt><dd>谐波形态的五个关键价格点，用紫色线连接，D 点是潜在反转位。</dd>
+           <dt>PRZ（潜在反转区）</dt><dd>蓝色半透明区带，是形态预测的价格反转区间，为前瞻位置。</dd>
            <dt>进场区（蓝色虚线）</dt><dd>建议参考入场的价格区间（PRZ 范围内）。需等订单流/成交量确认。</dd>
            <dt>止损（红/绿虚线）</dt><dd>价格突破此位形态失效，应立即止损。</dd>
            <dt>目标（黄/紫虚线）</dt><dd>参考止盈位：target1=保守，target2=扩展目标。</dd>
@@ -2014,9 +2389,13 @@ function renderDetail(d){{
        </div>
      </details>`+
     `<div class="disclaimer">⚠️ 确认层非投资建议：PRZ 前瞻 × 订单流确认；KNN ≈ 随机基线；墙可能 spoof。</div>`;
+}}
 
-  document.getElementById('right').innerHTML=html;
-  redrawChart();  // 按 #chart-host 真实像素宽重绘 SVG，撑满全宽（根治信封式留白）
+// ---- 右面板主渲染（中 + 右同步）----
+function renderDetail(d){{
+  _curDetail=d;
+  renderMainArea(d);
+  renderRightSide(d);
 }}
 
 // ---- 图表按容器真实像素宽重绘（撑满全宽 + 响应式）----
@@ -2025,64 +2404,66 @@ function redrawChart(){{
   if(!host||!_curDetail)return;
   const W=Math.max(320,Math.floor(host.clientWidth));
   host.innerHTML=renderSvgCandles(
-    _curDetail.candles||[],_curDetail.setups||[],_curDetail.sr||[],_curDetail.tf||'',W,440);
+    _curDetail.candles||[],_curDetail.setups||[],
+    _curDetail.sr||[],_curDetail.tf||'',W,380);
 }}
 let _rzT=null;
-window.addEventListener('resize',()=>{{ clearTimeout(_rzT); _rzT=setTimeout(redrawChart,150); }});
+window.addEventListener('resize',()=>{{clearTimeout(_rzT);_rzT=setTimeout(redrawChart,150);}});
 
 // ---- 数据时间/年龄（诚实显示真实数据时刻，非浏览器时钟）----
 function updateMeta(){{
   const m=document.getElementById('meta');
   const tss=(_listData||[]).map(r=>r.ts).filter(v=>v!=null);
-  if(!tss.length){{ m.textContent='无数据'; m.style.color='var(--muted)'; return; }}
+  if(!tss.length){{m.textContent='无数据';m.style.color='var(--t2)';return;}}
   const maxTs=Math.max(...tss);
   const ageMs=Date.now()-maxTs;
   const ageMin=ageMs/60000;
   const dt=new Date(maxTs).toLocaleTimeString('zh-CN',{{hour12:false}});
-  let ageTxt, col;
-  if(ageMin<1){{ ageTxt='刚刚'; col='var(--green)'; }}
-  else if(ageMin<10){{ ageTxt=Math.round(ageMin)+'分前'; col='var(--green)'; }}
-  else if(ageMin<60){{ ageTxt=Math.round(ageMin)+'分前'; col='var(--yellow)'; }}
-  else {{ ageTxt=(ageMin/60).toFixed(1)+'小时前'; col='var(--red)'; }}
-  // 数据时间=引擎上次计算时刻；谐波为 DB 缓存型，非 tick 级实时
+  let ageTxt,col;
+  if(ageMin<1){{ageTxt='刚刚';col='var(--long)';}}
+  else if(ageMin<10){{ageTxt=Math.round(ageMin)+'分前';col='var(--long)';}}
+  else if(ageMin<60){{ageTxt=Math.round(ageMin)+'分前';col='var(--amber)';}}
+  else{{ageTxt=(ageMin/60).toFixed(1)+'小时前';col='var(--short)';}}
   m.textContent='数据时间 '+dt+' · '+ageTxt;
   m.style.color=col;
   m.title='谐波为 DB 缓存型（低延迟，请求不打网络）；此为引擎上次计算时刻，非浏览器时钟';
 }}
 
-// ---- 初始渲染左列表 ----
-renderList(_listData);
+// ---- 初始渲染 ----
+_filtered=_applyFilter(_listData);
+renderList();
+updateKpi(_listData);
 updateMeta();
-// 加载即**自动选中首个(置信最高)币**显示详情，避免右侧空白("部分内容查看不了")
-if(_listData && _listData.length){{
-  const _sorted=[..._listData].sort((a,b)=>((b.best_conf==null?-1:b.best_conf)-(a.best_conf==null?-1:a.best_conf)));
-  if(_sorted[0] && _sorted[0].coin) selectCoin(_sorted[0].coin);
+// 加载即自动选中首个（置信最高）币，避免右侧空白
+if(_listData&&_listData.length){{
+  const _sorted=[..._listData].sort((a,b)=>
+    ((b.best_conf==null?-1:b.best_conf)-(a.best_conf==null?-1:a.best_conf)));
+  if(_sorted[0]&&_sorted[0].coin)selectCoin(_sorted[0].coin);
 }}
 
-// ---- 5s 轮询左列表 ----
-// 「发现搜集」按钮：触发后端扫描更广 Bitget 宇宙发现有谐波形态的币 → 加入监控 + 立即展示
+// ---- 5s 轮询 ----
 async function discoverCoins(){{
   const btn=document.getElementById('discover-btn');
   const msg=document.getElementById('discover-msg');
   const old=btn.textContent;
-  btn.disabled=true; btn.textContent='🔍 扫描中…'; msg.textContent='';
+  btn.disabled=true;btn.textContent='🔍 扫描中…';msg.textContent='';
   try{{
     const r=await fetch('/api/harmonic/discover',{{method:'POST'}});
     const d=await r.json();
-    if(d.error){{ msg.textContent='失败: '+d.error; msg.style.color='var(--red)'; }}
+    if(d.error){{msg.textContent='失败: '+d.error;msg.style.color='var(--short)';}}
     else{{
       const found=d.discovered||[];
       if(found.length){{
         msg.textContent='发现 '+found.length+' 币: '+found.join(', ')+'（已加入监控）';
-        msg.style.color='var(--green)';
+        msg.style.color='var(--long)';
         await refreshList();
       }}else{{
         msg.textContent='扫描 '+(d.scanned||0)+' 币，暂无新谐波形态';
-        msg.style.color='var(--muted)';
+        msg.style.color='var(--t2)';
       }}
     }}
-  }}catch(e){{ msg.textContent='失败: '+e; msg.style.color='var(--red)'; }}
-  btn.disabled=false; btn.textContent=old;
+  }}catch(e){{msg.textContent='失败: '+e;msg.style.color='var(--short)';}}
+  btn.disabled=false;btn.textContent=old;
 }}
 
 async function refreshList(){{
@@ -2090,13 +2471,14 @@ async function refreshList(){{
     const r=await fetch('/api/harmonic/list');
     if(r.ok){{
       _listData=await r.json();
-      renderList(_listData);
+      _filtered=_applyFilter(_listData);
+      renderList();
+      updateKpi(_listData);
     }}
   }}catch(e){{console.warn('harmonic list refresh err',e)}}
-  updateMeta();  // 无论是否拿到新数据都刷新"数据年龄"（陈旧会可见增长）
+  updateMeta();
 }}
 
-// ---- 5s 轮询右详情：选中币的图表/Setup/S-R/历史随行情就地重绘 ----
 async function refreshDetail(){{
   if(!_selectedCoin)return;
   try{{
@@ -2106,20 +2488,23 @@ async function refreshDetail(){{
     if(!r.ok)return;
     const d=await r.json();
     _selectedTf=d.tf||_selectedTf;
-    // 就地重绘：保留滚动位置 + explainer 展开态，避免闪烁
-    const right=document.getElementById('right');
-    const sc=right?right.scrollTop:0;
+    // 就地重绘：保留滚动 + explainer 展开态
+    const mainEl=document.getElementById('main-area');
+    const scM=mainEl?mainEl.scrollTop:0;
+    const rside=document.getElementById('right-side');
+    const scR=rside?rside.scrollTop:0;
     const exp=document.querySelector('details.explainer');
     const expOpen=exp?exp.open:false;
     renderDetail(d);
     const exp2=document.querySelector('details.explainer');
     if(exp2)exp2.open=expOpen;
-    if(right)right.scrollTop=sc;
+    if(mainEl)mainEl.scrollTop=scM;
+    if(rside)rside.scrollTop=scR;
   }}catch(e){{console.warn('harmonic detail refresh err',e)}}
 }}
 
-// 同一 5s 周期：左列表 + 右详情一起刷新（详情随行情实时）
-setInterval(()=>{{ refreshList(); refreshDetail(); }},5000);
+// 同一 5s 周期：左列表 + 右详情一起刷新
+setInterval(()=>{{refreshList();refreshDetail();}},5000);
 </script>
 </body>
 </html>"""
