@@ -29,7 +29,15 @@
 - [x] B1 **完成(loop#6,Opus 验证 + 固化 d4cbfca)**:2 gap 已收口(O(1) 预建映射 + on_update 端到端推送);
   落库协调=实时层只推送通知不写库(保 dashboard 全量快照),**全量 1859 passed**。诚实:页面实时读取(per-coin
   latest)是 B2 单独做。known limit:all_perp+harmonic_collected 动态加币需重新 attach(预存架构限制)。
-- [ ] B2 dashboard 谐波页从 5s 轮询 → 更实时(SSE/WS 推送或更短轮询 + LIVE 脉冲)。
+- [ ] B2 **谐波页页面级实时读取(实现方案已设计,loop#16,待 H2 后执行)**:核心 = 解 B1 留的 gap
+  (实时层只推送不落库,因 `recent_harmonic_setups` 用 `WHERE ts=MAX(ts)` 全量快照,单币落库会塌列表)。
+  **方案 a(选)**:`recent_harmonic_setups` 改 **per-coin latest** —— `WHERE (coin,tf,ts) IN (SELECT coin,tf,
+  MAX(ts) GROUP BY coin,tf)`(或窗口函数),每币各自最新而非全局 MAX(ts);则 B1 实时层可恢复**按币落库**
+  harmonic_setups(on_update → insert),页面读每币最新 = 真页面级实时。**风险**:① 验证 dashboard 列表/详情
+  对「不同币不同 ts」兼容(现假设同 ts 快照);② periodic 全量落库与实时单币落库共存不重复(harmonic_setups
+  已加 ix_harmonic_coin_ts 索引,A5);③ 全永续下 per-coin GROUP BY 性能(索引覆盖)。**方案 b 备选**:独立
+  `harmonic_realtime_setups` 表,dashboard 合并读(realtime 优先)。TDD:per-coin latest 读取 + 实时落库不塌列表 +
+  性能。**改 db.py(读取)+ harmonic_candle_ws on_update(恢复落库)+ dashboard 调用**,与 H2 串行(都碰 dashboard)。
 - [x] B3 **forming 实时逼近 PRZ 完成(loop#12,核验已实现 + 补测试,全量 1877 passed)**:
   `FormingApproachTracker`(forming_approach.py:per-entry TTL 缓存 + 结构指纹冷却去重 + 穿越作废 + 纯内存
   热路径)+ app.py `_periodic_prz_approach`(15s worker,非 WS 回调)+ `_seed` 建 + PRZ 缓存 update,**已接入运行时**。
@@ -53,8 +61,14 @@
   + no-lookahead 10/10;fail-closed + numpy warning 已修;**2 待修已修**:① msfvg per-row warmup mask 移除 →
   whole-batch guard(min_bars=2*swing+1,对齐 Rust,早期有 zone 就发射,no-repaint 保持);② gpi/msfvg 新增
   TestProductionPathGolden 直接驱动 `*_series`(原 golden 只测公式副本)。lane A 地基(loop#11)+ B3 协同(loop#8)已审。
-- [ ] C2 forward_confirm 接全币种(OI 速度/funding 极值/OFI 已实现,接谐波全币种宇宙)。
-- [ ] C3 review 闭环按 asset_class/horizon 出谐波前瞻命中率(诚实度量,不夸大)。
+- [x] C2 **已随 A2 + WF3 自动达成(loop#13 核验)**:`apply_forward` 接入 harmonic_monitor(line 183),
+  **completed+forming 都施加** forward_mult(解除 completed 门控,QA §3);forward provider(HarmonicForwardSignals
+  + build_profile)接 harmonic_monitor 的 coin_to_symbol=harm_c2s,**随 A2 universe_mode 全永续**。诚实降级:
+  长尾币若 oi_monitor 未覆盖 → 缺 OI/funding → forward_mult 中性(1.0,不佯装)。可选增强:扩 oi_monitor 全永续。
+- [~] C3 **核心已达成(loop#14 核验)**:谐波预测落 predictions 表(`build_harmonic_predictions` completed
+  「谐波-反应式」+ B3 forming「谐波-逼近」,app.py `_record_pred` 接入);`accuracy_report` 有 `by_kind`
+  (区分谐波-反应式/逼近的命中率/edge/avg_ret)+ `by_horizon`(时间尺度)+ `market_neutral_stats`(去 beta,
+  诚实剔趋势)+ 离群守卫。**小 gap**:`by_asset_class`(crypto/tradfi 分桶)未实现 —— 可选增强(by_kind 已够区分)。
 
 ### D. 设计稿落地(SMC 聪明钱终端 + 量析终端 → 真实前端)
 - [x] **数据契约提取(loop#3)**:设计稿数据绑定 ≈ smc 现有 API **1:1 对应**(设计稿基于 smc 数据能力设计)。
@@ -80,11 +94,22 @@
   计数按活跃度归一(消高频偏向)。**B3 协同已审通过(loop#8)**:cooccur_stats null model 正确
   (expected=a·b/total,二项右尾 p-value log 空间防下溢 + 大 n 正态近似,n=0 守卫)+ 测试诚信
   (随机追涨人群被过滤、真协同保留,非走过场)。B2 评分配置化待审(测试全绿)。
-- [ ] H2 **HL 前端落地**:设计稿聪明钱追踪部分(line 67-286)原生重写 —— 三栏:左 `coins`(币+净流向)/
-  中 大图+`flowBars`(净主动流)+`coinPositions`(庄持仓)/右 `consensus`/`consTable`+`divergence`+`whales`+
-  `events`+`onchain`+`breaks`(挂单墙)。复用 D3 设计 token(同终端)+ 现有 dashboard HL API(数据现成)。D3 谐波页后做。
-- [ ] H3 **HL 前瞻**:资金流加速度(2阶导平滑)/OI 方向化速度/挂单意图(WF C 路线 OFI/oi_velocity/funding 已实现)
-  接 HL 聪明钱信号 —— 从「回看庄做过什么」→「前瞻资金正往哪 positioning」(CLAUDE.md 产品方向)。
+- [x] H2 **完成(loop#16,Sonnet 执行 + Opus 验证,全量 1884 passed)**:新增 `/hl2` 路由 + `_HL_TEMPLATE`
+  (735 行)+ `render_hl_html`,设计稿聪明钱追踪三栏(左 whale_flows 币+净流向 / 中 净流向 SVG bars + 地址排行 +
+  庄家集团 / 右 鲸鱼动作+共识+背离+挂单墙+链上),复用 D3 设计 token + IBM Plex,**数据全真实**(whale_flows/
+  top_addresses/clusters/whale_signals/signals/divergence/okx_walls/onchain),per-coin 详情标「暂无数据」**零
+  Math.random 伪造**;系统 tab 链 /harmonic2;不动现有主页 /(保守降风险);7 新测试。curl 自查:三栏/token/{{残留=0}。
+- [~] H4 系统 tab:`/hl2` → `/harmonic2` 单向链已有;反向(/harmonic2 加 HL tab)待补(小附带项)。
+- [~] H3 **HL 前瞻已基本达成(loop#15 核验)**:`flow_predictor`(前瞻资金流:挂单意图+流加速度,app.py:140)
+  + `_periodic_flow_predict`(30s,oi_directional_velocity 方向化 OI,C.3)+ `_periodic_divergence`(60s,资金费⟂
+  净流向背离)全接入 HL periodic = 「前瞻资金正往哪 positioning」。可选增强:flow_acceleration EMA 平滑(C 路线已规划)。
+
+> **loop#15 真实剩余工作盘点**(连续核验后收敛):★绝大多数路线核心已实现+审计★。真未做的仅:
+> - **B2**(谐波页 per-coin latest 实时读取):`recent_harmonic_setups` 仍 `WHERE ts=MAX(ts)` 全量快照(B1 留)→
+>   改 db+dashboard 让实时层可按币落库+页面读最新(等 H2 完成避竞态)。
+> - **D2**(量析/行情分析终端):无路由/页面(次要,用户优先谐波+HL)。
+> - **H4**(系统 tab 统一 /hl2↔/harmonic2):H2 落地时带上。
+> 其余(A/B1/B3/C1/C2/C3核心/D3/H1/H3 + 全部审计)均已完成。**系统功能完成度远高于初始 backlog 勾选数**。
 - [ ] H4 系统 tab 统一:设计稿 header 的 [HL 系统 | 谐波系统] 切换 → 统一 SPA(D2 合并,原生)。
 
 ### E. 固化与门禁

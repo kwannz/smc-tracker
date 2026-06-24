@@ -8,7 +8,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from smc_tracker.storage import Store
-from smc_tracker.dashboard import build_dashboard_state, render_html
+from smc_tracker.dashboard import build_dashboard_state, render_html, render_hl_html
 
 
 # ---------------------------------------------------------------------------
@@ -1755,6 +1755,105 @@ def test_serve_still_has_old_harmonic_route():
     from smc_tracker import dashboard as _dash
     src = inspect.getsource(_dash.serve)
     assert '"/harmonic"' in src or "'/harmonic'" in src, "旧 /harmonic 路由应保留"
+
+
+# ---------------------------------------------------------------------------
+# 测试：render_hl_html（HL 聪明钱地址追踪终端页）
+# ---------------------------------------------------------------------------
+
+def test_render_hl_html_returns_str():
+    """render_hl_html 返回 str，含页面标识 + 核心 HTML 骨架。"""
+    s, now_ms = _store_with_data()
+    state = build_dashboard_state(s, now_ms)
+    s.close()
+
+    html = render_hl_html(state)
+    assert isinstance(html, str)
+    # 页面标识
+    assert "SMC 聪明钱追踪终端" in html
+    # 系统 tab（HL 当前激活，谐波链到 /harmonic2）
+    assert "HL 系统" in html
+    assert "谐波系统" in html
+    assert "/harmonic2" in html
+
+
+def test_render_hl_html_three_column_markers():
+    """render_hl_html 含三栏结构 marker：左列/中栏/右侧栏 DOM id。"""
+    s = _store_empty()
+    state = build_dashboard_state(s, 1_700_000_000_000)
+    s.close()
+
+    html = render_hl_html(state)
+    # 左栏（币种列表）
+    assert 'id="hl-left"' in html
+    # 中栏（主区域）
+    assert 'id="hl-main"' in html
+    # 右侧栏（feed）
+    assert 'id="hl-right"' in html
+
+
+def test_render_hl_html_design_tokens():
+    """render_hl_html 含 D3 设计 token：浅色终端 CSS 变量。"""
+    s = _store_empty()
+    state = build_dashboard_state(s, 1_700_000_000_000)
+    s.close()
+
+    html = render_hl_html(state)
+    # 浅色金融终端 token（来自 _HARMONIC_DETAIL_TEMPLATE 设计系统）
+    assert "--bg:" in html
+    assert "--panel:" in html
+    assert "--blue:" in html
+    # IBM Plex font stack（无外部 CDN，系统 fallback）
+    assert "IBM Plex" in html
+
+
+def test_render_hl_html_no_math_random():
+    """render_hl_html 零 Math.random 伪造 — 严格禁止。"""
+    s = _store_empty()
+    state = build_dashboard_state(s, 1_700_000_000_000)
+    s.close()
+
+    html = render_hl_html(state)
+    assert "Math.random" not in html, "禁止 Math.random 伪造数据"
+
+
+def test_render_hl_html_no_cdn():
+    """render_hl_html 不含外部 CDN/资源链接（纯自包含）。"""
+    import re
+    s = _store_empty()
+    state = build_dashboard_state(s, 1_700_000_000_000)
+    s.close()
+
+    html = render_hl_html(state)
+    for kw in ("cdn.", "unpkg.com", "jsdelivr", "googleapis"):
+        assert kw not in html, f"不应含外部资源: {kw}"
+    bad = [m for m in re.findall(r'https?://[^\s"\'<>]+', html)
+           if "w3.org/2000/svg" not in m]
+    assert not bad, f"不应含外部链接: {bad[:3]}"
+
+
+def test_render_hl_html_api_state_refresh():
+    """render_hl_html 含 /api/state 5s 轮询刷新逻辑。"""
+    s = _store_empty()
+    state = build_dashboard_state(s, 1_700_000_000_000)
+    s.close()
+
+    html = render_hl_html(state)
+    assert "/api/state" in html
+    assert "setInterval" in html
+
+
+def test_render_hl_html_brace_escape():
+    """render_hl_html 双括号转义正确：CSS/JS 良构，无 ${{ 或 :root{{ 残留。"""
+    s, now_ms = _store_with_data()
+    state = build_dashboard_state(s, now_ms)
+    s.close()
+
+    html = render_hl_html(state)
+    assert "${{" not in html, "残留 ${{ → JS 语法错误"
+    assert ":root{{" not in html, "残留 :root{{ → CSS 畸形"
+    assert "{{" not in html, "残留 {{ → 模板转义不完整"
+    assert ":root{" in html, "CSS :root{ 应良构"
 
 
 if __name__ == "__main__":
