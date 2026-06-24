@@ -488,10 +488,10 @@ class TestCompletedEntryZoneNarrow:
 # ── 测试 10：🟡-2 Fib 虚高置信修复 — completed 不再 ×1.1 ─────────────────────
 
 class TestNoFreeFibBoost:
-    """🟡-2: completed 形态置信 = base × knn_mult（不再含 fib_mult=1.1）。"""
+    """🟡-2 + P1-5: completed 形态置信 = base × ATR2 调权（不含 fib_mult=1.1，KNN 已降级为纯展示不调权）。"""
 
     def test_gartley_confidence_no_fib_mult(self):
-        """Gartley completed confidence = base × knn_mult（封顶0.90），不超 base×1.1。"""
+        """Gartley completed confidence ≤ base × 1.05（仅 ATR2 同向 +5%；无 fib ×1.1、无 KNN 调权）。"""
         candles = _make_candles(120)
         harmonic = _gartley_bull_harmonic()  # base_conf=0.75
         setups = build_setups("BTC", "1h", candles, harmonic)
@@ -499,14 +499,12 @@ class TestNoFreeFibBoost:
             pytest.skip("setup 被过滤，跳过置信检测")
         s = setups[0]
         assert s.completed is True
-        # 旧逻辑：0.75 × 1.1 × knn_mult ≤ 0.90，新逻辑：0.75 × knn_mult ≤ 0.90
-        # 核心验证：confidence 应 ≤ base_conf × 1.06（允许 knn=True +5%），不因 fib 被 ×1.1
+        # 新逻辑（P1-5 后）：confidence = base_conf × ATR2(1.05/0.80/1.0)，KNN 不再乘性调权。
+        # 最大 = base × 1.05（ATR2 同向），封顶 0.90。若 fib×1.1 或 KNN×1.05 仍在 → 会超此界。
         base_conf = 0.75
-        max_allowed = min(base_conf * 1.10, 0.90)  # 旧最大值（fib_mult×knn_mult）
-        new_max = min(base_conf * 1.06, 0.90)       # 新最大值（仅 knn_mult）
-        # 置信应 ≤ new_max（无 fib_mult），不需要 fib 才能达到 max_allowed
-        assert s.confidence <= new_max or s.confidence <= 0.90, (
-            f"confidence={s.confidence:.4f} 不应通过 fib_mult 被抬高"
+        new_max = min(base_conf * 1.05, 0.90)       # 仅 ATR2 同向 +5%
+        assert s.confidence <= new_max + 1e-9, (
+            f"confidence={s.confidence:.4f} 超过 base×ATR2 上限，疑似残留 fib/KNN 调权"
         )
 
     def test_fib_note_honest_for_completed(self):

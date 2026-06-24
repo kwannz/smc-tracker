@@ -1012,17 +1012,66 @@ async def serve(db_path: str, host: str = "127.0.0.1", port: int = 8787) -> None
         html = render_harmonic_detail_html(lst)
         return aiohttp.web.Response(text=html, content_type="text/html", charset="utf-8")
 
+    async def handle_harmonic_discover(request: aiohttp.web.Request) -> aiohttp.web.Response:
+        """GET/POST /api/harmonic/discover — 「发现搜集」按钮：扫描更广 Bitget 宇宙
+        （按成交额排序、排除已监控/已收集），快扫有谐波形态的币 → 立即落库展示 +
+        加入 harmonic_collected（监控进程并入谐波宇宙持续监控）。返回发现的币。"""
+        import time as _t  # noqa: PLC0415
+        from .bitget.rest import BitgetREST  # noqa: PLC0415
+        from .monitor.harmonic_monitor import HarmonicMonitor  # noqa: PLC0415
+        from .util import to_float as _f  # noqa: PLC0415
+        now = int(_t.time() * 1000)
+        try:
+            # 已监控（最新快照）+ 已收集的币 → 排除，避免重复扫描
+            existing = store.recent_harmonic_setups()
+            # 沿用当前最新批次 ts，让发现的币**并入**列表而非用新 ts 把监控币挤掉
+            batch_ts = int(existing[0][0]) if existing else now
+            current = {r[1] for r in existing}
+            current |= set(store.get_harmonic_collected())
+            async with BitgetREST() as bg:
+                base_map = await bg.perp_base_coins()   # {symbol: base}
+                tickers = await bg.tickers()            # {symbol: ticker}
+            # 按 24h 成交额降序的候选 {coin: symbol}，排除已监控
+            ranked: list[tuple[float, str, str]] = []
+            for sym, base in base_map.items():
+                coin = str(base).upper()
+                if coin in current:
+                    continue
+                tk = tickers.get(sym) or {}
+                vol = _f(tk.get("quoteVolume") or tk.get("usdtVolume") or 0)
+                ranked.append((vol, coin, sym))
+            ranked.sort(key=lambda x: x[0], reverse=True)
+            candidates: dict[str, str] = {coin: sym for _, coin, sym in ranked[:15]}
+            if not candidates:
+                return aiohttp.web.json_response({"discovered": [], "scanned": 0, "note": "无新候选币"})
+            # 复用 HarmonicMonitor 快扫（4H 单周期，默认参数；store 共享 K 线缓存/回填）
+            mon = HarmonicMonitor(candidates, ["4H"], 200, 3, 0.05, len(candidates), store=store)
+            rows = await mon.refresh(now)
+            found = sorted({str(r["coin"]) for r in rows})
+            if rows:
+                store.insert_harmonic_setups(mon.to_records(rows, batch_ts))   # 并入当前批次立即展示
+            if found:
+                store.add_harmonic_collected([(c, candidates[c], now) for c in found])  # 持续监控
+            return aiohttp.web.json_response(
+                {"discovered": found, "scanned": len(candidates)},
+                dumps=lambda o: json.dumps(o, default=str),
+            )
+        except Exception as exc:  # noqa: BLE001
+            return aiohttp.web.json_response({"discovered": [], "error": str(exc)}, status=500)
+
     app = aiohttp.web.Application()
     app.router.add_get("/", handle_index)
     app.router.add_get("/api/state", handle_api_state)
     app.router.add_get("/health", handle_health)
-    # 谐波形态独立页（与 HL 主页分开，/harmonic + /api/harmonic）
-    app.router.add_get("/harmonic", handle_harmonic)
-    app.router.add_get("/api/harmonic", handle_api_harmonic)
-    # 谐波主-详情 SPA（新版：/harmonic2 + /api/harmonic/list + /api/harmonic/coin/{coin}）
+    # 谐波主-详情 SPA（**新版替代旧 /harmonic**，用户#：/harmonic2 替代/合并旧版）
+    # /harmonic 与 /harmonic2 均指向新主-详情页；旧 handle_harmonic/api 仅保留 /api/harmonic 兼容
+    app.router.add_get("/harmonic", handle_harmonic2)
     app.router.add_get("/harmonic2", handle_harmonic2)
+    app.router.add_get("/api/harmonic", handle_api_harmonic)
     app.router.add_get("/api/harmonic/list", handle_harmonic_list)
     app.router.add_get("/api/harmonic/coin/{coin}", handle_harmonic_coin)
+    app.router.add_get("/api/harmonic/discover", handle_harmonic_discover)
+    app.router.add_post("/api/harmonic/discover", handle_harmonic_discover)
 
     print(f"仪表盘: http://{host}:{port}")
     runner = aiohttp.web.AppRunner(app)
@@ -1367,7 +1416,8 @@ setInterval(refresh,5000);
 def build_harmonic_list(store: Any) -> list[dict]:
     """聚合 recent_harmonic_setups → 每币一条汇总行，按 best_conf 降序。
 
-    返回字段：coin, asset_class, best_conf, direction, n_setups, has_completed。
+    返回字段：coin, asset_class, best_conf, direction, n_setups, has_completed, ts。
+    ts=该币最新 setup 计算时刻（供前端显示真实"数据时间/数据年龄"，而非浏览器时钟）。
     表缺/空时返回 []，不抛。
     """
     from .asset_class import asset_class as _asset_class
@@ -1390,6 +1440,7 @@ def build_harmonic_list(store: Any) -> list[dict]:
                 "direction": None,
                 "n_setups": 0,
                 "has_completed": False,
+                "ts": None,
             }
         entry = agg[coin]
         entry["n_setups"] += 1
@@ -1400,6 +1451,10 @@ def build_harmonic_list(store: Any) -> list[dict]:
                 entry["direction"] = d.get("direction")
         if d.get("kind") == "completed":
             entry["has_completed"] = True
+        # 跟踪该币最新 setup ts（数据新鲜度）
+        ts = d.get("ts")
+        if ts is not None and (entry["ts"] is None or ts > entry["ts"]):
+            entry["ts"] = ts
 
     # 按 best_conf 降序（None 排最后）
     result = list(agg.values())
@@ -1498,87 +1553,123 @@ _HARMONIC_DETAIL_TEMPLATE = """<!DOCTYPE html>
 <title>谐波主-详情</title>
 <style>
 :root{{
-  --bg:#0d1117;--card:#161b22;--border:#30363d;--text:#c9d1d9;
-  --muted:#8b949e;--green:#3fb950;--red:#f85149;--blue:#58a6ff;
-  --yellow:#e3b341;--purple:#bc8cff;--orange:#ffa657;
+  --bg:#f6f8fa;--card:#ffffff;--border:#d0d7de;--text:#1f2328;
+  --muted:#656d76;--green:#1a7f37;--red:#cf222e;--blue:#0969da;
+  --yellow:#9a6700;--purple:#8250df;--orange:#bc4c00;
+  --sel:#ddf4ff;--hover:rgba(0,0,0,.045);
+  --shadow:0 1px 0 rgba(27,31,36,.04),0 1px 3px rgba(27,31,36,.08);
 }}
 *{{box-sizing:border-box;margin:0;padding:0}}
 body{{background:var(--bg);color:var(--text);
   font-family:"SF Mono",ui-monospace,monospace;font-size:13px;line-height:1.5;
   display:flex;flex-direction:column;height:100vh;overflow:hidden}}
-header{{padding:10px 16px;border-bottom:1px solid var(--border);
+header{{padding:10px 16px;border-bottom:1px solid var(--border);background:var(--card);
   display:flex;align-items:center;gap:12px;flex-shrink:0}}
 h1{{font-size:17px;color:var(--blue)}}
 #meta{{color:var(--muted);font-size:11px;margin-left:auto}}
 .layout{{display:flex;flex:1;overflow:hidden}}
 /* 左面板 */
-#left{{width:260px;flex-shrink:0;border-right:1px solid var(--border);
+#left{{width:260px;flex-shrink:0;border-right:1px solid var(--border);background:var(--card);
   display:flex;flex-direction:column;overflow:hidden}}
 #filters{{padding:6px 8px;border-bottom:1px solid var(--border);
   display:flex;flex-wrap:wrap;gap:4px}}
 .filter-btn{{font-size:11px;padding:2px 7px;border-radius:3px;border:1px solid var(--border);
   background:transparent;color:var(--muted);cursor:pointer}}
-.filter-btn.active{{border-color:var(--blue);color:var(--blue);background:#0e1f3a}}
+.filter-btn:hover{{border-color:var(--blue);color:var(--blue)}}
+.filter-btn.active{{border-color:var(--blue);color:var(--blue);background:var(--sel)}}
+#discover-bar{{padding:6px 8px;border-bottom:1px solid var(--border);
+  display:flex;flex-direction:column;gap:4px}}
+#discover-btn{{font-size:11px;padding:4px 8px;border-radius:4px;border:1px solid var(--blue);
+  background:var(--sel);color:var(--blue);cursor:pointer;font-weight:600}}
+#discover-btn:hover{{background:#cce5ff}}
+#discover-btn:disabled{{opacity:.6;cursor:wait}}
+#discover-msg{{font-size:10px;color:var(--muted);word-break:break-word;line-height:1.4}}
 #coin-list{{overflow-y:auto;flex:1}}
-.coin-row{{padding:7px 10px;cursor:pointer;border-bottom:1px solid rgba(48,54,61,.6);
+.coin-row{{padding:7px 10px;cursor:pointer;border-bottom:1px solid var(--border);
   display:flex;align-items:center;gap:6px}}
-.coin-row:hover{{background:rgba(255,255,255,.04)}}
-.coin-row.selected{{background:#0e1f3a;border-left:3px solid var(--blue)}}
+.coin-row:hover{{background:var(--hover)}}
+.coin-row.selected{{background:var(--sel);border-left:3px solid var(--blue)}}
 .coin-name{{font-weight:700;color:var(--orange)}}
 .conf-txt{{font-size:11px;color:var(--muted)}}
 /* 右面板 */
 #right{{flex:1;overflow-y:auto;padding:12px 16px;display:flex;flex-direction:column;gap:12px}}
 #right-empty{{color:var(--muted);padding:40px;text-align:center;font-size:13px}}
+/* 币头部 + 实时态 */
+.detail-head{{display:flex;align-items:center;gap:10px;flex-wrap:wrap}}
+.detail-coin{{font-size:18px;font-weight:700;color:var(--orange)}}
+.detail-price{{font-size:15px;font-weight:700}}
+.live{{display:inline-flex;align-items:center;gap:5px;font-size:11px;font-weight:700;
+  color:var(--green)}}
+.live-dot{{width:7px;height:7px;border-radius:50%;background:var(--green);
+  animation:pulse 1.4s ease-in-out infinite}}
+@keyframes pulse{{0%,100%{{opacity:1}}50%{{opacity:.25}}}}
+.panel-time{{color:var(--muted);font-size:10px;font-weight:400;margin-left:auto}}
 /* 周期 tabs */
 .tf-tabs{{display:flex;gap:4px;flex-wrap:wrap}}
 .tf-tab{{font-size:11px;padding:3px 9px;border-radius:3px;border:1px solid var(--border);
-  background:transparent;color:var(--muted);cursor:pointer}}
-.tf-tab.active{{border-color:var(--blue);color:var(--blue);background:#0e1f3a}}
-/* SVG 蜡烛图容器 */
-#chart-wrap{{background:var(--card);border:1px solid var(--border);border-radius:6px;
-  overflow:hidden;padding:6px}}
-/* 表格卡片 */
-.card{{background:var(--card);border:1px solid var(--border);border-radius:6px;overflow:hidden}}
+  background:var(--card);color:var(--muted);cursor:pointer}}
+.tf-tab:hover{{border-color:var(--blue);color:var(--blue)}}
+.tf-tab.active{{border-color:var(--blue);color:var(--blue);background:var(--sel)}}
+/* 主-详情双区栅格：大图表(主) + 信息侧栏 */
+.detail-grid{{display:flex;gap:12px;align-items:stretch}}
+.detail-main{{flex:1;min-width:0;display:flex}}
+.detail-main>.card{{flex:1;display:flex;flex-direction:column}}
+.detail-side{{width:340px;flex-shrink:0;display:flex;flex-direction:column;gap:12px}}
+@media(max-width:1100px){{
+  .detail-grid{{flex-direction:column}}
+  .detail-side{{width:auto}}
+}}
+/* SVG 蜡烛图宿主：JS 按实际像素宽重绘以撑满全宽 */
+#chart-host{{width:100%}}
+/* 表格卡片：flex-shrink:0 防止被 #right 列向 flex 压缩裁切内容（根治"部分内容查看不了"） */
+.card{{background:var(--card);border:1px solid var(--border);border-radius:8px;
+  overflow:hidden;flex-shrink:0;box-shadow:var(--shadow)}}
 .card-title{{padding:8px 12px;border-bottom:1px solid var(--border);
-  font-weight:700;color:var(--blue);font-size:12px}}
+  font-weight:700;color:var(--blue);font-size:12px;
+  display:flex;align-items:center;gap:8px}}
 .card-body{{padding:10px 12px;overflow-x:auto}}
+.card.accent{{border-color:#b6e3ff}}
+.card.accent .card-title{{background:var(--sel);color:#0a3069}}
 table{{width:100%;border-collapse:collapse;font-size:11px}}
 th{{color:var(--muted);font-weight:600;text-align:left;padding:3px 5px;
   border-bottom:1px solid var(--border)}}
 td{{padding:3px 5px;vertical-align:top;white-space:nowrap}}
-tr:hover td{{background:rgba(255,255,255,.03)}}
+tr:hover td{{background:var(--hover)}}
+/* 侧栏竖向 kv 表：标签 nowrap、值可换行（防 340px 窄栏压成竖排单字） */
+.kv th{{white-space:nowrap;width:1%;text-align:left;vertical-align:top;
+  padding-right:12px;color:var(--muted);font-weight:600}}
+.kv td{{white-space:normal;word-break:break-word}}
 .long{{color:var(--green)}} .short{{color:var(--red)}}
 .pos{{color:var(--green)}} .neg{{color:var(--red)}}
 .none{{color:var(--muted);font-style:italic}}
 .tag{{display:inline-block;padding:1px 5px;border-radius:3px;font-size:10px;font-weight:600}}
-.tag-long{{background:#1a3a2a;color:var(--green)}}
-.tag-short{{background:#3a1a1a;color:var(--red)}}
+.tag-long{{background:#dafbe1;color:var(--green)}}
+.tag-short{{background:#ffebe9;color:var(--red)}}
 .badge-tradfi{{display:inline-block;padding:1px 5px;border-radius:3px;font-size:10px;
-  font-weight:700;background:#3a2400;color:var(--orange);margin-right:3px}}
+  font-weight:700;background:#ffe7d1;color:var(--orange);margin-right:3px}}
 .badge-crypto{{display:inline-block;padding:1px 5px;border-radius:3px;font-size:10px;
-  font-weight:700;background:#0e1f3a;color:var(--blue);margin-right:3px}}
-details.explainer{{background:var(--card);border:1px solid #2a3f55;border-radius:6px;overflow:hidden}}
+  font-weight:700;background:var(--sel);color:var(--blue);margin-right:3px}}
+details.explainer{{background:var(--card);border:1px solid var(--border);border-radius:8px;
+  overflow:hidden;box-shadow:var(--shadow)}}
 details.explainer summary{{padding:8px 12px;cursor:pointer;font-weight:700;
   color:var(--blue);font-size:12px;list-style:none;user-select:none}}
 details.explainer summary::-webkit-details-marker{{display:none}}
 details.explainer summary::before{{content:"▶ ";font-size:10px;color:var(--muted)}}
 details[open].explainer summary::before{{content:"▼ ";font-size:10px;color:var(--muted)}}
-.explainer-body{{padding:10px 14px;font-size:11px;line-height:1.7;border-top:1px solid #2a3f55}}
+.explainer-body{{padding:10px 14px;font-size:11px;line-height:1.7;border-top:1px solid var(--border)}}
 .explainer-body dt{{font-weight:700;color:var(--yellow);margin-top:6px}}
 .explainer-body dd{{margin-left:10px}}
-.honest-note{{margin-top:8px;padding:6px 10px;background:#1c1a10;
-  border-left:3px solid var(--yellow);color:var(--muted);font-size:11px}}
-.disclaimer{{padding:7px 12px;background:#1c1a10;border:1px solid #5a4a00;
-  border-radius:5px;color:var(--yellow);font-size:11px}}
-#refresh-bar{{font-size:11px;color:var(--muted);padding:3px 16px;
+.honest-note{{margin-top:8px;padding:6px 10px;background:#fff8c5;
+  border-left:3px solid var(--yellow);color:#54450a;font-size:11px}}
+.disclaimer{{padding:7px 12px;background:#fff8c5;border:1px solid #d4a72c;
+  border-radius:6px;color:#54450a;font-size:11px}}
+#refresh-bar{{font-size:11px;color:var(--muted);padding:3px 16px;background:var(--card);
   border-top:1px solid var(--border);flex-shrink:0}}
 </style>
 </head>
 <body>
 <header>
   <h1>🔷 谐波主-详情</h1>
-  <a href="/harmonic" style="font-size:11px;color:var(--muted);text-decoration:none;
-     border:1px solid var(--border);border-radius:3px;padding:2px 7px">旧版</a>
   <a href="/" style="font-size:11px;color:var(--muted);text-decoration:none;
      border:1px solid var(--border);border-radius:3px;padding:2px 7px">← HL 主页</a>
   <span id="meta">加载中…</span>
@@ -1591,6 +1682,10 @@ details[open].explainer summary::before{{content:"▼ ";font-size:10px;color:var
       <button class="filter-btn" data-filter="crypto" onclick="setFilter('crypto')">加密</button>
       <button class="filter-btn" data-filter="tradfi" onclick="setFilter('tradfi')">TradFi</button>
       <button class="filter-btn" data-filter="completed" onclick="setFilter('completed')">有完整形态</button>
+    </div>
+    <div id="discover-bar">
+      <button id="discover-btn" onclick="discoverCoins()">🔍 发现搜集币种</button>
+      <span id="discover-msg"></span>
     </div>
     <div id="coin-list"><!-- JS 渲染 --></div>
   </div>
@@ -1608,6 +1703,7 @@ let _listData = S;       // 当前左列表数据
 let _selectedCoin = '';  // 当前选中币
 let _selectedTf  = '';   // 当前选中周期
 let _curFilter   = 'all';// 当前过滤
+let _curDetail   = null; // 当前右详情数据（供 redrawChart/refreshDetail 复用）
 
 // ---- 工具函数 ----
 function fmtN(v, dec){{
@@ -1686,9 +1782,9 @@ function selectCoin(coin, tf){{
 }}
 
 // ---- SVG 蜡烛图 ----
-function renderSvgCandles(candles, setups, sr, tf){{
+function renderSvgCandles(candles, setups, sr, tf, W, H){{
   if(!candles||!candles.length)return'<div style="color:var(--muted);padding:20px">暂无K线数据（该周期未采集）</div>';
-  const W=800, H=280, padL=60, padR=12, padT=12, padB=20;
+  W=W||800; H=H||440; const padL=58, padR=14, padT=12, padB=22;
   const n=candles.length;
   const cw=Math.max(2,Math.floor((W-padL-padR)/n)-1);
   const gap=Math.max(1,(W-padL-padR-n*cw)/(n-1||1));
@@ -1710,19 +1806,19 @@ function renderSvgCandles(candles, setups, sr, tf){{
   function py(price){{return padT+(hi-price)/span*(H-padT-padB);}}
   function px(i){{return padL+i*(cw+gap)+cw/2;}}
 
-  let s=`<svg viewBox="0 0 ${{W}} ${{H}}" width="100%" height="${{H}}" xmlns="http://www.w3.org/2000/svg" style="display:block">`;
+  let s=`<svg viewBox="0 0 ${{W}} ${{H}}" width="100%" height="${{H}}" preserveAspectRatio="none" xmlns="http://www.w3.org/2000/svg" style="display:block">`;
 
   // S/R 线（该 tf）
   sr.filter(r=>r.tf===tf).forEach(r=>{{
-    if(r.upper!=null){{const y=py(r.upper);s+=`<line x1="${{padL}}" y1="${{y.toFixed(1)}}" x2="${{W-padR}}" y2="${{y.toFixed(1)}}" stroke="#f85149" stroke-width="1" stroke-dasharray="4,3" opacity="0.7"/>`;}}
-    if(r.lower!=null){{const y=py(r.lower);s+=`<line x1="${{padL}}" y1="${{y.toFixed(1)}}" x2="${{W-padR}}" y2="${{y.toFixed(1)}}" stroke="#3fb950" stroke-width="1" stroke-dasharray="4,3" opacity="0.7"/>`;}}
+    if(r.upper!=null){{const y=py(r.upper);s+=`<line x1="${{padL}}" y1="${{y.toFixed(1)}}" x2="${{W-padR}}" y2="${{y.toFixed(1)}}" stroke="#cf222e" stroke-width="1" stroke-dasharray="4,3" opacity="0.65"/>`;}}
+    if(r.lower!=null){{const y=py(r.lower);s+=`<line x1="${{padL}}" y1="${{y.toFixed(1)}}" x2="${{W-padR}}" y2="${{y.toFixed(1)}}" stroke="#1a7f37" stroke-width="1" stroke-dasharray="4,3" opacity="0.65"/>`;}}
   }});
 
   // Setup 水平虚线（进场/止损/目标）
   setups.forEach(su=>{{
     const lines=[
-      [su.entry_lo,'#58a6ff',1.5,'6,3'],[su.stop,su.direction==='long'?'#f85149':'#3fb950',1,'4,3'],
-      [su.target1,'#e3b341',1,'4,3'],[su.target2,'#bc8cff',1,'4,3'],
+      [su.entry_lo,'#0969da',1.5,'6,3'],[su.stop,su.direction==='long'?'#cf222e':'#1a7f37',1,'4,3'],
+      [su.target1,'#9a6700',1,'4,3'],[su.target2,'#8250df',1,'4,3'],
     ];
     lines.forEach(([v,c,w,da])=>{{
       if(v==null)return;
@@ -1732,7 +1828,7 @@ function renderSvgCandles(candles, setups, sr, tf){{
     // PRZ 区带
     if(su.prz_lo!=null&&su.prz_hi!=null){{
       const y1=py(Math.max(su.prz_lo,su.prz_hi)), y2=py(Math.min(su.prz_lo,su.prz_hi));
-      s+=`<rect x="${{padL}}" y="${{y1.toFixed(1)}}" width="${{W-padL-padR}}" height="${{Math.max(1,(y2-y1)).toFixed(1)}}" fill="#58a6ff" opacity="0.08"/>`;
+      s+=`<rect x="${{padL}}" y="${{y1.toFixed(1)}}" width="${{W-padL-padR}}" height="${{Math.max(1,(y2-y1)).toFixed(1)}}" fill="#0969da" opacity="0.12"/>`;
     }}
   }});
 
@@ -1742,7 +1838,7 @@ function renderSvgCandles(candles, setups, sr, tf){{
     const x=padL+i*(cw+gap);
     const cy=py(cl), oy=py(o);
     const top=Math.min(cy,oy), bh=Math.max(1,Math.abs(cy-oy));
-    const color=cl>=o?'#3fb950':'#f85149';
+    const color=cl>=o?'#26a269':'#e5484d';
     const mx=x+cw/2;
     // 影线
     s+=`<line x1="${{mx.toFixed(1)}}" y1="${{py(h).toFixed(1)}}" x2="${{mx.toFixed(1)}}" y2="${{py(l).toFixed(1)}}" stroke="${{color}}" stroke-width="1"/>`;
@@ -1758,12 +1854,12 @@ function renderSvgCandles(candles, setups, sr, tf){{
     ].filter(([idx,v])=>idx!=null&&v!=null);
     if(pts.length>1){{
       const poly=pts.map(([idx,v])=>`${{px(idx).toFixed(1)}},${{py(v).toFixed(1)}}`).join(' ');
-      s+=`<polyline points="${{poly}}" fill="none" stroke="#ffa657" stroke-width="1.5" stroke-dasharray="3,2" opacity="0.9"/>`;
+      s+=`<polyline points="${{poly}}" fill="none" stroke="#e8590c" stroke-width="1.5" stroke-dasharray="3,2" opacity="0.92"/>`;
     }}
     pts.forEach(([idx,v,lbl])=>{{
       const cx=px(idx), cy2=py(v);
-      s+=`<circle cx="${{cx.toFixed(1)}}" cy="${{cy2.toFixed(1)}}" r="4" fill="#ffa657" opacity="0.9"/>`;
-      s+=`<text x="${{(cx+5).toFixed(1)}}" y="${{(cy2-5).toFixed(1)}}" fill="#ffa657" font-size="10" font-weight="bold">${{lbl}}</text>`;
+      s+=`<circle cx="${{cx.toFixed(1)}}" cy="${{cy2.toFixed(1)}}" r="4" fill="#e8590c" opacity="0.95"/>`;
+      s+=`<text x="${{(cx+5).toFixed(1)}}" y="${{(cy2-5).toFixed(1)}}" fill="#e8590c" font-size="11" font-weight="bold">${{lbl}}</text>`;
     }});
   }});
 
@@ -1772,8 +1868,8 @@ function renderSvgCandles(candles, setups, sr, tf){{
   for(let i=0;i<=nTicks;i++){{
     const price=lo+(span*i/nTicks);
     const y=py(price);
-    s+=`<text x="${{(padL-4).toFixed(1)}}" y="${{(y+4).toFixed(1)}}" fill="#8b949e" font-size="9" text-anchor="end">${{price>100?price.toFixed(0):price.toFixed(4)}}</text>`;
-    s+=`<line x1="${{padL}}" y1="${{y.toFixed(1)}}" x2="${{W-padR}}" y2="${{y.toFixed(1)}}" stroke="#30363d" stroke-width="0.5"/>`;
+    s+=`<text x="${{(padL-4).toFixed(1)}}" y="${{(y+4).toFixed(1)}}" fill="#656d76" font-size="10" text-anchor="end">${{price>100?price.toFixed(0):price.toFixed(4)}}</text>`;
+    s+=`<line x1="${{padL}}" y1="${{y.toFixed(1)}}" x2="${{W-padR}}" y2="${{y.toFixed(1)}}" stroke="#e7ebef" stroke-width="1"/>`;
   }}
 
   s+='</svg>';
@@ -1804,17 +1900,21 @@ function renderSetupDetail(setups){{
     ?(fmtN(su.entry_lo,4)+' ~ '+fmtN(su.entry_hi,4)):'—';
   const prz=su.prz_lo!=null||su.prz_hi!=null
     ?(fmtN(su.prz_lo,4)+' ~ '+fmtN(su.prz_hi,4)):'—';
-  return`<table>
-    <tr><th>形态</th><td>${{su.pattern||'—'}}</td><th>方向</th><td>${{dirTag(su.direction)}}</td></tr>
-    <tr><th>进场区</th><td>${{entry}}</td><th>PRZ区</th><td>${{prz}}</td></tr>
-    <tr><th>止损</th><td class="${{su.direction==='long'?'neg':'pos'}}">${{fmtN(su.stop,4)}}</td>
-        <th>目标1</th><td class="pos">${{fmtN(su.target1,4)}}</td></tr>
-    <tr><th>目标2</th><td class="pos">${{fmtN(su.target2,4)}}</td>
-        <th>盈亏比</th><td class="pos">${{fmtN(su.rr,2)}}</td></tr>
-    <tr><th>置信</th><td>${{su.confidence!=null?Math.round(su.confidence*100)+'%':'—'}}</td>
-        <th>KNN</th><td>${{su.knn||'—'}}</td></tr>
-    <tr><th>订单流</th><td colspan="3">${{su.orderflow||'—'}}</td></tr>
-    <tr><th>Fib注记</th><td colspan="3">${{su.fib_note||'—'}}</td></tr>
+  const conf=su.confidence!=null?Math.round(su.confidence*100)+'%':'—';
+  // 侧栏窄列：竖向两列 kv（标签 nowrap，值可换行），避免标签被压成竖排单字
+  return`<table class="kv">
+    <tr><th>形态</th><td>${{su.pattern||'—'}}</td></tr>
+    <tr><th>方向</th><td>${{dirTag(su.direction)}}</td></tr>
+    <tr><th>进场区</th><td>${{entry}}</td></tr>
+    <tr><th>PRZ区</th><td>${{prz}}</td></tr>
+    <tr><th>止损</th><td class="${{su.direction==='long'?'neg':'pos'}}">${{fmtN(su.stop,4)}}</td></tr>
+    <tr><th>目标1</th><td class="pos">${{fmtN(su.target1,4)}}</td></tr>
+    <tr><th>目标2</th><td class="pos">${{fmtN(su.target2,4)}}</td></tr>
+    <tr><th>盈亏比</th><td class="pos">${{fmtN(su.rr,2)}}</td></tr>
+    <tr><th>置信</th><td>${{conf}}</td></tr>
+    <tr><th>KNN</th><td>${{su.knn||'—'}}</td></tr>
+    <tr><th>订单流</th><td>${{su.orderflow||'—'}}</td></tr>
+    <tr><th>Fib注记</th><td>${{su.fib_note||'—'}}</td></tr>
   </table>`;
 }}
 
@@ -1838,10 +1938,22 @@ function renderHistory(history){{
 // ---- 右面板主渲染 ----
 function renderDetail(d){{
   if(!d){{document.getElementById('right').innerHTML='<div id="right-empty">← 点击左侧币种查看详情</div>';return;}}
+  _curDetail=d;
   const coin=d.coin||'';
   const ac=d.asset_class||'crypto';
   const tf=d.tf||'';
   const tfs=d.tfs_available||[];
+  const cdl=d.candles||[];
+
+  // 现价 = 最新蜡烛收盘；涨跌色 = 收 vs 开
+  let priceHtml='';
+  if(cdl.length){{
+    const last=cdl[cdl.length-1].map(Number);
+    const cl=last[4], op=last[1], up=cl>=op;
+    const pv=cl>=100?cl.toFixed(2):cl.toFixed(4);
+    priceHtml=`<span class="detail-price ${{up?'pos':'neg'}}">${{pv}}</span>`;
+  }}
+  const clock=new Date().toLocaleTimeString('zh-CN',{{hour12:false}});
 
   // 周期 tabs
   const tabsHtml=tfs.length
@@ -1850,26 +1962,33 @@ function renderDetail(d){{
       ).join('')+'</div>'
     :'';
 
-  // SVG 蜡烛图
-  const svgHtml=renderSvgCandles(d.candles,d.setups||[],d.sr||[],tf);
+  // SVG 蜡烛图（首次以默认宽渲染；innerHTML 后 redrawChart 按真实像素宽重绘撑满全宽）
+  const svgHtml=renderSvgCandles(cdl,d.setups||[],d.sr||[],tf);
 
   const html=
-    // 头部
-    `<div style="display:flex;align-items:center;gap:8px">
-       ${{badgeHtml(ac)}}<span style="font-size:16px;font-weight:700;color:var(--orange)">${{esc(coin)}}</span>
-       <span style="color:var(--muted);font-size:12px">周期: ${{tf||'—'}}</span>
+    // 币头部（badge + 币 + 现价 + ● LIVE + 周期）
+    `<div class="detail-head">
+       ${{badgeHtml(ac)}}<span class="detail-coin">${{esc(coin)}}</span>
+       ${{priceHtml}}
+       <span class="live"><span class="live-dot"></span>LIVE</span>
+       <span style="color:var(--muted);font-size:12px">周期 ${{tf||'—'}}</span>
      </div>`+
     tabsHtml+
-    // 蜡烛图
-    `<div class="card"><div class="card-title">📈 蜡烛图（含 XABCD / PRZ / S&R 叠加）</div>
-       <div class="card-body" id="chart-wrap">${{svgHtml}}</div></div>`+
-    // 多周期 S/R
-    `<div class="card"><div class="card-title">📐 多周期 S/R（布林带压力/支撑）</div>
-       <div class="card-body">${{renderSrTable(d.sr||[])}}</div></div>`+
-    // Setup 明细
-    `<div class="card"><div class="card-title">⚡ Setup 明细</div>
-       <div class="card-body">${{renderSetupDetail(d.setups||[])}}</div></div>`+
-    // 历史
+    // 主-详情双区：大图表(主) + 信息侧栏(Setup 交易计划 + 多周期 S/R)
+    `<div class="detail-grid">
+       <div class="detail-main">
+         <div class="card"><div class="card-title">📈 蜡烛图（含 XABCD / PRZ / S&R 叠加）
+           <span class="panel-time">本地 ${{clock}} 刷新</span></div>
+           <div class="card-body"><div id="chart-host">${{svgHtml}}</div></div></div>
+       </div>
+       <div class="detail-side">
+         <div class="card accent"><div class="card-title">⚡ Setup 明细（交易计划）</div>
+           <div class="card-body">${{renderSetupDetail(d.setups||[])}}</div></div>
+         <div class="card"><div class="card-title">📐 多周期 S/R（布林带压力/支撑）</div>
+           <div class="card-body">${{renderSrTable(d.sr||[])}}</div></div>
+       </div>
+     </div>`+
+    // 历史（全宽下沉）
     `<div class="card"><div class="card-title">🕐 历史形态</div>
        <div class="card-body">${{renderHistory(d.history||[])}}</div></div>`+
     // 傻瓜解释
@@ -1897,24 +2016,110 @@ function renderDetail(d){{
     `<div class="disclaimer">⚠️ 确认层非投资建议：PRZ 前瞻 × 订单流确认；KNN ≈ 随机基线；墙可能 spoof。</div>`;
 
   document.getElementById('right').innerHTML=html;
+  redrawChart();  // 按 #chart-host 真实像素宽重绘 SVG，撑满全宽（根治信封式留白）
+}}
+
+// ---- 图表按容器真实像素宽重绘（撑满全宽 + 响应式）----
+function redrawChart(){{
+  const host=document.getElementById('chart-host');
+  if(!host||!_curDetail)return;
+  const W=Math.max(320,Math.floor(host.clientWidth));
+  host.innerHTML=renderSvgCandles(
+    _curDetail.candles||[],_curDetail.setups||[],_curDetail.sr||[],_curDetail.tf||'',W,440);
+}}
+let _rzT=null;
+window.addEventListener('resize',()=>{{ clearTimeout(_rzT); _rzT=setTimeout(redrawChart,150); }});
+
+// ---- 数据时间/年龄（诚实显示真实数据时刻，非浏览器时钟）----
+function updateMeta(){{
+  const m=document.getElementById('meta');
+  const tss=(_listData||[]).map(r=>r.ts).filter(v=>v!=null);
+  if(!tss.length){{ m.textContent='无数据'; m.style.color='var(--muted)'; return; }}
+  const maxTs=Math.max(...tss);
+  const ageMs=Date.now()-maxTs;
+  const ageMin=ageMs/60000;
+  const dt=new Date(maxTs).toLocaleTimeString('zh-CN',{{hour12:false}});
+  let ageTxt, col;
+  if(ageMin<1){{ ageTxt='刚刚'; col='var(--green)'; }}
+  else if(ageMin<10){{ ageTxt=Math.round(ageMin)+'分前'; col='var(--green)'; }}
+  else if(ageMin<60){{ ageTxt=Math.round(ageMin)+'分前'; col='var(--yellow)'; }}
+  else {{ ageTxt=(ageMin/60).toFixed(1)+'小时前'; col='var(--red)'; }}
+  // 数据时间=引擎上次计算时刻；谐波为 DB 缓存型，非 tick 级实时
+  m.textContent='数据时间 '+dt+' · '+ageTxt;
+  m.style.color=col;
+  m.title='谐波为 DB 缓存型（低延迟，请求不打网络）；此为引擎上次计算时刻，非浏览器时钟';
 }}
 
 // ---- 初始渲染左列表 ----
 renderList(_listData);
-document.getElementById('meta').textContent='左列表 5s 刷新中';
+updateMeta();
+// 加载即**自动选中首个(置信最高)币**显示详情，避免右侧空白("部分内容查看不了")
+if(_listData && _listData.length){{
+  const _sorted=[..._listData].sort((a,b)=>((b.best_conf==null?-1:b.best_conf)-(a.best_conf==null?-1:a.best_conf)));
+  if(_sorted[0] && _sorted[0].coin) selectCoin(_sorted[0].coin);
+}}
 
 // ---- 5s 轮询左列表 ----
+// 「发现搜集」按钮：触发后端扫描更广 Bitget 宇宙发现有谐波形态的币 → 加入监控 + 立即展示
+async function discoverCoins(){{
+  const btn=document.getElementById('discover-btn');
+  const msg=document.getElementById('discover-msg');
+  const old=btn.textContent;
+  btn.disabled=true; btn.textContent='🔍 扫描中…'; msg.textContent='';
+  try{{
+    const r=await fetch('/api/harmonic/discover',{{method:'POST'}});
+    const d=await r.json();
+    if(d.error){{ msg.textContent='失败: '+d.error; msg.style.color='var(--red)'; }}
+    else{{
+      const found=d.discovered||[];
+      if(found.length){{
+        msg.textContent='发现 '+found.length+' 币: '+found.join(', ')+'（已加入监控）';
+        msg.style.color='var(--green)';
+        await refreshList();
+      }}else{{
+        msg.textContent='扫描 '+(d.scanned||0)+' 币，暂无新谐波形态';
+        msg.style.color='var(--muted)';
+      }}
+    }}
+  }}catch(e){{ msg.textContent='失败: '+e; msg.style.color='var(--red)'; }}
+  btn.disabled=false; btn.textContent=old;
+}}
+
 async function refreshList(){{
   try{{
     const r=await fetch('/api/harmonic/list');
     if(r.ok){{
       _listData=await r.json();
       renderList(_listData);
-      document.getElementById('meta').textContent='更新于 '+new Date().toLocaleTimeString('zh-CN',{{hour12:false}});
     }}
   }}catch(e){{console.warn('harmonic list refresh err',e)}}
+  updateMeta();  // 无论是否拿到新数据都刷新"数据年龄"（陈旧会可见增长）
 }}
-setInterval(refreshList,5000);
+
+// ---- 5s 轮询右详情：选中币的图表/Setup/S-R/历史随行情就地重绘 ----
+async function refreshDetail(){{
+  if(!_selectedCoin)return;
+  try{{
+    const url='/api/harmonic/coin/'+encodeURIComponent(_selectedCoin)
+      +(_selectedTf?'?tf='+encodeURIComponent(_selectedTf):'');
+    const r=await fetch(url);
+    if(!r.ok)return;
+    const d=await r.json();
+    _selectedTf=d.tf||_selectedTf;
+    // 就地重绘：保留滚动位置 + explainer 展开态，避免闪烁
+    const right=document.getElementById('right');
+    const sc=right?right.scrollTop:0;
+    const exp=document.querySelector('details.explainer');
+    const expOpen=exp?exp.open:false;
+    renderDetail(d);
+    const exp2=document.querySelector('details.explainer');
+    if(exp2)exp2.open=expOpen;
+    if(right)right.scrollTop=sc;
+  }}catch(e){{console.warn('harmonic detail refresh err',e)}}
+}}
+
+// 同一 5s 周期：左列表 + 右详情一起刷新（详情随行情实时）
+setInterval(()=>{{ refreshList(); refreshDetail(); }},5000);
 </script>
 </body>
 </html>"""

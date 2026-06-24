@@ -43,7 +43,9 @@ from .review import PredictionReview, fmt_accuracy
 from .signals import (ConfluenceAggregator, ConfluenceSignal, ConsensusSignal,
                       DivergenceDetector, DivergenceSignal, FlowPredictor, PositionChange,
                       PumpRadar, Signal, SignalEngine, SignalEfficacy, TASignal, WhaleConsensus,
-                      WhalePositionTracker, orderbook_imbalance, positioning)
+                      WhalePositionTracker, orderbook_imbalance, positioning,
+                      SetupDedup)
+from .signals.harmonic_review import build_harmonic_predictions
 from .smc import LiquidityEngine, StructureEvent, StructureFeed, ZoneEngine
 from .storage import Store
 
@@ -135,6 +137,7 @@ class TradingSystem:
         self.correlation = AddressCorrelation(store)   # 地址协同(庄家集团)检测
         self._seen_clusters: set[tuple] = set()
         self.flow_predictor = FlowPredictor()          # 前瞻资金流预测(挂单意图+流加速度)
+        self._harmonic_dedup = SetupDedup()            # 谐波 completed 进 review 闭环的结构指纹去重
         self._last_coin_net: dict[str, float] = {}     # 上次采样的 per-coin 净流向
         self._flow_pred_seen: dict[str, int] = {}      # coin -> 上次前瞻预测 ts(冷却)
         self.pump_radar = PumpRadar()                  # 暴涨暴跌实时预警(历史验证规则)
@@ -421,7 +424,8 @@ class TradingSystem:
             print(f"[{_hms()}] 💧 [扫荡] {coin} {tag} @ {_fmt_px(sw.price)} {eq}")
 
     def _record_pred(
-        self, coin: str, kind: str, direction: str, horizon_ms: int | None = None
+        self, coin: str, kind: str, direction: str, horizon_ms: int | None = None,
+        bg_px_override: float | None = None,
     ) -> None:
         """记录前瞻预测到回顾层，统一 MTF 多水平线落库（发推后立即调用）。
 
@@ -436,11 +440,16 @@ class TradingSystem:
         try:
             hl = _f(self._mids.get(coin, 0.0))
             bg = 0.0
-            sym = self.coin_to_symbol.get(normalize(coin))
-            if self.oi_monitor and sym:
-                pc = self.oi_monitor.price_change(sym)
-                if pc is not None:
-                    bg = _f(pc[0])
+            if bg_px_override is not None and bg_px_override > 0:
+                # 谐波等 Bitget 宇宙币：直接用调用方传入的 Bitget 价（修 H_price：
+                # coin_to_symbol 仅含 meme 币，谐波币走此处避免静默丢失幸存者偏差）
+                bg = _f(bg_px_override)
+            else:
+                sym = self.coin_to_symbol.get(normalize(coin))
+                if self.oi_monitor and sym:
+                    pc = self.oi_monitor.price_change(sym)
+                    if pc is not None:
+                        bg = _f(pc[0])
             # MTF：7 个时间段各记一条，诊断哪个 TF 有真 alpha
             horizons_ms = [h * 60_000 for h in self.cfg.review.horizons_min]
             self.review.record_mtf(
@@ -682,20 +691,40 @@ class TradingSystem:
             # ---- 谐波形态监控器（同一成交额序选币，与 BB 口径一致）----
             if self.cfg.harmonic.enabled and vol_c2s:
                 from .monitor.harmonic_monitor import HarmonicMonitor  # noqa: PLC0415
+                from .monitor.harmonic_forward import HarmonicForwardSignals  # noqa: PLC0415
+                from .monitor.bitget_trade_monitor import BitgetTradeMonitor  # noqa: PLC0415
+                from .monitor.forming_approach import FormingApproachTracker  # noqa: PLC0415
                 harm_n = self.cfg.harmonic.top_n
                 harm_c2s = dict(list(vol_c2s.items())[:harm_n])
+                # 并入用户「发现搜集」的币（dashboard 按钮 → harmonic_collected）→ 持续监控
+                try:
+                    harm_c2s.update(self.store.get_harmonic_collected())
+                except Exception as exc:  # noqa: BLE001
+                    log.warning("读取 harmonic_collected 失败: %s", exc)
+                # 逐笔 taker 监控：订阅 Bitget trade channel → 资金流加速度 flow_score（补 R2 最后数据源）
+                harm_s2c = {sym: coin for coin, sym in harm_c2s.items()}
+                self.harmonic_trade = BitgetTradeMonitor(harm_s2c, self.bg_ws)
+                # forming 逼近检测器：缓存 forming PRZ，用 trade 流实时价做周期检查（QA H6 安全:非热回调）
+                # band_pct=0.008：价进入 PRZ 带 ±0.8% 即"逼近"预警（真前瞻提前量，非到达才报，修 M3）
+                self.harmonic_approach = FormingApproachTracker(
+                    ttl_ms=1_800_000, cooldown_ms=1_800_000, band_pct=0.008, invalidate_pct=0.02)
+                # 前瞻信号 provider：每轮 refresh 用 Bitget tickers(OI/funding) 更新 + flow_score（逐笔）；
+                # 对 completed+forming 施加前瞻乘子（funding 极值 + 资金流加速度）。
+                self.harmonic_forward = HarmonicForwardSignals(
+                    flow_source=self.harmonic_trade.flow_score)
                 self.harmonic_monitor = HarmonicMonitor(
                     coin_to_symbol=harm_c2s,
                     timeframes=self.cfg.harmonic.timeframes,
                     bars=self.cfg.harmonic.bars,
                     order=self.cfg.harmonic.order,
                     tol=self.cfg.harmonic.tol,
-                    top_n=harm_n,
+                    top_n=len(harm_c2s),   # 含并入的 collected 币，全部纳入扫描
                     account_usd=self.cfg.harmonic.account_usd,
                     risk_pct=self.cfg.harmonic.risk_pct,
                     target_rr=self.cfg.harmonic.target_rr,
                     ob_provider=self.orderbook_monitor,  # 订单流确认层（HL l2Book，主流币）
                     store=self.store,   # 优先读 DB K线缓存，不足回退 live（减 API/跨重启持久）
+                    forward_provider=self.harmonic_forward,  # 前瞻置信（OI/funding；completed+forming）
                 )
                 log.info("谐波监控器已建，top_%d 币: %s", harm_n, list(harm_c2s.keys())[:6])
 
@@ -1282,6 +1311,14 @@ class TradingSystem:
         while not self._stopping:
             try:
                 now = int(time.time() * 1000)
+                # 并入运行时新「发现搜集」的币（dashboard 按钮触发 harmonic_collected），无需重启
+                try:
+                    coll = self.store.get_harmonic_collected()
+                    if coll and any(c not in self.harmonic_monitor.coin_to_symbol for c in coll):
+                        self.harmonic_monitor.coin_to_symbol.update(coll)
+                        self.harmonic_monitor.top_n = len(self.harmonic_monitor.coin_to_symbol)
+                except Exception:  # noqa: BLE001
+                    pass
                 rows = await self.harmonic_monitor.refresh(now)
                 card = self.harmonic_monitor.render(rows, now)
                 if card:
@@ -1294,9 +1331,59 @@ class TradingSystem:
                     )
                 except Exception as db_exc:  # noqa: BLE001
                     log.warning("谐波 setups 落库失败: %s", db_exc)
+                # R1 review 闭环：completed setup 进 predictions 表（kind=谐波-反应式），
+                # 到期核对真价 → 诚实前瞻命中率（accuracy_report by_kind）。
+                # 只记 completed（forming 推迟到逼近 PRZ）；结构指纹去重；bg_px 用 Bitget 价修覆盖。
+                # 失败不阻塞推送热路径。
+                try:
+                    for rec in build_harmonic_predictions(rows, self._harmonic_dedup, now):
+                        self._record_pred(
+                            rec["coin"], rec["kind"], rec["direction"],
+                            bg_px_override=rec["bg_px"],
+                        )
+                except Exception as rev_exc:  # noqa: BLE001
+                    log.warning("谐波 review 闭环记录失败: %s", rev_exc)
+                # 更新 forming PRZ 缓存（供 _periodic_prz_approach 用实时价检查逼近）
+                if getattr(self, "harmonic_approach", None) is not None:
+                    try:
+                        self.harmonic_approach.update(rows, now)
+                    except Exception as ap_exc:  # noqa: BLE001
+                        log.warning("forming PRZ 缓存更新失败: %s", ap_exc)
             except Exception as exc:  # noqa: BLE001
                 log.warning("谐波形态周期推送失败: %s", exc)
             await asyncio.sleep(self.cfg.harmonic.interval_sec)
+
+    async def _periodic_prz_approach(self, every: float = 15.0) -> None:
+        """forming PRZ 实时逼近：两轮谐波重算之间，用 Bitget trade 流的实时价检查现价是否
+        进入已投影 forming PRZ → 秒级 🎯逼近告警 + 记 review（"谐波-逼近"，QA H1：forming 在
+        触达 PRZ 才记，非投影时记）。
+
+        QA H6 安全：检查在独立周期任务（非 WS 热回调）做，且 check 是纯内存判定；落库走
+        _record_pred（周期任务里，非热路径）。harmonic_approach/harmonic_trade 未建则直接返回。
+        """
+        if getattr(self, "harmonic_approach", None) is None or \
+                getattr(self, "harmonic_trade", None) is None:
+            return
+        await asyncio.sleep(160.0)   # 错峰：等谐波首轮填好 forming PRZ 缓存
+        while not self._stopping:
+            await asyncio.sleep(every)
+            try:
+                now = int(time.time() * 1000)
+                for coin in list(self.harmonic_monitor.coin_to_symbol):
+                    px = self.harmonic_trade.last_price(coin)
+                    if not px or px <= 0:
+                        continue
+                    for ev in self.harmonic_approach.check(coin, px, now):
+                        arrow = "🟢看多" if ev["direction"] == "long" else "🔴看空"
+                        msg = (f"🎯 [谐波逼近] {coin} {ev['tf']} {ev['pattern']} {arrow} "
+                               f"现价 {_fmt_px(px)} 进入 PRZ [{_fmt_px(ev['prz_lo'])}~{_fmt_px(ev['prz_hi'])}]"
+                               f" · 前瞻反转预警（非入场信号，待确认）")
+                        print(f"[{_hms()}] {msg}")
+                        self._push_harmonic(msg)
+                        # forming 反转预测在触达 PRZ 时记（诚实前瞻命中率）
+                        self._record_pred(coin, "谐波-逼近", ev["direction"], bg_px_override=px)
+            except Exception as exc:  # noqa: BLE001
+                log.warning("forming PRZ 逼近检查失败: %s", exc)
 
     async def _periodic_solana(self, every: float = 120.0) -> None:
         """SOL meme 供应量监控（mint/burn）。较长间隔，避开公开 RPC 限流。"""
@@ -1418,6 +1505,9 @@ class TradingSystem:
         # 挂载 System 2
         if self.oi_monitor:
             self.oi_monitor.attach()
+        # 谐波逐笔 taker 监控（Bitget trade channel → flow_score 资金流加速度）
+        if getattr(self, "harmonic_trade", None) is not None:
+            self.harmonic_trade.attach()
         # 挂载 System 3（OKX，默认 enabled=False，不影响现有路径）
         if self.cfg.okx.enabled:
             from .okx.stream import run_okx_streaming  # noqa: PLC0415
@@ -1451,6 +1541,7 @@ class TradingSystem:
             self._periodic_config_reload(),
             self._periodic_bb_board(),
             self._periodic_harmonic_board(),
+            self._periodic_prz_approach(),
             self._periodic_candle_collect(),
             self._periodic_whale_pnl(),
             self._periodic_discover(),

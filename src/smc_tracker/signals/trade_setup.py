@@ -106,6 +106,9 @@ class TradeSetup:
     atr2_bias: str | None = None
     # atr2_confirm: ATR2 bias 与 setup 方向是否一致；candles 不足→None（不调权）
     atr2_confirm: bool | None = None
+    # 前瞻确认备注（forward_confirm.apply_forward 注入；含用了/跳过了哪些领先分量）
+    # None=未施加前瞻确认（无 provider 或无数据）；completed+forming 都可被注入（解除 completed 门控）
+    forward: str | None = None
 
 
 def _direction_map(harmonic_direction: str) -> str | None:
@@ -285,12 +288,9 @@ def _build_one(
     base_conf: float = float(pattern.get("confidence", 0.5))
     conf = base_conf  # 🟡-2: 不再乘 fib_mult
 
-    # KNN 调权（诚实：影响较小，KNN≈随机基线）
-    if knn_supports is True:
-        conf *= 1.05
-    elif knn_supports is False:
-        conf *= 0.90
-    # knn_supports is None 时不调整
+    # KNN 降级为纯展示（QA P1-5）：KNN≈随机基线（项目自承），用随机信号乘性调权 = 给确定性
+    # 几何分注入噪声。停止调权，保留 knn_supports/knn_note 字段作透明展示，不影响 confidence。
+    # （前瞻边缘改由 forward_confirm 的领先信号 OI/funding/flow 提供，而非回看的 KNN。）
 
     # ATR2 调权：同向×1.05，**相反×0.80（重罚）**；None 不调整（candles 不足）。
     # autosearch Round1 实证(causal前向): ATR2 同向子集胜率 82.5% vs 反向 50%(随机) vs 基线 74%
