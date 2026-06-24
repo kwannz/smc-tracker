@@ -280,10 +280,11 @@ class HarmonicCfg:
     """
     enabled: bool = True
     interval_sec: float = 900.0
-    # 用户#：谐波 7 周期 15m/1h/4h/8h/12h/1d/1w；但 Bitget **不支持 8H**(实证 code 400171)，
-    # 用最接近的 6H 替代（Bitget 支持 6H/12H，无 8H）。
+    # 用户#：谐波精确 7 周期 15m/30m/1H/4H/12H/1D/1W。
+    # 历史注：曾用 6H 替代 8H（Bitget 不支持 8H），现用户明确要 30m 替代 6H。
+    # Bitget GRANULARITY_MS 支持全部 7 周期（15m/30m/1H/4H/12H/1D/1W 均已实证）。
     timeframes: list[str] = field(
-        default_factory=lambda: ["15m", "1H", "4H", "6H", "12H", "1D", "1W"]
+        default_factory=lambda: ["15m", "30m", "1H", "4H", "12H", "1D", "1W"]
     )
     bars: int = 2500                     # 用户#：每周期保留 2500 bar（历史+实时，不强制；大周期取可得）
     order: int = 3

@@ -947,3 +947,166 @@ class TestMtfAccuracyReport:
         # 验证各 TF 标签出现（至少短的 5m 和长的 1d）
         assert "5m" in text
         assert "24h" in text   # 1440m = 24h
+
+
+# ---- by_asset_class 分桶测试 ----
+
+class TestByAssetClass:
+    """by_asset_class 资产类别分桶（crypto / tradfi）合成数据确定性测试。"""
+
+    def _populate(self, rev: PredictionReview) -> None:
+        """插入 3 条 crypto 预测（2 命中）+ 3 条 tradfi 预测（1 命中），走真实 record→evaluate_due 路径。"""
+        ts, horizon = 5_000_000, 3_600_000
+        now = ts + horizon + 1
+
+        # crypto：BTC long 涨→命中，ETH long 涨→命中，DOGE long 跌→未命中
+        for coin, px_eval in [("BTC", 110.0), ("ETH", 110.0), ("DOGE", 90.0)]:
+            rev.record(ts=ts, coin=coin, kind="谐波", direction="long",
+                       hl_px=100.0, bg_px=0.0, horizon_ms=horizon)
+
+        # tradfi：XAU short 跌→命中，TSLA short 跌→命中，AAPL short 涨→未命中
+        for coin in ["XAU", "TSLA", "AAPL"]:
+            rev.record(ts=ts, coin=coin, kind="谐波", direction="short",
+                       hl_px=100.0, bg_px=0.0, horizon_ms=horizon)
+
+        def price_of(c: str) -> float | None:
+            return {"BTC": 110.0, "ETH": 110.0, "DOGE": 90.0,
+                    "XAU": 90.0, "TSLA": 90.0, "AAPL": 110.0}.get(c)
+
+        n = rev.evaluate_due(price_of, now)
+        assert n == 6, f"期望评估 6 条，实际 {n}"
+
+    def test_by_asset_class_keys_present(self, rev: PredictionReview) -> None:
+        """accuracy_report 应包含 by_asset_class 键，且含 crypto 和 tradfi 两个桶。"""
+        self._populate(rev)
+        rep = rev.accuracy_report(0, 99_999_999)
+        assert "by_asset_class" in rep
+        bac = rep["by_asset_class"]
+        assert "crypto" in bac
+        assert "tradfi" in bac
+
+    def test_crypto_bucket_correct(self, rev: PredictionReview) -> None:
+        """crypto 桶：3 条，2 命中，hit_rate ≈ 2/3，edge ≈ +1/6。"""
+        self._populate(rev)
+        bac = rev.accuracy_report(0, 99_999_999)["by_asset_class"]
+        c = bac["crypto"]
+        assert c["n"] == 3
+        assert c["hits"] == 2
+        assert c["hit_rate"] == pytest.approx(2 / 3, rel=1e-6)
+        assert c["edge"] == pytest.approx(2 / 3 - 0.5, rel=1e-6)
+        # avg_ret 按向：BTC +10%、ETH +10%、DOGE -10% → 均值 +10/3%
+        assert c["avg_ret"] == pytest.approx(0.1 / 3, rel=1e-6)
+
+    def test_tradfi_bucket_correct(self, rev: PredictionReview) -> None:
+        """tradfi 桶：3 条，2 命中，hit_rate ≈ 2/3。"""
+        self._populate(rev)
+        bac = rev.accuracy_report(0, 99_999_999)["by_asset_class"]
+        t = bac["tradfi"]
+        assert t["n"] == 3
+        assert t["hits"] == 2
+        assert t["hit_rate"] == pytest.approx(2 / 3, rel=1e-6)
+        assert t["edge"] == pytest.approx(2 / 3 - 0.5, rel=1e-6)
+
+    def test_by_asset_class_does_not_break_by_kind(self, rev: PredictionReview) -> None:
+        """新增 by_asset_class 不破坏 by_kind 统计（谐波 6 条、4 命中、hit_rate ≈ 2/3）。"""
+        self._populate(rev)
+        rep = rev.accuracy_report(0, 99_999_999)
+        assert "by_kind" in rep
+        assert "谐波" in rep["by_kind"]
+        k = rep["by_kind"]["谐波"]
+        assert k["n"] == 6
+        assert k["hits"] == 4
+        assert k["hit_rate"] == pytest.approx(4 / 6, rel=1e-6)
+
+    def test_by_asset_class_does_not_break_by_horizon(self, rev: PredictionReview) -> None:
+        """新增 by_asset_class 不破坏 by_horizon 统计（1h 桶 6 条）。"""
+        self._populate(rev)
+        rep = rev.accuracy_report(0, 99_999_999)
+        assert "by_horizon" in rep
+        by_hz = rep["by_horizon"]
+        assert len(by_hz) >= 1
+        total_in_hz = sum(d["n"] for d in by_hz.values())
+        assert total_in_hz == 6
+
+    def test_by_asset_class_does_not_break_market_neutral(self, rev: PredictionReview) -> None:
+        """新增 by_asset_class 不破坏 market_neutral 键。"""
+        self._populate(rev)
+        rep = rev.accuracy_report(0, 99_999_999)
+        assert "market_neutral" in rep
+        mn = rep["market_neutral"]
+        assert mn["n"] == 6
+
+    def test_empty_report_has_empty_by_asset_class(self, rev: PredictionReview) -> None:
+        """无样本时 by_asset_class 应为空字典（不抛异常）。"""
+        rep = rev.accuracy_report(0, 99_999_999)
+        assert rep["by_asset_class"] == {}
+
+    def test_crypto_only_no_tradfi_key(self, rev: PredictionReview) -> None:
+        """只有 crypto 预测时 by_asset_class 只含 crypto 键，不含 tradfi。"""
+        ts, horizon = 6_000_000, 3_600_000
+        now = ts + horizon + 1
+        rev.record(ts=ts, coin="BTC", kind="谐波", direction="long",
+                   hl_px=100.0, bg_px=0.0, horizon_ms=horizon)
+        rev.evaluate_due(lambda c: 110.0, now)
+        bac = rev.accuracy_report(0, 99_999_999)["by_asset_class"]
+        assert "crypto" in bac
+        assert "tradfi" not in bac
+
+    def test_tradfi_only_no_crypto_key(self, rev: PredictionReview) -> None:
+        """只有 tradfi 预测时 by_asset_class 只含 tradfi 键，不含 crypto。"""
+        ts, horizon = 7_000_000, 3_600_000
+        now = ts + horizon + 1
+        rev.record(ts=ts, coin="XAU", kind="谐波", direction="long",
+                   hl_px=1800.0, bg_px=0.0, horizon_ms=horizon)
+        rev.evaluate_due(lambda c: 1900.0, now)
+        bac = rev.accuracy_report(0, 99_999_999)["by_asset_class"]
+        assert "tradfi" in bac
+        assert "crypto" not in bac
+
+    def test_fmt_accuracy_shows_asset_class_section(self, rev: PredictionReview) -> None:
+        """fmt_accuracy 输出应包含【资产类别命中率】段落，含加密和 TradFi 标签。"""
+        self._populate(rev)
+        rep = rev.accuracy_report(0, 99_999_999)
+        text = fmt_accuracy(rep)
+        assert "资产类别命中率" in text
+        assert "加密" in text
+        assert "TradFi" in text
+
+    def test_fmt_accuracy_asset_class_shows_sample_warning(self, rev: PredictionReview) -> None:
+        """样本 < 20 时各桶应标注⚠️不足（诚实度量）。"""
+        self._populate(rev)
+        rep = rev.accuracy_report(0, 99_999_999)
+        text = fmt_accuracy(rep)
+        # 3 条一定不足 20，应出现不足警告
+        assert "⚠️不足" in text
+
+    def test_fmt_accuracy_no_asset_class_section_when_empty(self) -> None:
+        """无 by_asset_class 时（空字典）fmt_accuracy 不输出资产类别段落（向后兼容）。"""
+        rep = {
+            "total_n": 5,
+            "total_hits": 3,
+            "hit_rate": 0.6,
+            "avg_ret": 0.01,
+            "by_kind": {"谐波": {"n": 5, "hits": 3, "hit_rate": 0.6, "avg_ret": 0.01}},
+            "by_asset_class": {},   # 空字典：不输出段落
+            "gap_warn_count": 0,
+            "recent": [],
+        }
+        text = fmt_accuracy(rep)
+        assert "资产类别命中率" not in text
+
+    def test_fmt_accuracy_no_asset_class_key_backward_compat(self) -> None:
+        """旧 report 无 by_asset_class 键时 fmt_accuracy 不抛异常（向后兼容）。"""
+        rep = {
+            "total_n": 5,
+            "total_hits": 3,
+            "hit_rate": 0.6,
+            "avg_ret": 0.01,
+            "by_kind": {},
+            "gap_warn_count": 0,
+            "recent": [],
+            # 无 by_asset_class 键
+        }
+        text = fmt_accuracy(rep)
+        assert "预测准确率回顾" in text
+        assert "资产类别命中率" not in text

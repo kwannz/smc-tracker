@@ -1856,6 +1856,170 @@ def test_render_hl_html_brace_escape():
     assert ":root{" in html, "CSS :root{ 应良构"
 
 
+# ---------------------------------------------------------------------------
+# 新增 TDD：Fix 1 — config 谐波周期 7 个（15m/30m/1H/4H/12H/1D/1W，去 6H）
+# ---------------------------------------------------------------------------
+
+def test_harmonic_cfg_default_timeframes_7_exact():
+    """HarmonicCfg 默认 timeframes 精确 = ['15m','30m','1H','4H','12H','1D','1W']（去 6H，加 30m）。
+
+    TDD RED 修复前：默认含 6H 不含 30m；GREEN 后：精确匹配用户要求 7 周期。
+    """
+    from smc_tracker.config import HarmonicCfg
+    cfg = HarmonicCfg()
+    assert cfg.timeframes == ["15m", "30m", "1H", "4H", "12H", "1D", "1W"], (
+        f"HarmonicCfg 默认周期应为 7 个精确值，实得: {cfg.timeframes}"
+    )
+
+
+def test_harmonic_cfg_no_6h_in_defaults():
+    """默认 timeframes 不含 '6H'（已替换为 '30m'）。"""
+    from smc_tracker.config import HarmonicCfg
+    assert "6H" not in HarmonicCfg().timeframes, "默认 timeframes 不应含 6H"
+
+
+def test_harmonic_cfg_contains_30m():
+    """默认 timeframes 含 '30m'。"""
+    from smc_tracker.config import HarmonicCfg
+    assert "30m" in HarmonicCfg().timeframes, "默认 timeframes 应含 30m"
+
+
+# ---------------------------------------------------------------------------
+# 新增 TDD：Fix 2 — handle_harmonic_discover 用全 7 周期（mock 不打网络）
+# ---------------------------------------------------------------------------
+
+def test_harmonic_discover_uses_7_timeframes():
+    """handle_harmonic_discover 源码中 HarmonicMonitor 不应再用单周期 ["4H"]，
+    应使用全 7 周期（直接检查 dashboard.py serve 函数源码）。
+    """
+    import inspect
+    from smc_tracker import dashboard as _dash
+
+    src = inspect.getsource(_dash)
+    # discover 函数段：从 handle_harmonic_discover 到下一个 async def
+    start = src.find("handle_harmonic_discover")
+    # 取足够长的片段（2000 chars 覆盖 HarmonicMonitor 调用行及 _DISCOVER_TFS 定义）
+    discover_section = src[start:start + 2000]
+
+    # 断言：不再用 ["4H"] 单周期
+    assert '["4H"]' not in discover_section, (
+        "handle_harmonic_discover 不应再用 ['4H'] 单周期"
+    )
+    # 断言：含多周期特征（30m 或 1W 或读取 timeframes 变量）
+    assert ("30m" in discover_section or "1W" in discover_section
+            or "timeframes" in discover_section), (
+        "discover 函数应使用全 7 周期或读取 timeframes 变量"
+    )
+
+
+# ---------------------------------------------------------------------------
+# 新增 TDD：Fix 3 — render_hl_html 有 top_addresses 数据时 HTML 含数据（非空占位）
+# ---------------------------------------------------------------------------
+
+def _state_with_top_addresses() -> dict:
+    """构造含 top_addresses 的 state（模拟监控进程已填入数据）。"""
+    return {
+        "meta": {"generated": "2026-06-25 12:00:00", "window_min": 60},
+        "health": {"ok": True, "freshness": [], "predictions": {}},
+        "accuracy": {"total_n": 0},
+        "signals": [],
+        "divergence": [],
+        "whale_flows": [
+            {"coin": "BTC", "net": 1234567.0},
+            {"coin": "ETH", "net": -456789.0},
+        ],
+        "top_addresses": [
+            {
+                "address": "0xABCDEF1234567890",
+                "score": 88.5,
+                "account_value": 1_200_000.0,
+                "alltime_pnl": 500_000.0,
+                "month_pnl": 40_000.0,
+                "win_rate": 0.68,
+                "realized_pnl": 35_000.0,
+                "n_trades": 120,
+                "net_bias": "多",
+                "fav_coins": "BTC,ETH",
+                "ts": 1_700_000_000_000,
+            },
+            {
+                "address": "0x9876543210FEDCBA",
+                "score": 72.3,
+                "account_value": 800_000.0,
+                "alltime_pnl": 300_000.0,
+                "month_pnl": -10_000.0,
+                "win_rate": 0.55,
+                "realized_pnl": 25_000.0,
+                "n_trades": 80,
+                "net_bias": "空",
+                "fav_coins": "SOL",
+                "ts": 1_700_000_000_000,
+            },
+        ],
+        "clusters": [],
+        "oi_surges": [],
+        "onchain": [],
+        "pump_alerts": [],
+        "whale_signals": [],
+        "ticker_board": [],
+        "exchange_flows": [],
+        "wallet_portfolio": [],
+        "okx_signals": [],
+        "okx_liquidations": [],
+        "okx_walls": [],
+    }
+
+
+def test_render_hl_html_with_top_addresses_not_loading():
+    """render_hl_html 给定含 top_addresses 的 state，渲染 HTML 中不应只有「加载中」占位。
+
+    真因：HL 页 KPI strip 的「聪明钱地址」默认显示 `—`，只在 JS 的 renderKpi(s) 运行后
+    用 ta.length||'—' 更新。若 JS 抛错（双括号转义残留等），renderAll(S) 不执行，则
+    所有 KPI 永远是 `—`。本测试验证：模板转义正确 + JSON 注入后 JS 可正常执行推断
+    （通过检验 HTML 中的 JSON state 含真实 top_addresses 数据，前端可读取）。
+    """
+    import json as _json, re as _re
+
+    state = _state_with_top_addresses()
+    html = render_hl_html(state)
+
+    # 1. 双括号转义完整（CSS/JS 良构，renderAll(S) 可执行）
+    assert "{{" not in html, "残留 {{ → JS 语法错误，导致 renderAll 不执行"
+    assert "${{" not in html, "残留 ${{ → JS 模板插值语法错误"
+
+    # 2. __INITIAL_STATE__ 已替换为真实 JSON（非占位符）
+    assert "__INITIAL_STATE__" not in html, "__INITIAL_STATE__ 占位符应已替换"
+
+    # 3. 注入的 JSON state 含 top_addresses 数据（2 行）
+    m = _re.search(r"const S\s*=\s*(\{.*?\});", html, _re.S)
+    assert m, "未找到注入的 const S"
+    parsed = _json.loads(m.group(1))
+    assert "top_addresses" in parsed, "注入 state 应含 top_addresses"
+    assert len(parsed["top_addresses"]) == 2, (
+        f"top_addresses 应有 2 行，实得 {len(parsed['top_addresses'])}"
+    )
+    assert parsed["top_addresses"][0]["address"] == "0xABCDEF1234567890"
+
+    # 4. 注入 state 含 whale_flows
+    assert len(parsed["whale_flows"]) == 2, "whale_flows 应有 2 行"
+    assert parsed["whale_flows"][0]["coin"] == "BTC"
+
+
+def test_render_hl_html_with_data_shows_real_address():
+    """render_hl_html 注入含真实地址的 state，HTML 中含该地址字符串（嵌入 JSON 可见）。"""
+    state = _state_with_top_addresses()
+    html = render_hl_html(state)
+    # 地址嵌入在 JSON 中，应出现在 HTML 文本内
+    assert "0xABCDEF1234567890" in html, "HTML 中应含注入的真实地址"
+
+
+def test_render_hl_html_no_residual_double_braces_with_data():
+    """有数据时 render_hl_html 转义仍完整。"""
+    state = _state_with_top_addresses()
+    html = render_hl_html(state)
+    assert "{{" not in html, "有数据时不应残留 {{"
+
+
 if __name__ == "__main__":
     for name, fn in list(globals().items()):
         if name.startswith("test_") and callable(fn):

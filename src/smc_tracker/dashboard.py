@@ -1052,8 +1052,10 @@ async def serve(db_path: str, host: str = "127.0.0.1", port: int = 8787) -> None
             candidates: dict[str, str] = {coin: sym for _, coin, sym in ranked[:15]}
             if not candidates:
                 return aiohttp.web.json_response({"discovered": [], "scanned": 0, "note": "无新候选币"})
-            # 复用 HarmonicMonitor 快扫（4H 单周期，默认参数；store 共享 K 线缓存/回填）
-            mon = HarmonicMonitor(candidates, ["4H"], 200, 3, 0.05, len(candidates), store=store)
+            # 复用 HarmonicMonitor 快扫（全 7 周期；store 共享 K 线缓存/回填）
+            # 7 周期 × N 候选币任务量增加，但 HarmonicMonitor 内 Semaphore(≤8) 限流 + DB 缓存可接受
+            _DISCOVER_TFS = ["15m", "30m", "1H", "4H", "12H", "1D", "1W"]
+            mon = HarmonicMonitor(candidates, _DISCOVER_TFS, 200, 3, 0.05, len(candidates), store=store)
             rows = await mon.refresh(now)
             found = sorted({str(r["coin"]) for r in rows})
             if rows:

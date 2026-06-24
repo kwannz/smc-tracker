@@ -9,6 +9,7 @@ import logging
 import math
 from typing import Any, Callable
 
+from .asset_class import asset_class as _asset_class
 from .util import fmt_ts, to_float
 
 log = logging.getLogger(__name__)
@@ -297,6 +298,8 @@ class PredictionReview:
           avg_ret        平均「按预测方向」收益率（做空价格跌=盈利，符号已按 direction 调整；
                          避免做空为主的预测集 avg_ret 误导。原始 realized_ret 仍按原值入库）
           by_kind        {kind: {n, hits, hit_rate, edge, avg_ret}} 分类统计（avg_ret 同为按向收益）
+          by_asset_class {asset_class: {n, hits, hit_rate, edge, avg_ret}} 资产类别分桶
+                         （coin 经 asset_class() 推导，"crypto" 或 "tradfi"；谐波前瞻命中率按币类诚实度量）
           n_long/n_short 预测方向分布（base-rate 校正）
           avg_market_move 预测币种同期净市场漂移（方向无关原始价变动均值）
           beta_suspect   方向一边倒(≥80%)且市场同向漂移 → 边际或含趋势 beta 非纯 alpha
@@ -315,6 +318,7 @@ class PredictionReview:
         by_horizon: dict[int, dict] = {}    # 按水平线分解(检验信号在哪个时间尺度有 alpha)
         # 每个水平线的 records，供各 TF 单独计算市场中性命中率
         hz_mn_records: dict[int, list[tuple[int, str, float]]] = {}
+        by_asset_class: dict[str, dict] = {}  # 按资产类别分桶(crypto / tradfi)
         total_n = 0
         total_hits = 0
         total_ret_sum = 0.0
@@ -367,6 +371,14 @@ class PredictionReview:
                 by_horizon[hz]["hits"] += 1
             by_horizon[hz]["ret_sum"] += sret
             hz_mn_records[hz].append((ts_int, direction, ret))
+            # 按资产类别分桶：从 coin 推导 "crypto" / "tradfi"（无需额外 DB 列）
+            ac = _asset_class(coin)
+            if ac not in by_asset_class:
+                by_asset_class[ac] = {"n": 0, "hits": 0, "ret_sum": 0.0}
+            by_asset_class[ac]["n"] += 1
+            if correct == 1:
+                by_asset_class[ac]["hits"] += 1
+            by_asset_class[ac]["ret_sum"] += sret
 
         # 整理分类统计（edge=命中率相对 50% 随机基线的方向边际）
         by_kind_out: dict[str, dict] = {}
@@ -401,6 +413,20 @@ class PredictionReview:
             by_horizon_mn_out[hz] = market_neutral_stats(
                 hz_mn_records.get(hz, []), bucket_ms=max(hz, 3_600_000)
             )
+
+        # 整理资产类别统计（crypto / tradfi 分桶，谐波前瞻命中率按币类诚实度量）
+        by_asset_class_out: dict[str, dict] = {}
+        for ac, d in by_asset_class.items():
+            n = d["n"]
+            hits = d["hits"]
+            hr = hits / n if n > 0 else 0.0
+            by_asset_class_out[ac] = {
+                "n": n,
+                "hits": hits,
+                "hit_rate": hr,
+                "edge": hr - 0.5,
+                "avg_ret": d["ret_sum"] / n if n > 0 else 0.0,
+            }
 
         # 最近 10 条（按 ts desc）
         recent_rows = self.store.conn.execute(
@@ -451,6 +477,7 @@ class PredictionReview:
             "by_kind": by_kind_out,
             "by_horizon": by_horizon_out,
             "by_horizon_market_neutral": by_horizon_mn_out,  # 各 TF 市场中性命中率（纯 alpha）
+            "by_asset_class": by_asset_class_out,            # 资产类别分桶(crypto/tradfi)
             "gap_warn_count": gap_warn_count,
             "outlier_count": outlier_count,   # 剔除的单位错配/陈旧离群行数（数据质量）
             "recent": recent,
@@ -478,6 +505,25 @@ def fmt_accuracy(report: dict) -> str:
             sign = "+" if avg_r >= 0 else ""
             lines.append(
                 f"  {kind}: {d['hits']}/{n} 命中 ({rate:.1f}%)  均收益{sign}{avg_r:.2f}%"
+            )
+
+    # 资产类别分桶（crypto / tradfi，谐波前瞻命中率按币类诚实度量）
+    by_ac: dict = report.get("by_asset_class", {})
+    if by_ac:
+        lines.append("【资产类别命中率】")
+        for ac in sorted(by_ac.keys()):    # 排序保持输出稳定（crypto 先、tradfi 后）
+            d = by_ac[ac]
+            n = d["n"]
+            rate = d["hit_rate"] * 100
+            avg_r = d["avg_ret"] * 100
+            edge_pp = d["edge"] * 100
+            sign = "+" if avg_r >= 0 else ""
+            esign = "+" if edge_pp >= 0 else ""
+            badge = "₿加密" if ac == "crypto" else "🏦TradFi"
+            insuf = "⚠️不足" if n < 20 else ""
+            lines.append(
+                f"  {badge}: {d['hits']}/{n} 命中 ({rate:.1f}%)  "
+                f"边际{esign}{edge_pp:.1f}pp  均按向{sign}{avg_r:.2f}%  {insuf}"
             )
 
     # 各水平线命中率（检验信号在哪个时间尺度有 alpha；庄持仓周期小时~天级）

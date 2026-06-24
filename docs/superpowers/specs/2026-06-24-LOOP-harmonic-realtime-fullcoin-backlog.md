@@ -122,6 +122,27 @@
 > 其余(A/B1/B3/C1/C2/C3核心/D3/H1/H3 + 全部审计)均已完成。**系统功能完成度远高于初始 backlog 勾选数**。
 - [ ] H4 系统 tab 统一:设计稿 header 的 [HL 系统 | 谐波系统] 切换 → 统一 SPA(D2 合并,原生)。
 
+### N. 用户新需求(loop#18 本地截图后追加)
+- [~] N1 **谐波多周期(15m/30m/1h/4h/12h/1d/1w 每币)**(agent aa01d2506 执行中):根因 = `handle_harmonic_discover`
+  硬编码 `["4H"]` 单周期 → 改全 7 周期;config `harmonic.timeframes` 的 `6H`→`30m`(对齐用户精确 7 周期)。
+  前端 tf tab 数据驱动,7 周期 setup 生成后自动显示。Bitget 全 7 周期支持。
+- [~] N2 **HL 页 /hl2 数据加载修复**(同 agent):截图 KPI 全 `—`/「加载中」,但 `/api/state` 有 top_addresses(3)
+  等真实数据 → JS 加载/解析问题,修到能显示现有真实数据(空区块诚实「暂无数据」不伪造)。
+- [ ] N3 **补充实时数据(运行架构)**:dashboard 是**只读 DB 独立进程**,数据靠 app.py 监控进程实时填。
+  现状谐波页有数据=手动 discover;HL 页空=没跑 HL 监控。**方案**:① 文档化「同跑 app.py 监控 + dashboard 展示」
+  (标准架构,实时数据持续);② dashboard 内嵌轻量周期刷新(谐波 discover + ticker,单进程即有实时,适合演示/本地)。
+  待 N1/N2 完成后定方案。**诚实**:代码改不出凭空数据,实时数据=监控进程跑。
+  **方案① 标准架构(服务器部署用)** —— 同跑两进程:
+  ```
+  # 终端1: 监控进程(实时填 DB,全永续+谐波多周期+HL 聪明钱)
+  PYTHONPATH=src ./.venv/bin/python -m smc_tracker.app --config config/config.yaml
+  # 终端2: dashboard(只读 DB 展示,5s 轮询)
+  PYTHONPATH=src ./.venv/bin/python -m smc_tracker dashboard --port 8787
+  ```
+  服务器用 systemd/supervisor/nohup 守护两进程;config 设 harmonic.universe_mode=all_perp + realtime_ws=true 启全永续实时。
+  **方案② 演示便捷(本地看效果)**:dashboard 启动时内嵌轻量周期任务(谐波 discover + ticker 刷新),单进程即有数据
+  (碰 dashboard,待多周期固化后做,避免与 N1 竞态)。本地快速看:先 `dashboard` 起页面 → 点「🔍发现搜集币种」手动触发谐波多周期。
+
 ### E. 固化与门禁
 - [x] E1 **固化全绿工作**(4 commit 在 feat/sfg-knn-harmonic-loop:2e4575d/98456c1/d4cbfca/020fe77,全程 1859 全绿)。
 - [ ] E2 **部署门禁检查清单**(用户条件:本地无 bug + 全接入 + 排版 OK 再部署 → 须批准):
