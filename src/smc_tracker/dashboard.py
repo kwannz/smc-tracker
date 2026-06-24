@@ -1649,6 +1649,12 @@ def _enrich_setup(d: dict, current_price: float | None) -> dict:
     price = current_price if current_price is not None else d.get("price")
     d["prz_proximity"] = _prz_proximity(
         price, d.get("prz_lo"), d.get("prz_hi"), is_completed=(kind == "completed"))
+    # 交易计划诚实标注：有 PRZ 但无 entry = build_setups 因止损距离(X点失效位)超合理阈值
+    # 诚实跳过(不产劣质 setup，trade_setup.py §238)。网页据此显示原因而非困惑的空白 —。
+    if d.get("entry_lo") is None and d.get("prz_lo") is not None:
+        d["plan_note"] = "⚠️ 止损距离超合理阈值，未生成交易计划（诚实跳过劣质 setup）"
+    else:
+        d["plan_note"] = ""
     return d
 
 
@@ -2448,6 +2454,8 @@ function renderSetupDetail(setups){{
   const knnNote=su.knn_note||'—';
   const honestLabel=su.honest_label||'—';
   const przProx=su.prz_proximity||'—';
+  // 无交易计划时显示诚实原因行(止损距离超阈值跳过)，避免进场/止损空白 — 令人困惑
+  const planNoteRow=su.plan_note?'<tr><th>交易计划</th><td style="font-size:11px;color:#d97706">'+esc(su.plan_note)+'</td></tr>':'';
   const isForming=su.kind==='forming';
   const formingBadge=isForming
     ?'<span style="background:#eef3fa;color:#2563eb;border:1px solid #93c5fd;border-radius:4px;font-size:10px;padding:1px 6px;margin-left:4px">前瞻预警</span>'
@@ -2458,7 +2466,7 @@ function renderSetupDetail(setups){{
     <tr><th>信号类型</th><td style="font-size:11px;color:var(--t2)">${{esc(honestLabel)}}</td></tr>
     <tr><th>PRZ 区间</th><td class="mono">${{prz}}</td></tr>
     <tr><th>PRZ 接近度</th><td style="font-size:11px;color:var(--blue)">${{esc(przProx)}}</td></tr>
-    <tr><th>进场区</th><td class="mono">${{entry}}</td></tr>
+    ${{planNoteRow}}<tr><th>进场区</th><td class="mono">${{entry}}</td></tr>
     <tr><th>止损</th><td class="${{su.direction==='long'?'neg':'pos'}} mono">${{fmtN(su.stop,4)}}</td></tr>
     <tr><th>目标1</th><td class="pos mono">${{fmtN(su.target1,4)}}</td></tr>
     <tr><th>目标2</th><td class="pos mono">${{fmtN(su.target2,4)}}</td></tr>

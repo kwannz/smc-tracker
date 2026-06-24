@@ -363,3 +363,18 @@ def test_enrich_setup_completed_proximity_no_forward():
     from smc_tracker.dashboard import _enrich_setup
     d = _enrich_setup({"kind": "completed", "prz_lo": 110, "prz_hi": 120, "price": 100}, 100)
     assert "前瞻等待" not in d["prz_proximity"]
+
+
+def test_enrich_setup_plan_note_when_no_entry():
+    """有 PRZ 但无 entry（劣质止损跳过）→ plan_note 给诚实原因，不留困惑空白。"""
+    from smc_tracker.dashboard import _enrich_setup
+    d = _enrich_setup({"kind": "completed", "prz_lo": 110, "prz_hi": 120, "price": 100}, 100)
+    assert d["plan_note"] and "未生成交易计划" in d["plan_note"]
+
+
+def test_enrich_setup_plan_note_empty_when_has_entry():
+    """有 entry（正常交易计划）→ plan_note 为空，不显示警告行。"""
+    from smc_tracker.dashboard import _enrich_setup
+    d = _enrich_setup({"kind": "completed", "prz_lo": 110, "prz_hi": 120,
+                       "entry_lo": 111.0, "price": 100}, 100)
+    assert d["plan_note"] == ""
