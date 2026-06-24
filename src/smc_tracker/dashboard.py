@@ -995,9 +995,42 @@ async def serve(db_path: str, host: str = "127.0.0.1", port: int = 8787) -> None
         )
 
     async def handle_harmonic_list(request: aiohttp.web.Request) -> aiohttp.web.Response:
-        """GET /api/harmonic/list — 谐波币列表 JSON（左面板，5s 轮询）。"""
+        """GET /api/harmonic/list — 谐波币列表 JSON（左面板，5s 轮询）。
+
+        查询参数（均可选，prepared 参数防注入）：
+          q           : 币名关键词（大小写不敏感，前缀/子串匹配）
+          asset_class : 过滤类别（'crypto' 或 'tradfi'；缺省=全部）
+          offset      : 分页起点（默认 0）
+          limit       : 每页条数（默认 50，最大 500）
+
+        响应体：{ items: [...], total: N, offset: O, limit: L }
+        total 为过滤后总数（供前端计算总页数），items 为当前页切片。
+        """
+        q = (request.rel_url.query.get("q") or "").strip().lower()
+        asset_class = (request.rel_url.query.get("asset_class") or "").strip().lower()
+        try:
+            offset = max(0, int(request.rel_url.query.get("offset") or 0))
+        except (ValueError, TypeError):
+            offset = 0
+        try:
+            limit = min(500, max(1, int(request.rel_url.query.get("limit") or 50)))
+        except (ValueError, TypeError):
+            limit = 50
+
+        # 全量数据从 DB 构建（内存级，表不存在时返回 []）
         lst = build_harmonic_list(store)
-        return aiohttp.web.json_response(lst, dumps=lambda o: json.dumps(o, default=str))
+
+        # 服务端过滤（keyword + asset_class）
+        if q:
+            lst = [r for r in lst if q in (r.get("coin") or "").lower()]
+        if asset_class in ("crypto", "tradfi"):
+            lst = [r for r in lst if r.get("asset_class") == asset_class]
+
+        total = len(lst)
+        items = lst[offset: offset + limit]
+
+        payload = {"items": items, "total": total, "offset": offset, "limit": limit}
+        return aiohttp.web.json_response(payload, dumps=lambda o: json.dumps(o, default=str))
 
     async def handle_harmonic_coin(request: aiohttp.web.Request) -> aiohttp.web.Response:
         """GET /api/harmonic/coin/{coin}?tf=<tf> — 指定币详情 JSON（右面板按需拉取）。"""
@@ -1808,7 +1841,7 @@ details[open].explainer summary::before{{content:"▼ ";font-size:10px;color:var
     SMC 聪明钱追踪终端
   </div>
   <div class="hdr-tabs">
-    <a href="/" class="hdr-tab" style="text-decoration:none">HL 系统</a>
+    <a href="/hl2" class="hdr-tab" style="text-decoration:none">HL 系统</a>
     <span class="hdr-tab active">谐波系统</span>
   </div>
   <span class="hdr-live"><span class="hdr-live-dot"></span>LIVE</span>
@@ -2485,9 +2518,12 @@ async function discoverCoins(){{
 
 async function refreshList(){{
   try{{
-    const r=await fetch('/api/harmonic/list');
+    // limit=500 拉全量（全永续约 200-300 币），items 在 envelope 中
+    const r=await fetch('/api/harmonic/list?limit=500');
     if(r.ok){{
-      _listData=await r.json();
+      const d=await r.json();
+      // 兼容新分页 envelope {{ items:[], total, offset, limit }} 与旧裸数组
+      _listData=Array.isArray(d)?d:(d.items||[]);
       _filtered=_applyFilter(_listData);
       renderList();
       updateKpi(_listData);

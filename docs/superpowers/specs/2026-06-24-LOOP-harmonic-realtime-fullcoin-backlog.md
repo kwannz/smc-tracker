@@ -16,9 +16,20 @@
 ## 接力清单(按依赖排序,逐 loop 推进)
 
 ### A. 谐波全币种监控(用户明确:全部 bitget 永续)
-- [ ] A1 实证全永续完整谐波检测的性能/限流(2747 币 × 多周期 × XABCD 枚举耗时);定分批/优先级策略(按 vol/OI 分层 + 异步并发 Semaphore)。
-- [ ] A2 `top_n` → 全永续(或分层:核心实时 + 长尾轮询);universe 用 `contracts()` 动态拉取,保留 vol 排序。
-- [ ] A3 DB schema / dashboard 列表支持全币种(分页/过滤/搜索)。
+- [x] A1 **完成(loop#21,Opus 规划 + Sonnet 并行执行,全量 2001 passed)**:实证 Bitget K线接口
+  `_SEMA=4` 多轮 **0 次 429**(系统所有 429 来自 HL wallet_portfolio,与谐波无关)→ `_SEMA_LIMIT` 4→8
+  (实测 8 无 429,10 偶发,保守取 8,冷启动回填提速 ~2x);分批/优先级策略见 A2 分层。**前置真 bug 修复**:
+  全永续 WS 重连风暴(单条巨型 subscribe 被 Bitget 断链,实测 29 次/83 行)→ ws_client `_send` 分批(≤50/批),
+  风暴 29→0,数据流恢复(DB 36→179 持续回填)。
+- [x] A2 **完成(loop#21,Sonnet 执行)**:分层调度(业界 hot/warm/cold tier 标准)—— 核心层(高 vol 前
+  `core_n=60`)每轮全量 refresh(实时性);长尾层 round-robin 分 `tail_shards=8` 片每轮处理 1 片(降单轮请求量 +
+  保核心实时);`core_n>=总数`退化为全量每轮(向后兼容)。config.py 加 core_n/tail_shards;refresh 内 `_round`
+  计数驱动分片;20 确定性单测(核心每轮必含/长尾 N 轮全覆盖不重不漏/退化/665 币极端)。universe 既有
+  resolve_universe 全永续 + vol 降序。
+- [x] A3 **完成(loop#21,Sonnet 执行)**:`/api/harmonic/list` 加分页(offset/limit,默认 50 最大 500)+
+  搜索(q 关键词)+ 过滤(asset_class),响应改 envelope `{items,total,offset,limit}`;前端 refreshList 用
+  `Array.isArray(d)?d:(d.items||[])` 兼容新旧格式;31 单测 + 端到端 curl 验证(分页/搜索 q=BT→BTC/页面 200 47KB/
+  内联 JS `node --check` OK)。
 
 ### B. 实时动态(用户强调:谐波形态最新实时)
 - [~] B1 谐波 K线 WS 增量实时:**核心完成(loop#5,Sonnet 执行)** —— 新增 `monitor/harmonic_candle_ws.py`
@@ -75,6 +86,12 @@
   「谐波-反应式」+ B3 forming「谐波-逼近」,app.py `_record_pred` 接入);`accuracy_report` 有 `by_kind`
   (区分谐波-反应式/逼近的命中率/edge/avg_ret)+ `by_horizon`(时间尺度)+ `market_neutral_stats`(去 beta,
   诚实剔趋势)+ 离群守卫。**小 gap**:`by_asset_class`(crypto/tradfi 分桶)未实现 —— 可选增强(by_kind 已够区分)。
+- [x] C4 **OI 加速度/背离领先信号(loop#21,Sonnet 执行)**:harmonic_forward.py 强化前瞻领先因子(CLAUDE.md §二
+  「优先领先信号:OI 速度先于价格」)—— 每币定长 OI/price deque(maxlen=20,内存有界)+ `_oi_acceleration`
+  (2 阶导,tanh 归一封顶 [-1,1],样本不足→0 中性)+ `_oi_price_divergence`(OI 涨>3% 价滞<1% 或 OI 涨而价反 setup
+  方向→负信号)+ `_composite_oi_signal`(速度 0.4/加速度 0.3/背离 0.3 加权 tanh 封顶);`__call__` 4-tuple 接口不变
+  (向后兼容 apply_forward);缺数据始终中性(首帧 0.0,无 OI→None,诚实铁律)。27 确定性单测(方向/封顶/缺数据中性/
+  背离/向后兼容)。诚实:领先信号辅助,非投资建议;长尾币 oi_monitor 未覆盖则中性降级。
 
 ### D. 设计稿落地(SMC 聪明钱终端 + 量析终端 → 真实前端)
 - [x] **数据契约提取(loop#3)**:设计稿数据绑定 ≈ smc 现有 API **1:1 对应**(设计稿基于 smc 数据能力设计)。
@@ -109,7 +126,9 @@
   庄家集团 / 右 鲸鱼动作+共识+背离+挂单墙+链上),复用 D3 设计 token + IBM Plex,**数据全真实**(whale_flows/
   top_addresses/clusters/whale_signals/signals/divergence/okx_walls/onchain),per-coin 详情标「暂无数据」**零
   Math.random 伪造**;系统 tab 链 /harmonic2;不动现有主页 /(保守降风险);7 新测试。curl 自查:三栏/token/{{残留=0}。
-- [~] H4 系统 tab:`/hl2` → `/harmonic2` 单向链已有;反向(/harmonic2 加 HL tab)待补(小附带项)。
+- [x] H4 系统 tab **双向互链完成(loop#21,Sonnet 执行)**:谐波页 header「HL 系统」tab href `/`→`/hl2`,
+  与 HL 页「谐波系统」tab(→`/harmonic2`)形成双向切换;端到端验证 `/hl2` 含 `href="/harmonic2"`、`/harmonic`
+  含 `/hl2`。完整单页 SPA 合并(line 140 / D2)为可选增强,当前 tab 跳转已满足 [HL|谐波] 切换诉求。
 - [~] H3 **HL 前瞻已基本达成(loop#15 核验)**:`flow_predictor`(前瞻资金流:挂单意图+流加速度,app.py:140)
   + `_periodic_flow_predict`(30s,oi_directional_velocity 方向化 OI,C.3)+ `_periodic_divergence`(60s,资金费⟂
   净流向背离)全接入 HL periodic = 「前瞻资金正往哪 positioning」。可选增强:flow_acceleration EMA 平滑(C 路线已规划)。
@@ -189,3 +208,11 @@
   派 Sonnet 执行 **D3 谐波页原生重写**(a10efa1c,设计系统三栏 + 全币种列表);**补 HL 系统段 H1-H4**
   (回应用户「完善 hl 系统」并列要求:H1 评分/协同强化已实现待审,H2 HL 前端落地,H3 HL 前瞻 positioning,
   H4 系统 tab 统一)。下一步:D3 核验 + 截图自查排版 → C1 收口 / C2 全币种 / H2 HL 前端。
+- 2026-06-25 loop#21(Opus 规划/审计 + Sonnet 并行执行,workflow 文件零冲突):**先修全永续 WS 重连风暴真 bug**
+  (systematic-debugging:单条巨型 subscribe 被 Bitget 断链,实测 29 次/83 行 → ws_client `_send` 分批≤50/批,
+  风暴 29→0,DB 回填 36→179 恢复)+ 日志标签 bug(top_12 误显→真实 665 币)+ 异常 %s→%r 可诊断。**再 workflow
+  3 agent 并行**(文件零冲突 {harmonic_monitor+config}/{harmonic_forward}/{dashboard}):A1 实证 Bitget 429=0→
+  `_SEMA` 4→8;A2 分层调度(核心 60 每轮 + 长尾 round-robin 8 片);A3 列表分页/搜索/过滤 envelope;C4 OI 加速度/
+  背离领先信号(2 阶导,缺数据中性)。**权威全量回归 2001 passed**(+78 新测)+ 编译 OK + dashboard 端到端
+  (分页/搜索/页面 200/内联 JS node --check)+ 监控重启全 665 币纳入 WS 0。勾选 A1/A2/A3/H4/C4。**未部署(须批准)**。
+  下一步:全永续冷启动回填完成度核验(_SEMA=8 后 ~40min)→ D2 量析终端 / E2 部署门禁清单。

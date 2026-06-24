@@ -303,6 +303,13 @@ class HarmonicCfg:
     # False（默认）= 纯 periodic refresh 模式（向后兼容，不影响现网）
     # True = 收盘线即触发增量谐波分析（K 线级实时，periodic refresh 保留作全量兜底）
     realtime_ws: bool = False
+    # 分层调度配置（A2）：
+    # core_n:      核心层币数（高 vol 前 N 个，每轮必 refresh，实时性最高）。默认 60。
+    #              core_n >= top_n（或 >= 总币数）时退化为全量每轮 refresh（向后兼容）。
+    # tail_shards: 长尾分片数（其余币按 round-robin 分 tail_shards 片，每轮只处理 1 片）。
+    #              tail_shards=1 时长尾每轮全量 refresh（等价无分层）。默认 8。
+    core_n: int = 60
+    tail_shards: int = 8
 
 
 @dataclass(slots=True)

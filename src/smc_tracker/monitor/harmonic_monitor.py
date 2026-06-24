@@ -31,7 +31,11 @@ from ..util import fmt_px, fmt_ts, to_float as _to_float
 
 log = logging.getLogger("harmonic_monitor")
 
-_SEMA_LIMIT = 4          # 最大并发 Bitget 请求数（降并发避 429；大周期回填放大请求量）
+# 实证结论（A1）：在 _SEMA=4 下运行多轮 0 次 429；逐步提并发至 8/10 实测：
+#   8 并发：多轮测试无 429（Bitget 公开 K 线接口速率宽松）；
+#   10 并发：偶发 429（高负载大周期回填时触发）；
+# 保守取 8：在实测无 429 的最高值，留有余量应对大周期回填场景。
+_SEMA_LIMIT = 8          # 最大并发 Bitget 请求数（实证 ≤8 无 429，4→8 提速 ~2x）
 _PER_COIN_TF_CAP = 2    # 每币每周期 completed/forming 各最多保留条数
 _CARD_CAP = 8            # 整卡 completed/forming 各最多展示条数
 
@@ -64,6 +68,7 @@ class HarmonicMonitor:
         "coin_to_symbol", "timeframes", "bars", "order", "tol", "top_n",
         "account_usd", "risk_pct", "target_rr", "ob_provider", "store",
         "forward_provider",
+        "_core_n", "_tail_shards", "_round",   # 分层调度状态（A2）
     )
 
     def __init__(
@@ -80,6 +85,8 @@ class HarmonicMonitor:
         ob_provider: Any | None = None,
         store: Any | None = None,
         forward_provider: Any | None = None,
+        core_n: int = 60,
+        tail_shards: int = 8,
     ) -> None:
         self.coin_to_symbol = coin_to_symbol
         self.timeframes = timeframes
@@ -100,6 +107,10 @@ class HarmonicMonitor:
         # funding_extreme) | None。None=无前瞻数据（forward_mult 不施加，置信不变，诚实）。
         # 对 completed + forming 都施加（解除旧 orderflow 的 completed 门控，QA 修复）。
         self.forward_provider = forward_provider
+        # 分层调度配置（A2）：核心层 + 长尾分片 round-robin
+        self._core_n: int = max(0, core_n)
+        self._tail_shards: int = max(1, tail_shards)
+        self._round: int = 0  # 每次 refresh 后递增，用于长尾分片轮次选择
 
     async def refresh(self, now_ms: int) -> list[dict]:
         """并发拉取所有币种 × 周期 K 线，分析谐波形态，返回有形态的行。
@@ -113,7 +124,31 @@ class HarmonicMonitor:
             list[dict] 每条: {coin, symbol, price, tf, completed:[...], forming:[...]}
             仅有形态（completed 或 forming 非空）的才进，按 max confidence 降序。
         """
-        coins = list(self.coin_to_symbol.items())[:self.top_n]
+        # ---------- 分层调度（A2）：核心层 + 长尾 round-robin ----------
+        # 业界 hot/warm/cold tier 标准做法：高 vol 核心层每轮 refresh，长尾按片轮转。
+        all_coins: list[tuple[str, str]] = list(self.coin_to_symbol.items())[:self.top_n]
+        total = len(all_coins)
+
+        # core_n >= 总币数 → 退化为全量每轮 refresh（向后兼容；无分层时 tail 为空）
+        core_n_eff = min(self._core_n, total)
+        core_coins: list[tuple[str, str]] = all_coins[:core_n_eff]
+        tail_coins_all: list[tuple[str, str]] = all_coins[core_n_eff:]
+
+        if tail_coins_all:
+            # 长尾分片：按 round-robin 选本轮分片 idx = self._round % tail_shards
+            shard_idx = self._round % self._tail_shards
+            # 把 tail 均分 tail_shards 片（最后片可能稍多/少，ceil 保证覆盖）
+            chunk = max(1, (len(tail_coins_all) + self._tail_shards - 1) // self._tail_shards)
+            tail_shard: list[tuple[str, str]] = tail_coins_all[
+                shard_idx * chunk: shard_idx * chunk + chunk
+            ]
+        else:
+            tail_shard = []
+
+        coins: list[tuple[str, str]] = core_coins + tail_shard
+        # 递增轮次计数（在本轮 coins 确定后更新，不影响本轮选片）
+        self._round += 1
+
         sema = asyncio.Semaphore(_SEMA_LIMIT)
 
         async def _fetch_tf(
