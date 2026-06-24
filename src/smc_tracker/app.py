@@ -739,6 +739,9 @@ class TradingSystem:
         ("whale_pnl_snapshots",  "ts",      30 * 86_400_000),
         ("flow_predictions",     "ts",      30 * 86_400_000),
         ("predictions",          "ts",      90 * 86_400_000),
+        # 谐波历史 + BB 压力层：保留 7 天供历史回看与多周期 S/R（v2 新增）
+        ("harmonic_setups",      "ts",       7 * 86_400_000),
+        ("bb_levels",            "ts",       7 * 86_400_000),
     ]
 
     async def _periodic_cleanup(self, every: float = 600.0) -> None:

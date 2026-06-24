@@ -1298,11 +1298,11 @@ class TestToRecords:
         result = self.monitor.to_records(rows, _NOW_REC)
         assert len(result) == 1
 
-    def test_record_has_19_columns(self) -> None:
-        """每条记录恰好 19 列（符合 harmonic_setups schema）。"""
+    def test_record_has_29_columns(self) -> None:
+        """每条记录恰好 29 列（符合 harmonic_setups schema，含 XABCD 点）。"""
         rows = self._make_rows_completed_with_of()
         result = self.monitor.to_records(rows, _NOW_REC)
-        assert len(result[0]) == 19, f"期望 19 列，实际 {len(result[0])} 列"
+        assert len(result[0]) == 29, f"期望 29 列，实际 {len(result[0])} 列"
 
     def test_completed_kind_is_completed(self) -> None:
         """completed hit → kind='completed'（列 index=3）。"""
@@ -1703,12 +1703,12 @@ class TestHarmonicSetupDB:
         result = self.store.recent_harmonic_setups()
         assert len(result) == 3, f"应读回 3 行，实际 {len(result)}"
 
-    def test_recent_returns_19_columns(self) -> None:
-        """recent_harmonic_setups 每行 19 列。"""
+    def test_recent_returns_29_columns(self) -> None:
+        """recent_harmonic_setups 每行 29 列（含 XABCD 点坐标，v2 schema）。"""
         self.store.insert_harmonic_setups(self._sample_rows())
         result = self.store.recent_harmonic_setups()
         for row in result:
-            assert len(row) == 19, f"期望 19 列，实际 {len(row)}"
+            assert len(row) == 29, f"期望 29 列，实际 {len(row)}"
 
     def test_delete_old_snapshot_on_reinsert(self) -> None:
         """第二次 insert 时先 DELETE 旧快照，只保最新（防膨胀）。"""

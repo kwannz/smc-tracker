@@ -254,13 +254,14 @@ class HarmonicMonitor:
         return rows
 
     def to_records(self, rows: list[dict], now_ms: int) -> list[tuple]:
-        """把 refresh() 返回的 rows 展平成 harmonic_setups 表的 19 列 tuple 列表（纯函数）。
+        """把 refresh() 返回的 rows 展平成 harmonic_setups 表的 29 列 tuple 列表（纯函数）。
 
         列顺序（与 DB schema 对齐）：
           ts, coin, tf, kind, pattern, direction, price,
           entry_lo, entry_hi, stop, target1, target2,
           rr, confidence, knn, orderflow, fib_note,
-          prz_lo, prz_hi
+          prz_lo, prz_hi,
+          x_idx, x_px, a_idx, a_px, b_idx, b_px, c_idx, c_px, d_idx, d_px
 
         映射规则：
           - completed 有 setup → 用 setup 的精确进场/止损/目标/rr/confidence/fib_note。
@@ -269,6 +270,8 @@ class HarmonicMonitor:
           - direction: bull→long, bear→short（forming 与 completed 统一映射）。
           - knn: True→'✓' / False→'✗' / None→'?'（无 setup 则 '?'）。
           - orderflow: confirmed→'✓bid{wall_usd}' / not confirmed→'✗' / None→''。
+          - XABCD 点：completed hit 有 points → 从 hit["points"] 取各点 (idx, px)；
+            forming hit 无 points → 全 10 列为 None。
         """
         result: list[tuple] = []
         for row in rows:
@@ -329,11 +332,31 @@ class HarmonicMonitor:
                     knn = "?"
                     orderflow_str = ""
 
+                # XABCD 点坐标（completed hit 有 points 时提取）
+                hit_points = hit.get("points") or {}
+                def _pt(key: str, idx: int) -> "int | float | None":
+                    info = hit_points.get(key)
+                    if info and len(info) >= 2:
+                        return info[idx]
+                    return None
+
+                x_idx = _pt("X", 0)
+                x_px  = _pt("X", 1)
+                a_idx = _pt("A", 0)
+                a_px  = _pt("A", 1)
+                b_idx = _pt("B", 0)
+                b_px  = _pt("B", 1)
+                c_idx = _pt("C", 0)
+                c_px  = _pt("C", 1)
+                d_idx = _pt("D", 0)
+                d_px  = _pt("D", 1)
+
                 result.append((
                     now_ms, coin, tf, "completed", pat, direction, price,
                     entry_lo, entry_hi, stop, target1, target2,
                     rr, confidence, knn, orderflow_str, fib_note,
                     prz_lo, prz_hi,
+                    x_idx, x_px, a_idx, a_px, b_idx, b_px, c_idx, c_px, d_idx, d_px,
                 ))
 
             # ---- forming hits ----
@@ -354,6 +377,8 @@ class HarmonicMonitor:
                     None, None, None,  # stop/target1/target2 = NULL
                     None, hit_conf, "?", "", None,  # rr/confidence/knn/orderflow/fib_note
                     prz_lo, prz_hi,
+                    # XABCD 点：forming 未完成，全 None
+                    None, None, None, None, None, None, None, None, None, None,
                 ))
 
         return result

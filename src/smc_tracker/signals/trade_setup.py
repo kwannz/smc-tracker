@@ -6,10 +6,15 @@
   3. 止损/目标 via compute_risk：completed 用 X 点作失效位；forming 用 prz_lo/prz_hi。
   4. 仓位 via compute_position_size。
   5. KNN 历史验证 via validate_direction（样本不足则 knn_supports=None）。
-  6. 综合置信 = 谐波 confidence × KNN（不再对 completed 施加 Fib 虚高乘数），封顶 0.90。
-  7. 返回按 completed 优先、再置信降序的 TradeSetup 列表。
+  6. ATR2 动量确认 via atr2_confirmation：
+     - atr_stop = entry_mid ∓ 1.5×atr（long 减/short 加）
+     - atr2_bias = 返回的 bias 字段
+     - atr2_confirm = (bias 与 setup 方向一致)；candles 不足→三字段 None 不崩
+  7. 综合置信 = 谐波 confidence × KNN × ATR2（封顶 0.90）：
+     - atr2_confirm=True → ×1.05；False → ×0.92；None → 不调整
+  8. 返回按 completed 优先、再置信降序的 TradeSetup 列表。
 
-诚实标注（CLAUDE.md §二）：KNN≈随机基线，高 lift≠赚钱，仅辅助参考。
+诚实标注（CLAUDE.md §二）：KNN≈随机基线，高 lift≠赚钱，ATR2 仅辅助动量确认，不构成投资建议。
 
 修复（审计确认）：
   🔴-1: TradeSetup 新增 src_key 字段，build_setups 按 D 点/PRZ 生成唯一键，
@@ -17,12 +22,14 @@
   🟡-1: completed 进场区收窄到 D±1.5%（不再用 PRZ 10% 宽）。
   🟡-2: completed 不再因 Fib 汇合 ×1.1；fib_note 改诚实说明，不宣称"黄金口袋加分"。
   🟡-5: completed 止损基准改用 X 点（形态失效位）；过远返回 None 跳过（诚实）。
+  任务C: 集成 ATR2 动量确认（atr_stop/atr2_bias/atr2_confirm 字段）。
 """
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
+from ..indicators.atr2_signals import atr2_confirmation
 from ..indicators.fibonacci import fib_levels, nearest_fib
 from .knn_validator import validate_direction
 from .orderflow_confirm import OrderflowConfirm
@@ -92,6 +99,13 @@ class TradeSetup:
     src_key: str  # 🔴-1: 唯一来源标识，用于注入精确匹配
     # 订单流确认（monitor 层注入；build_setups 纯函数无 ob_provider，留 None）
     orderflow: OrderflowConfirm | None = field(default=None)
+    # ATR2 动量确认（任务C：atr2_signals 集成）
+    # atr_stop: ATR 止损价（entry_mid ∓ 1.5×atr，long 减/short 加）；candles 不足→None
+    atr_stop: float | None = None
+    # atr2_bias: ATR2 动量偏向（"long"/"short"/"neutral"）；candles 不足→None
+    atr2_bias: str | None = None
+    # atr2_confirm: ATR2 bias 与 setup 方向是否一致；candles 不足→None（不调权）
+    atr2_confirm: bool | None = None
 
 
 def _direction_map(harmonic_direction: str) -> str | None:
@@ -248,6 +262,25 @@ def _build_one(
         knn_supports = verdict.supports
         knn_note = verdict.note
 
+    # ── 5b. ATR2 动量确认（任务C） ──────────────────────────────────────────────
+    atr2_result = atr2_confirmation(candles)
+    if atr2_result is not None:
+        # candles 足够：填充三字段
+        atr2_bias_val: str | None = atr2_result["bias"]
+        # atr_stop：entry_mid ∓ 1.5×atr（long 减/short 加）
+        _atr_val = atr2_result["atr"]
+        if direction == "long":
+            atr_stop_val: float | None = entry_mid - 1.5 * _atr_val
+        else:
+            atr_stop_val = entry_mid + 1.5 * _atr_val
+        # atr2_confirm：bias 与 setup 方向是否一致
+        atr2_confirm_val: bool | None = (atr2_bias_val == direction)
+    else:
+        # candles 不足：三字段均 None，不崩不加权
+        atr2_bias_val = None
+        atr_stop_val = None
+        atr2_confirm_val = None
+
     # ── 6. 综合置信（🟡-2: 去掉 fib_mult，不再对 completed 虚高 ×1.1） ─────────
     base_conf: float = float(pattern.get("confidence", 0.5))
     conf = base_conf  # 🟡-2: 不再乘 fib_mult
@@ -258,6 +291,13 @@ def _build_one(
     elif knn_supports is False:
         conf *= 0.90
     # knn_supports is None 时不调整
+
+    # ATR2 调权：同向×1.05（封顶前），相反×0.92；None 不调整（candles 不足）
+    if atr2_confirm_val is True:
+        conf *= 1.05
+    elif atr2_confirm_val is False:
+        conf *= 0.92
+    # atr2_confirm_val is None 时不调整
 
     # 封顶
     conf = min(conf, _MAX_CONFIDENCE)
@@ -283,6 +323,9 @@ def _build_one(
         confidence=conf,
         note=_HONEST_NOTE,
         src_key=src_key,  # 🔴-1
+        atr_stop=atr_stop_val,
+        atr2_bias=atr2_bias_val,
+        atr2_confirm=atr2_confirm_val,
     )
 
 

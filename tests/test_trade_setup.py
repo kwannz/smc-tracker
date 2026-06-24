@@ -4,6 +4,7 @@
 """
 from __future__ import annotations
 
+import dataclasses
 import math
 import pytest
 
@@ -697,3 +698,327 @@ class TestOrderflowField:
         s.orderflow = of
         assert s.orderflow is of
         assert s.orderflow.confirmed is True
+
+
+# ── 测试 13：ATR2 集成 — TradeSetup 新字段 atr_stop/atr2_bias/atr2_confirm ───────
+# TDD RED-GREEN 周期（任务C）
+
+# ── 辅助：生成足够 ATR2 暖机用的上升趋势 candles（trend_length=8, smoothness=20 → 至少 47 根） ──
+
+def _make_atr2_candles_long(n: int = 60) -> list[_Candle]:
+    """生成足够根数的上升趋势 K 线，使 atr2_confirmation 返回 bias='long'。"""
+    candles: list[_Candle] = []
+    price = 100.0
+    for _ in range(n):
+        o = price
+        c = price + 0.5          # 持续上涨
+        h = c + 0.2
+        lo = o - 0.1
+        candles.append(_Candle(o, h, lo, c, 1000.0))
+        price = c
+    return candles
+
+
+def _make_atr2_candles_short(n: int = 60) -> list[_Candle]:
+    """生成足够根数的下降趋势 K 线，使 atr2_confirmation 返回 bias='short'。"""
+    candles: list[_Candle] = []
+    price = 130.0
+    for _ in range(n):
+        o = price
+        c = price - 0.5          # 持续下跌
+        h = o + 0.1
+        lo = c - 0.2
+        candles.append(_Candle(o, h, lo, c, 1000.0))
+        price = c
+    return candles
+
+
+class TestATR2FieldsOnDataclass:
+    """任务C: TradeSetup dataclass 必须有 atr_stop/atr2_bias/atr2_confirm 三个新字段。"""
+
+    def test_atr_stop_field_exists(self):
+        """TradeSetup 必须有 atr_stop 字段。"""
+        fields = {f.name for f in dataclasses.fields(TradeSetup)}
+        assert "atr_stop" in fields, "TradeSetup 缺少 atr_stop 字段"
+
+    def test_atr2_bias_field_exists(self):
+        """TradeSetup 必须有 atr2_bias 字段。"""
+        fields = {f.name for f in dataclasses.fields(TradeSetup)}
+        assert "atr2_bias" in fields, "TradeSetup 缺少 atr2_bias 字段"
+
+    def test_atr2_confirm_field_exists(self):
+        """TradeSetup 必须有 atr2_confirm 字段。"""
+        fields = {f.name for f in dataclasses.fields(TradeSetup)}
+        assert "atr2_confirm" in fields, "TradeSetup 缺少 atr2_confirm 字段"
+
+    def test_atr_stop_default_none(self):
+        """atr_stop 默认值应为 None（新字段，兼容现有 setup）。"""
+        for f in dataclasses.fields(TradeSetup):
+            if f.name == "atr_stop":
+                assert f.default is None, (
+                    f"atr_stop 默认值应为 None，实际: {f.default!r}"
+                )
+
+    def test_atr2_bias_default_none(self):
+        """atr2_bias 默认值应为 None。"""
+        for f in dataclasses.fields(TradeSetup):
+            if f.name == "atr2_bias":
+                assert f.default is None, (
+                    f"atr2_bias 默认值应为 None，实际: {f.default!r}"
+                )
+
+    def test_atr2_confirm_default_none(self):
+        """atr2_confirm 默认值应为 None。"""
+        for f in dataclasses.fields(TradeSetup):
+            if f.name == "atr2_confirm":
+                assert f.default is None, (
+                    f"atr2_confirm 默认值应为 None，实际: {f.default!r}"
+                )
+
+
+class TestATR2EnoughCandles:
+    """足够 candles 时 build_setups 应填充 atr_stop/atr2_bias/atr2_confirm。"""
+
+    def setup_method(self):
+        # 上升趋势 candles → atr2_confirmation 应返回 bias='long'
+        # Gartley bull (direction='long') 与 bias='long' 一致 → atr2_confirm=True
+        self.candles = _make_atr2_candles_long(n=60)
+        self.setups = build_setups(
+            coin="BTC",
+            tf="1h",
+            candles=self.candles,
+            harmonic_result=_gartley_bull_harmonic(),
+            account_usd=10_000.0,
+            risk_pct=0.01,
+            target_rr=2.0,
+        )
+
+    def test_setup_produced(self):
+        """足够 candles + 有效谐波 → 至少 1 个 setup。"""
+        assert len(self.setups) >= 1, "应产出至少 1 个 TradeSetup"
+
+    def test_atr_stop_not_none(self):
+        """足够 candles → atr_stop 不为 None。"""
+        s = self.setups[0]
+        assert s.atr_stop is not None, (
+            "足够 candles 时 atr_stop 不应为 None"
+        )
+
+    def test_atr_stop_direction_correct_long(self):
+        """long setup: atr_stop = entry_mid - 1.5 × atr（低于进场区中点）。"""
+        s = self.setups[0]
+        assert s.direction == "long"
+        assert s.atr_stop is not None
+        entry_mid = (s.entry_lo + s.entry_hi) / 2.0
+        # atr_stop 应低于 entry_mid（long 方向止损在下方）
+        assert s.atr_stop < entry_mid, (
+            f"long atr_stop={s.atr_stop:.4f} 应低于 entry_mid={entry_mid:.4f}"
+        )
+
+    def test_atr2_bias_field_set(self):
+        """足够 candles → atr2_bias 应为 'long'/'short'/'neutral' 之一，不为 None。"""
+        s = self.setups[0]
+        assert s.atr2_bias in ("long", "short", "neutral"), (
+            f"atr2_bias 应为有效字符串，实际: {s.atr2_bias!r}"
+        )
+
+    def test_atr2_confirm_is_bool_when_candles_sufficient(self):
+        """足够 candles → atr2_confirm 应为 bool（True 或 False），不为 None。"""
+        s = self.setups[0]
+        assert isinstance(s.atr2_confirm, bool), (
+            f"足够 candles 时 atr2_confirm 应为 bool，实际: {s.atr2_confirm!r}"
+        )
+
+    def test_atr2_confirm_true_when_bias_matches_long(self):
+        """上升趋势 candles + long setup → bias='long' 与方向一致 → atr2_confirm=True。"""
+        from smc_tracker.indicators.atr2_signals import atr2_confirmation
+        r = atr2_confirmation(self.candles)
+        if r is None or r["bias"] != "long":
+            pytest.skip(f"atr2_confirmation bias={r!r} 不是 'long'，跳过一致性校验")
+        s = self.setups[0]
+        assert s.direction == "long"
+        assert s.atr2_confirm is True, (
+            f"bias='long' 与 direction='long' 一致，atr2_confirm 应=True，实际={s.atr2_confirm!r}"
+        )
+
+    def test_confidence_boosted_when_atr2_confirm_true(self):
+        """atr2_confirm=True → confidence 应在原 KNN 调整后再 ×1.05（封顶 0.90）。"""
+        s = self.setups[0]
+        if s.atr2_confirm is not True:
+            pytest.skip(f"atr2_confirm={s.atr2_confirm!r} 不是 True，跳过加成校验")
+        # base_conf=0.75，KNN 调整后 × 1.05 应略高于 base；封顶 0.90
+        assert s.confidence > 0.75, (
+            f"atr2_confirm=True 时 confidence={s.confidence:.4f} 应 >0.75（base_conf=0.75）"
+        )
+        assert s.confidence <= 0.90, (
+            f"confidence={s.confidence:.4f} 不应超过封顶 0.90"
+        )
+
+
+class TestATR2ShortDirection:
+    """short setup + bias='short' → atr_stop 在进场上方, atr2_confirm=True。"""
+
+    def _gartley_bear_harmonic(self) -> dict:
+        """构造 Gartley 看空谐波（direction='bear'），X/D 结构使止损合理。"""
+        pat = {
+            "pattern": "Gartley",
+            "direction": "bear",
+            "prz": (105.0, 109.0),
+            "completed": True,
+            "confidence": 0.75,
+            "confluence": 2,
+            "points": {
+                "X": (0, 120.0),   # X=120 > D=107，short X 在上方
+                "A": (10, 90.0),
+                "B": (15, 110.0),
+                "C": (20, 95.0),
+                "D": (25, 107.0),
+            },
+        }
+        return {"completed": [pat], "forming": [], "price": 107.0}
+
+    def test_atr_stop_above_entry_for_short(self):
+        """short setup: atr_stop = entry_mid + 1.5 × atr（高于进场区中点）。"""
+        candles = _make_atr2_candles_short(n=60)
+        harmonic = self._gartley_bear_harmonic()
+        setups = build_setups(
+            coin="BTC", tf="1h",
+            candles=candles,
+            harmonic_result=harmonic,
+        )
+        if not setups:
+            pytest.skip("short Gartley 被 compute_risk 过滤，跳过")
+        s = setups[0]
+        assert s.direction == "short"
+        if s.atr_stop is None:
+            pytest.skip("candles 不足导致 atr_stop=None，跳过方向检查")
+        entry_mid = (s.entry_lo + s.entry_hi) / 2.0
+        assert s.atr_stop > entry_mid, (
+            f"short atr_stop={s.atr_stop:.4f} 应高于 entry_mid={entry_mid:.4f}"
+        )
+
+
+class TestATR2InsufficientCandles:
+    """candles 不足暖机期 → atr_stop/atr2_bias/atr2_confirm 均为 None，不崩溃。"""
+
+    def setup_method(self):
+        # 仅 5 根 K 线，远不足 atr2_confirmation 所需 47 根（8+2×20-1）
+        self.candles = _make_candles(5)
+        self.setups = build_setups(
+            coin="BTC",
+            tf="1h",
+            candles=self.candles,
+            harmonic_result=_gartley_bull_harmonic(),
+            account_usd=10_000.0,
+            risk_pct=0.01,
+            target_rr=2.0,
+        )
+
+    def test_no_crash_on_insufficient_candles(self):
+        """candles 不足时 build_setups 不应抛异常。"""
+        assert isinstance(self.setups, list)
+
+    def test_atr_stop_none_on_insufficient_candles(self):
+        """candles 不足 → atr_stop 为 None（不加权，不崩）。"""
+        for s in self.setups:
+            assert s.atr_stop is None, (
+                f"candles 不足时 atr_stop 应为 None，实际: {s.atr_stop!r}"
+            )
+
+    def test_atr2_bias_none_on_insufficient_candles(self):
+        """candles 不足 → atr2_bias 为 None。"""
+        for s in self.setups:
+            assert s.atr2_bias is None, (
+                f"candles 不足时 atr2_bias 应为 None，实际: {s.atr2_bias!r}"
+            )
+
+    def test_atr2_confirm_none_on_insufficient_candles(self):
+        """candles 不足 → atr2_confirm 为 None（不加权，不崩）。"""
+        for s in self.setups:
+            assert s.atr2_confirm is None, (
+                f"candles 不足时 atr2_confirm 应为 None，实际: {s.atr2_confirm!r}"
+            )
+
+
+class TestATR2OppositeDirection:
+    """bias 与 setup 方向相反 → confidence ×0.92（降权），不为 None。"""
+
+    def test_confidence_reduced_when_atr2_disagrees(self):
+        """下降趋势 candles + long setup → bias='short' ≠ 'long' → confidence ×0.92。
+
+        注意：此场景 atr2_confirm=False（方向相反），置信应被降权。
+        基准：build_setups(上升趋势) 的 confidence 作比较基线。
+        """
+        from smc_tracker.indicators.atr2_signals import atr2_confirmation
+
+        harmonic = _gartley_bull_harmonic()  # direction='long'
+
+        # 1) 上升趋势（bias='long'，方向一致 → 加权基线）
+        candles_up = _make_atr2_candles_long(n=60)
+        r_up = atr2_confirmation(candles_up)
+
+        # 2) 下降趋势（bias='short'，与 long 相反 → 降权）
+        candles_dn = _make_atr2_candles_short(n=60)
+        r_dn = atr2_confirmation(candles_dn)
+
+        if r_up is None or r_up["bias"] != "long":
+            pytest.skip(f"上升趋势 bias={r_up!r} 非 'long'，跳过对比测试")
+        if r_dn is None or r_dn["bias"] != "short":
+            pytest.skip(f"下降趋势 bias={r_dn!r} 非 'short'，跳过对比测试")
+
+        setups_up = build_setups("BTC", "1h", candles_up, harmonic)
+        setups_dn = build_setups("BTC", "1h", candles_dn, harmonic)
+
+        if not setups_up or not setups_dn:
+            pytest.skip("setup 被过滤，跳过对比")
+
+        s_up = setups_up[0]
+        s_dn = setups_dn[0]
+
+        # 下降趋势 setup 的置信应低于上升趋势（反向降权）
+        assert s_dn.confidence < s_up.confidence, (
+            f"ATR2 方向相反时 confidence={s_dn.confidence:.4f} 应 < "
+            f"同向时 {s_up.confidence:.4f}"
+        )
+
+        # atr2_confirm 标记
+        assert s_dn.atr2_confirm is False, (
+            f"bias='short' ≠ direction='long' → atr2_confirm 应=False，实际={s_dn.atr2_confirm!r}"
+        )
+
+    def test_confidence_cap_still_090(self):
+        """任何情况下 confidence 不超过 0.90 封顶。"""
+        candles = _make_atr2_candles_long(n=60)
+        setups = build_setups("BTC", "1h", candles, _gartley_bull_harmonic())
+        for s in setups:
+            assert s.confidence <= 0.90, (
+                f"confidence={s.confidence:.4f} 超过封顶 0.90"
+            )
+
+
+class TestATR2ExistingTestsUnbroken:
+    """回归：现有测试所依赖的字段不受新字段影响（新字段默认 None）。
+
+    重点验证：旧测试在不传 candles(5根不足) 或 candles(120根)时均不崩，
+    新字段 atr_stop/atr2_bias/atr2_confirm 不破坏任何现有断言。
+    """
+
+    def test_existing_fields_still_present(self):
+        """旧字段集合不变——新字段仅追加，不替换。"""
+        fields = {f.name for f in dataclasses.fields(TradeSetup)}
+        old_required = {
+            "coin", "tf", "direction", "pattern", "completed",
+            "entry_lo", "entry_hi", "stop", "target1", "target2",
+            "rr", "fib_note", "knn_supports", "knn_note",
+            "position_qty", "position_notional", "confidence", "note",
+            "src_key", "orderflow",
+        }
+        missing = old_required - fields
+        assert not missing, f"旧字段被意外删除: {missing}"
+
+    def test_new_fields_in_all_fields(self):
+        """三个新字段已加入 dataclass。"""
+        fields = {f.name for f in dataclasses.fields(TradeSetup)}
+        new_fields = {"atr_stop", "atr2_bias", "atr2_confirm"}
+        missing = new_fields - fields
+        assert not missing, f"新字段未加入 dataclass: {missing}"

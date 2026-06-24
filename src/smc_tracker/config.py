@@ -1,11 +1,97 @@
 """配置加载：从 YAML 读取并提供带默认值的强类型访问。"""
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 import yaml
+
+
+@dataclass(slots=True)
+class UniverseCfg:
+    """币种宇宙选择配置。
+
+    mode:
+      "all"    → 全部 USDT 永续合约（以 base_map 为准）
+      "top_n"  → 按 24h 成交额(quoteVolume)降序取前 top_n 个
+      "list"   → 仅 include 列表中指定的 coin
+    top_n:        mode="top_n" 时选取数量（默认 12）
+    include:      mode="list" 时指定 coin 列表；mode 为其他时忽略
+    exclude:      无论何种 mode，最终结果都剔除这些 coin
+    asset_filter: "all"(不过滤) / "crypto"(仅加密) / "tradfi"(仅传统金融)
+    """
+    mode: str = "top_n"
+    top_n: int = 12
+    include: list[str] = field(default_factory=list)
+    exclude: list[str] = field(default_factory=list)
+    asset_filter: str = "all"
+
+
+def _safe_vol(val: Any) -> float:
+    """安全解析 quoteVolume 字符串为 float；无效/缺失时返回 0.0。"""
+    try:
+        v = float(val)
+        return v if math.isfinite(v) and v >= 0 else 0.0
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def resolve_universe(
+    base_map: dict[str, str],
+    tickers: dict[str, dict],
+    cfg: UniverseCfg,
+) -> dict[str, str]:
+    """根据配置选出活跃币种宇宙，返回 {coin: symbol} 映射。
+
+    流程：
+      1. 从 base_map 出发，按 tickers quoteVolume 降序排列所有候选 coin
+      2. 按 mode 筛选（all/top_n/list）
+      3. 按 asset_filter 过滤资产类别（需要 .asset_class.asset_class 函数）
+      4. 剔除 exclude 中的 coin
+
+    纯函数：无副作用，确定性可测。
+
+    参数：
+        base_map: {coin → symbol(USDT永续合约)}（来自交易所 API）
+        tickers:  {symbol → {quoteVolume: str, ...}}（来自行情快照）
+        cfg:      UniverseCfg 配置对象
+
+    返回：
+        {coin → symbol} 按成交额降序排列（list 模式保持 include 顺序）
+    """
+    from .asset_class import asset_class as _asset_class
+
+    # 所有候选 coin，按 quoteVolume 降序排列
+    def _vol(coin: str) -> float:
+        sym = base_map.get(coin, "")
+        ticker = tickers.get(sym, {})
+        return _safe_vol(ticker.get("quoteVolume"))
+
+    all_coins_sorted: list[str] = sorted(base_map.keys(), key=_vol, reverse=True)
+
+    # mode 筛选
+    if cfg.mode == "all":
+        selected: list[str] = list(all_coins_sorted)
+    elif cfg.mode == "top_n":
+        selected = all_coins_sorted[: max(0, cfg.top_n)]
+    elif cfg.mode == "list":
+        # 保持 include 顺序，剔除不在 base_map 中的 coin
+        selected = [c for c in cfg.include if c in base_map]
+    else:
+        # 未知 mode：fallback 为 all
+        selected = list(all_coins_sorted)
+
+    # asset_filter 过滤
+    if cfg.asset_filter != "all":
+        selected = [c for c in selected if _asset_class(c) == cfg.asset_filter]
+
+    # exclude 剔除
+    exclude_set: frozenset[str] = frozenset(cfg.exclude)
+    selected = [c for c in selected if c not in exclude_set]
+
+    return {coin: base_map[coin] for coin in selected}
 
 
 @dataclass(slots=True)
@@ -174,6 +260,7 @@ class Config:
     digest: DigestCfg = field(default_factory=DigestCfg)
     bollinger: BollingerCfg = field(default_factory=BollingerCfg)
     harmonic: HarmonicCfg = field(default_factory=HarmonicCfg)
+    universe: UniverseCfg = field(default_factory=UniverseCfg)
 
     @classmethod
     def load(cls, path: str | Path) -> "Config":
@@ -187,6 +274,12 @@ class Config:
         harm_raw: dict[str, Any] = dict(raw.get("harmonic") or {})
         if "timeframes" in harm_raw and not isinstance(harm_raw["timeframes"], list):
             harm_raw["timeframes"] = list(harm_raw["timeframes"])
+        # UniverseCfg.include/exclude 是 list，需正确透传
+        univ_raw: dict[str, Any] = dict(raw.get("universe") or {})
+        if "include" in univ_raw and not isinstance(univ_raw["include"], list):
+            univ_raw["include"] = list(univ_raw["include"])
+        if "exclude" in univ_raw and not isinstance(univ_raw["exclude"], list):
+            univ_raw["exclude"] = list(univ_raw["exclude"])
         return cls(
             hyperliquid=HyperliquidCfg(**(raw.get("hyperliquid") or {})),
             markets=list(raw.get("markets") or ["BTC", "ETH"]),
@@ -202,6 +295,7 @@ class Config:
             digest=DigestCfg(**(raw.get("digest") or {})),
             bollinger=BollingerCfg(**bb_raw),
             harmonic=HarmonicCfg(**harm_raw),
+            universe=UniverseCfg(**univ_raw),
         )
 
 

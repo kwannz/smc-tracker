@@ -302,7 +302,31 @@ CREATE TABLE IF NOT EXISTS harmonic_setups (
     orderflow  TEXT,       -- '✓bidXXX' / '✗' / ''（无数据）
     fib_note   TEXT,
     prz_lo     REAL,
-    prz_hi     REAL
+    prz_hi     REAL,
+    -- XABCD 点坐标（供图表叠加，forming 未完成时为 NULL）
+    x_idx      INTEGER,
+    x_px       REAL,
+    a_idx      INTEGER,
+    a_px       REAL,
+    b_idx      INTEGER,
+    b_px       REAL,
+    c_idx      INTEGER,
+    c_px       REAL,
+    d_idx      INTEGER,
+    d_px       REAL
+);
+
+-- 7 周期布林带压力/支撑层（S/R 前瞻层，供详情页多周期叠加）
+CREATE TABLE IF NOT EXISTS bb_levels (
+    coin     TEXT    NOT NULL,
+    tf       TEXT    NOT NULL,
+    ts       INTEGER NOT NULL,
+    upper    REAL,
+    mid      REAL,
+    lower    REAL,
+    pct_b    REAL,
+    squeeze  INTEGER,
+    PRIMARY KEY (coin, tf, ts)
 );
 
 CREATE TABLE IF NOT EXISTS bitget_candles (
@@ -341,6 +365,19 @@ class Store:
             "open_ms": "INTEGER",
             "last_close_ms": "INTEGER",
             "hold_sec": "INTEGER",
+        })
+        # 旧库迁移：harmonic_setups 追加 XABCD 点坐标列（v2 新增，旧库缺失）
+        self._ensure_columns("harmonic_setups", {
+            "x_idx": "INTEGER",
+            "x_px":  "REAL",
+            "a_idx": "INTEGER",
+            "a_px":  "REAL",
+            "b_idx": "INTEGER",
+            "b_px":  "REAL",
+            "c_idx": "INTEGER",
+            "c_px":  "REAL",
+            "d_idx": "INTEGER",
+            "d_px":  "REAL",
         })
 
     def _ensure_columns(self, table: str, cols: dict[str, str]) -> None:
@@ -580,52 +617,118 @@ class Store:
             "SELECT ts,coin,side,kind,px,notional FROM hl_orderbook_walls "
             "WHERE ts>=? ORDER BY ts ASC", (since_ms,)).fetchall()
 
-    # ---- 谐波形态快照（供 dashboard 独立页读取）----
+    # ---- 谐波形态历史（历史保留，按 ts 追加；v2 含 XABCD 点坐标列）----
     def insert_harmonic_setups(self, rows: Iterable[tuple]) -> None:
-        """覆盖谐波快照：先 DELETE 全表（只保最新快照，避免膨胀），再批量 INSERT，commit。
+        """追加谐波形态行（带 ts 保留历史，不再 DELETE-then-insert）。
 
-        rows: Iterable[tuple] 每行 19 列，顺序为：
-          ts, coin, tf, kind, pattern, direction, price,
-          entry_lo, entry_hi, stop, target1, target2,
-          rr, confidence, knn, orderflow, fib_note,
-          prz_lo, prz_hi
+        rows: Iterable[tuple], 每行 19 列（旧格式向后兼容）或 29 列（含 XABCD 点）。
+          19 列顺序：ts, coin, tf, kind, pattern, direction, price,
+                     entry_lo, entry_hi, stop, target1, target2,
+                     rr, confidence, knn, orderflow, fib_note, prz_lo, prz_hi
+          29 列 = 19 列 + x_idx, x_px, a_idx, a_px, b_idx, b_px,
+                           c_idx, c_px, d_idx, d_px
 
-        空 rows 仍会先 DELETE 旧快照（清空表），再 executemany 0 行，保持表恒为最新。
+        空 rows 安全返回（不写任何行，不清空历史）。
+        向后兼容：19 列行自动补 10 个 None 扩为 29 列再写入。
         """
         rows_list = list(rows)
+        if not rows_list:
+            return
+
+        # 向后兼容：旧 19 列补 10 个 NULL 扩成 29 列
+        def _normalize(r: tuple) -> tuple:
+            if len(r) == 19:
+                return r + (None,) * 10
+            return r
+
+        normalized = [_normalize(r) for r in rows_list]
         try:
             self.conn.execute("BEGIN")
-            self.conn.execute("DELETE FROM harmonic_setups")
-            if rows_list:
-                self.conn.executemany(
-                    "INSERT INTO harmonic_setups("
-                    "ts,coin,tf,kind,pattern,direction,price,"
-                    "entry_lo,entry_hi,stop,target1,target2,"
-                    "rr,confidence,knn,orderflow,fib_note,"
-                    "prz_lo,prz_hi"
-                    ") VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                    rows_list,
-                )
+            self.conn.executemany(
+                "INSERT INTO harmonic_setups("
+                "ts,coin,tf,kind,pattern,direction,price,"
+                "entry_lo,entry_hi,stop,target1,target2,"
+                "rr,confidence,knn,orderflow,fib_note,"
+                "prz_lo,prz_hi,"
+                "x_idx,x_px,a_idx,a_px,b_idx,b_px,c_idx,c_px,d_idx,d_px"
+                ") VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,"
+                "?,?,?,?,?,?,?,?,?,?)",
+                normalized,
+            )
             self.conn.execute("COMMIT")
         except Exception:
             self.conn.execute("ROLLBACK")
             raise
 
     def recent_harmonic_setups(self) -> list[tuple]:
-        """返回最新谐波快照，按 confidence DESC。
+        """返回最新快照批（ts = max(ts)）的所有谐波行，按 confidence DESC。
 
-        返回列（19 列，与 insert_harmonic_setups 顺序一致）：
+        返回列（29 列）：
           ts, coin, tf, kind, pattern, direction, price,
           entry_lo, entry_hi, stop, target1, target2,
-          rr, confidence, knn, orderflow, fib_note,
-          prz_lo, prz_hi
+          rr, confidence, knn, orderflow, fib_note, prz_lo, prz_hi,
+          x_idx, x_px, a_idx, a_px, b_idx, b_px, c_idx, c_px, d_idx, d_px
         """
         return self.conn.execute(
             "SELECT ts,coin,tf,kind,pattern,direction,price,"
             "entry_lo,entry_hi,stop,target1,target2,"
             "rr,confidence,knn,orderflow,fib_note,"
-            "prz_lo,prz_hi "
-            "FROM harmonic_setups ORDER BY confidence DESC"
+            "prz_lo,prz_hi,"
+            "x_idx,x_px,a_idx,a_px,b_idx,b_px,c_idx,c_px,d_idx,d_px "
+            "FROM harmonic_setups "
+            "WHERE ts=(SELECT MAX(ts) FROM harmonic_setups) "
+            "ORDER BY confidence DESC"
+        ).fetchall()
+
+    def harmonic_history(self, coin: str, limit: int = 50) -> list[tuple]:
+        """返回指定 coin 的历史谐波形态，按 ts 降序（最新在前），最多 limit 行。
+
+        返回列（29 列，与 recent_harmonic_setups 一致）。
+        该币无历史时返回 []，不抛。
+        """
+        return self.conn.execute(
+            "SELECT ts,coin,tf,kind,pattern,direction,price,"
+            "entry_lo,entry_hi,stop,target1,target2,"
+            "rr,confidence,knn,orderflow,fib_note,"
+            "prz_lo,prz_hi,"
+            "x_idx,x_px,a_idx,a_px,b_idx,b_px,c_idx,c_px,d_idx,d_px "
+            "FROM harmonic_setups WHERE coin=? "
+            "ORDER BY ts DESC LIMIT ?",
+            (coin, limit),
+        ).fetchall()
+
+    # ---- 布林带压力/支撑层（7 周期 S/R，供详情页多周期叠加）----
+
+    def insert_bb_levels(self, rows: Iterable[tuple]) -> None:
+        """批量写入 bb_levels，同 (coin,tf,ts) 覆盖旧值（PK REPLACE）。
+
+        rows: Iterable[(coin, tf, ts, upper, mid, lower, pct_b, squeeze)]
+        空 rows 安全返回（不写任何行）。
+        """
+        rows_list = list(rows)
+        if not rows_list:
+            return
+        self.conn.executemany(
+            "INSERT OR REPLACE INTO bb_levels"
+            "(coin,tf,ts,upper,mid,lower,pct_b,squeeze) "
+            "VALUES(?,?,?,?,?,?,?,?)",
+            rows_list,
+        )
+
+    def recent_bb_levels(self, coin: str) -> list[tuple]:
+        """返回指定 coin 各 tf 最新一条 bb_levels（ts 最大那条）。
+
+        返回列：(coin, tf, ts, upper, mid, lower, pct_b, squeeze)
+        该 coin 无数据时返回 []，不抛。
+        """
+        return self.conn.execute(
+            "SELECT coin,tf,ts,upper,mid,lower,pct_b,squeeze "
+            "FROM bb_levels "
+            "WHERE coin=? AND ts=("
+            "  SELECT MAX(ts) FROM bb_levels b2 "
+            "  WHERE b2.coin=bb_levels.coin AND b2.tf=bb_levels.tf"
+            ")",
+            (coin,),
         ).fetchall()
 
     # ---- Bitget 永续 K 线缓存 ----

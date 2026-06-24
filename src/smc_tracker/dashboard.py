@@ -1019,11 +1019,14 @@ async def serve(db_path: str, host: str = "127.0.0.1", port: int = 8787) -> None
 # 谐波形态独立页 —— build_harmonic_state / render_harmonic_html / 路由
 # ---------------------------------------------------------------------------
 
-# 谐波 setups 列序（与表契约对齐）
+# 谐波 setups 列序（29 列，与表契约对齐）
 _HARMONIC_KEYS = [
     "ts", "coin", "tf", "kind", "pattern", "direction", "price",
     "entry_lo", "entry_hi", "stop", "target1", "target2", "rr",
     "confidence", "knn", "orderflow", "fib_note", "prz_lo", "prz_hi",
+    # XABCD 点坐标（v2 新增，forming 行为 None）
+    "x_idx", "x_px", "a_idx", "a_px", "b_idx", "b_px",
+    "c_idx", "c_px", "d_idx", "d_px",
 ]
 
 
@@ -1041,7 +1044,8 @@ def build_harmonic_state(store: Any, now_ms: int) -> dict:
         store.conn,
         "SELECT ts,coin,tf,kind,pattern,direction,price,"
         "entry_lo,entry_hi,stop,target1,target2,rr,"
-        "confidence,knn,orderflow,fib_note,prz_lo,prz_hi "
+        "confidence,knn,orderflow,fib_note,prz_lo,prz_hi,"
+        "x_idx,x_px,a_idx,a_px,b_idx,b_px,c_idx,c_px,d_idx,d_px "
         "FROM harmonic_setups ORDER BY confidence DESC",
     )
 

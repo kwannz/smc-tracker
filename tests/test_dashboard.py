@@ -829,7 +829,7 @@ def test_render_okx_hl_functions_defined():
 
 from smc_tracker.dashboard import build_harmonic_state, render_harmonic_html  # noqa: E402
 
-# harmonic_setups 表 schema（与任务规范对齐）
+# harmonic_setups 表 schema（29 列，与 db.py 契约对齐）
 _HARMONIC_SCHEMA = """
 CREATE TABLE IF NOT EXISTS harmonic_setups (
     ts          INTEGER,
@@ -850,7 +850,17 @@ CREATE TABLE IF NOT EXISTS harmonic_setups (
     orderflow   TEXT,
     fib_note    TEXT,
     prz_lo      REAL,
-    prz_hi      REAL
+    prz_hi      REAL,
+    x_idx       INTEGER,
+    x_px        REAL,
+    a_idx       INTEGER,
+    a_px        REAL,
+    b_idx       INTEGER,
+    b_px        REAL,
+    c_idx       INTEGER,
+    c_px        REAL,
+    d_idx       INTEGER,
+    d_px        REAL
 );
 """
 
@@ -861,26 +871,24 @@ def _store_with_harmonic() -> tuple:
     s = Store(__import__("pathlib").Path(d) / "t.db")
     now_ms = 1_700_000_000_000
 
-    s.conn.executescript(_HARMONIC_SCHEMA)
-    # completed 行（有止损/目标）
-    s.conn.execute(
-        "INSERT INTO harmonic_setups VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+    # Store.__init__ 已建 29 列表；直接用 insert_harmonic_setups 写入（自动向后兼容）
+    # completed 行（有止损/目标）—— 29 列
+    s.insert_harmonic_setups([
         (
             now_ms - 120_000, "BTC", "1h", "completed", "Gartley", "long",
             65000.0, 64500.0, 64800.0, 63000.0, 67000.0, 69000.0,
             2.5, 0.82, "✓", "✓ 买压确认", "XA=0.618", 64000.0, 65200.0,
+            # XABCD 点（completed 行示例：有完整 XABCD）
+            1, 60000.0, 10, 70000.0, 15, 55000.0, 20, 65000.0, 25, 64500.0,
         ),
-    )
-    # forming 行（stop/target 为 NULL）
-    s.conn.execute(
-        "INSERT INTO harmonic_setups VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        # forming 行（stop/target 为 NULL，XABCD 全 None）
         (
             now_ms - 60_000, "ETH", "4h", "forming", "Bat", "short",
             3500.0, None, None, None, None, None,
             None, 0.65, "?", "", "BC=0.886", 3450.0, 3550.0,
+            None, None, None, None, None, None, None, None, None, None,
         ),
-    )
-    s.conn.commit()
+    ])
     return s, now_ms
 
 
@@ -948,7 +956,8 @@ def test_build_harmonic_state_no_table():
 
 def test_build_harmonic_state_row_fields():
     """每行 dict 含规定列：ts/coin/tf/kind/pattern/direction/price/entry_lo/entry_hi/
-    stop/target1/target2/rr/confidence/knn/orderflow/fib_note/prz_lo/prz_hi。"""
+    stop/target1/target2/rr/confidence/knn/orderflow/fib_note/prz_lo/prz_hi
+    以及 XABCD 点坐标列（v2 新增）。"""
     s, now_ms = _store_with_harmonic()
     state = build_harmonic_state(s, now_ms)
     s.close()
@@ -957,6 +966,9 @@ def test_build_harmonic_state_row_fields():
         "ts", "coin", "tf", "kind", "pattern", "direction", "price",
         "entry_lo", "entry_hi", "stop", "target1", "target2", "rr",
         "confidence", "knn", "orderflow", "fib_note", "prz_lo", "prz_hi",
+        # XABCD 点（v2 新增，forming 行为 None）
+        "x_idx", "x_px", "a_idx", "a_px", "b_idx", "b_px",
+        "c_idx", "c_px", "d_idx", "d_px",
     ]
     for row in state["completed"] + state["forming"]:
         for f in expected_fields:
@@ -1163,17 +1175,16 @@ def _store_with_harmonic_tradfi() -> tuple:
     s = Store(__import__("pathlib").Path(d) / "t.db")
     now_ms = 1_700_000_000_000
 
-    s.conn.executescript(_HARMONIC_SCHEMA)
-    # XAU = TradFi
-    s.conn.execute(
-        "INSERT INTO harmonic_setups VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+    # XAU = TradFi，29 列
+    s.insert_harmonic_setups([
         (
             now_ms - 60_000, "XAU", "1h", "completed", "Gartley", "long",
             2350.0, 2340.0, 2350.0, 2300.0, 2400.0, 2450.0,
             2.0, 0.78, "✓", "✓ 买压", "XA=0.618", 2330.0, 2360.0,
+            # XABCD 点（示例）
+            1, 2200.0, 10, 2450.0, 15, 2280.0, 20, 2420.0, 25, 2340.0,
         ),
-    )
-    s.conn.commit()
+    ])
     return s, now_ms
 
 
