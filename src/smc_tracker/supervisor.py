@@ -43,14 +43,21 @@ async def supervise(
         start = asyncio.get_event_loop().time()
         try:
             await factory()
-            # 正常返回（不应发生——periodic 永不结束）
+            # 正常返回（periodic 任务本应永不结束）
             elapsed = asyncio.get_event_loop().time() - start
+            # 立即正常返回（elapsed < base_backoff）= no-op/禁用任务主动结束
+            # （如 LLM disabled / ticker_board 某条件直接 return）。此时按 base_backoff
+            # 反复重启会造成 busy-loop（实跑暴露：ticker_board/llm 每 1s 刷屏空转 CPU）。
+            # 任务主动结束 = 它选择不运行 → 停止监督，不再重启。
+            if elapsed < base_backoff:
+                log.info("supervisor[%s] 任务立即正常返回（elapsed=%.2fs，疑似 no-op/禁用），停止监督",
+                         name, elapsed)
+                return
             if elapsed >= reset_after:
                 error_count = 0
-            log.info("supervisor[%s] 任务正常返回（elapsed=%.1fs），%ss 后重启",
+            log.info("supervisor[%s] 任务正常返回（elapsed=%.1fs），%.1fs 后重启",
                      name, elapsed, base_backoff)
-            backoff = _calc_backoff(0, base_backoff, max_backoff)
-            await asyncio.sleep(backoff)
+            await asyncio.sleep(base_backoff)
         except asyncio.CancelledError:
             # 响应 stop()：向上传播，不吞
             log.debug("supervisor[%s] 收到 CancelledError，向上传播", name)

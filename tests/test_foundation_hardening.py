@@ -359,6 +359,32 @@ async def test_supervise_cancelled_propagates():
 
 
 @pytest.mark.asyncio
+async def test_supervise_stops_on_immediate_noop_return():
+    """立即正常返回的 no-op/禁用任务 → supervise 停止监督（不 busy-loop）。
+
+    回归：实跑暴露 ticker_board/llm 禁用时直接 return，被 supervise 每 base_backoff(1s)
+    疯狂重启刷屏空转 CPU。修复后立即正常返回（elapsed < base_backoff）→ 停止监督。
+    用 wait_for 超时检测：未修时 supervise 永不返回 → TimeoutError；修复后有限返回。
+    """
+    call_count = 0
+
+    async def factory():
+        nonlocal call_count
+        call_count += 1
+        # 立即返回（no-op，如 disabled 任务直接 return）—— 不 sleep、不抛异常
+
+    import logging
+    _log = logging.getLogger("test_supervise_noop")
+
+    # supervise 应在有限时间内返回（停止监督），而非无限 busy-loop
+    await asyncio.wait_for(
+        supervise(factory, name="noop_test", base_backoff=0.05, log=_log),
+        timeout=1.0,
+    )
+    assert call_count == 1   # 只调用 1 次后停止监督（不重启）
+
+
+@pytest.mark.asyncio
 async def test_supervise_backoff_resets_after_success():
     """连续成功运行 > reset_after 后再崩 → 退避从 base 复位（不累积）。"""
     call_log: list[str] = []
