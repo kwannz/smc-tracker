@@ -3127,7 +3127,7 @@ function renderEvents(s){{
     const col=isL?'var(--long)':'var(--short)';
     return '<div class="hl-event-row">'
       +'<div class="hl-event-icon" style="background:'+bg+';color:'+col+'">'
-      +'<span>'+esc(r.label||'🐋')+'</span>'
+      +'<span>'+esc(String(r.label||'🐋').split('(')[0])+'</span>'
       +'<span style="font-size:9px">'+(isL?'多':'空')+'</span>'
       +'</div>'
       +'<div class="hl-event-body">'
