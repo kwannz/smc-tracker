@@ -30,8 +30,9 @@ from .llm import build_analyst
 from .memecoins import normalize
 from .monitor import (AddressMonitor, BitgetOIMonitor, EventType, HLOrderbookMonitor,
                       MemeTradeMonitor, SmartMoneyEvent)
-from .monitor.whale_discovery import discover_smart_money
+from .monitor.whale_discovery import discover_smart_money, fetch_leaderboard_rows
 from .monitor.address_correlation import AddressCorrelation
+from .monitor.whale_momentum import WhaleMomentum, pnl_rows_from
 from .monitor.wallet_portfolio import WalletPortfolio
 from .notify import HLDigest, build_notifier, build_report
 from .onchain import (ExchangeFlowMonitor, OnchainMemeMonitor, SolanaSupplyMonitor,
@@ -179,6 +180,9 @@ class TradingSystem:
 
         # ---- 钱包持仓画像管理器 ----
         self.wallet_portfolio = WalletPortfolio(store, cfg.hyperliquid.rest_url)
+
+        # ---- 庄 PnL 动量快照写手（streaming 接入，解决 whale_pnl_snapshots 永空）----
+        self.whale_momentum = WhaleMomentum(store)
 
         # ---- 预测正确性回顾校准层 ----
         self.review = PredictionReview(store)
@@ -840,7 +844,6 @@ class TradingSystem:
         单币人群(coins=1)降级为「疑似拉盘人群」标注，避免把追涨散户误判为庄家集团。
         """
         while not self._stopping:
-            await asyncio.sleep(every)
             now = int(time.time() * 1000)
             try:
                 # min_coins=2：要求跨≥2 个不同币协同——跨市场协同是同一实体的硬证据，
@@ -849,6 +852,7 @@ class TradingSystem:
                     now - 1_800_000, window_sec=120, min_shared=3, min_coins=2)
             except Exception as e:  # noqa: BLE001
                 log.warning("关联扫描失败: %s", e)
+                await asyncio.sleep(every)
                 continue
             for d in groups:
                 g = d["members"]
@@ -877,18 +881,22 @@ class TradingSystem:
                        + rel_s + leader_s)
                 print(f"\n{'='*60}\n{msg}\n{'='*60}\n")
                 self._push(msg)
+            await asyncio.sleep(every)
 
     async def _periodic_report(self, every: float = 3600.0) -> None:
         """周期摘要日报：控制台打印 + webhook 推送。"""
         while not self._stopping:
+            try:
+                now = int(time.time() * 1000)
+                report = build_report(self.store, now - int(every * 1000), now)
+                lat = self.latency.fmt()              # 热路径延迟实测(P50/P99/max)
+                if lat:
+                    report += f"\n\n⏱️ 热路径延迟(实测):\n{lat}"
+                print(f"\n{report}\n")
+                self._push(report)
+            except Exception as e:  # noqa: BLE001
+                log.warning("周期日报任务失败: %s", e)
             await asyncio.sleep(every)
-            now = int(time.time() * 1000)
-            report = build_report(self.store, now - int(every * 1000), now)
-            lat = self.latency.fmt()              # 热路径延迟实测(P50/P99/max)
-            if lat:
-                report += f"\n\n⏱️ 热路径延迟(实测):\n{lat}"
-            print(f"\n{report}\n")
-            self._push(report)
 
     def _hardcoded_context(self, now: int) -> str:
         """汇总硬编码核心算法产出(庄家集团 + 聪明钱筛选 Top)，供 LLM 分析层研判。
@@ -938,24 +946,33 @@ class TradingSystem:
                 self._push(msg)
 
     async def _periodic_consensus(self, every: float = 90.0) -> None:
-        """多庄共识扫描 + 庄持仓面板（谁在多/空什么）。"""
+        """多庄共识扫描 + 庄持仓面板（谁在多/空什么）。
+
+        首轮短延迟（依赖 webData2 异步填充地址持仓，至少等 30s 让播种完成）；之后 work-first。
+        """
+        # 首轮短延迟：地址持仓由 WS webData2 异步播种，需等片刻才有数据
+        await asyncio.sleep(min(every, 30.0))
         while not self._stopping:
-            await asyncio.sleep(every)
             positions = self.address_monitor.all_positions()
             if not positions or not self._mids:
+                await asyncio.sleep(every)
                 continue
             labels = {a: self.address_monitor.label_of(a) for (a, _c) in positions}
             now = int(time.time() * 1000)
-            self.consensus.scan(positions, self._mids, labels, now)
-            self.pos_tracker.scan(positions, self._mids, labels, now)   # 平仓/反手/减仓预警
-            self.confluence.scan(now)                                   # 多信号叠加共振
-            panel = positioning(positions, self._mids, labels)[:6]
-            if panel:
-                print(f"[{_hms()}] 📋 庄持仓面板(净名义Top):")
-                for p in panel:
-                    side = "净多🟢" if p.net_notional >= 0 else "净空🔴"
-                    print(f"     {p.coin:<8} {side} ${abs(p.net_notional):,.0f} "
-                          f"(多{p.n_long}/空{p.n_short})")
+            try:
+                self.consensus.scan(positions, self._mids, labels, now)
+                self.pos_tracker.scan(positions, self._mids, labels, now)   # 平仓/反手/减仓预警
+                self.confluence.scan(now)                                   # 多信号叠加共振
+                panel = positioning(positions, self._mids, labels)[:6]
+                if panel:
+                    print(f"[{_hms()}] 📋 庄持仓面板(净名义Top):")
+                    for p in panel:
+                        side = "净多🟢" if p.net_notional >= 0 else "净空🔴"
+                        print(f"     {p.coin:<8} {side} ${abs(p.net_notional):,.0f} "
+                              f"(多{p.n_long}/空{p.n_short})")
+            except Exception as e:  # noqa: BLE001
+                log.warning("共识扫描失败: %s", e)
+            await asyncio.sleep(every)
 
     async def _periodic_divergence(self, every: float = 60.0) -> None:
         """三源背离扫描：逐 meme 比对 CEX 资金费/OI 与 DEX 聪明钱流向。"""
@@ -982,7 +999,6 @@ class TradingSystem:
         报告仅当 evaluate_due 实际评估到条目时推送，避免空推扰频道。
         """
         while not self._stopping:
-            await asyncio.sleep(every)
             now = int(time.time() * 1000)
 
             # 构造 price_of：优先 HL allMids，回退 Bitget OI 标记价
@@ -1008,6 +1024,7 @@ class TradingSystem:
                     print(f"\n{'='*60}\n{summary}\n{'='*60}\n")
             except Exception as exc:  # noqa: BLE001 — 回顾失败不影响监控热路径
                 log.warning("预测回顾任务失败: %s", exc)
+            await asyncio.sleep(every)
 
     async def _periodic_efficacy(self, every: float = 1800.0) -> None:
         """信号有效性自适应加权刷新：定期从 predictions 表读取历史评估，更新各 kind 权重。
@@ -1015,7 +1032,6 @@ class TradingSystem:
         仅当任一 kind 达到 min_sample 才推送（避免空推/噪声）；失败不影响监控热路径。
         """
         while not self._stopping:
-            await asyncio.sleep(every)
             now = int(time.time() * 1000)
             try:
                 table = self.efficacy.refresh(now)
@@ -1027,6 +1043,7 @@ class TradingSystem:
                     self._push("📈 信号有效性(实证自适应):\n" + fmt)
             except Exception as exc:  # noqa: BLE001 — 失败不影响监控热路径
                 log.warning("信号有效性刷新失败: %s", exc)
+            await asyncio.sleep(every)
 
     # ---- 配置热加载 ----
 
@@ -1128,7 +1145,6 @@ class TradingSystem:
         聚合 WS/延迟/内存/数据新鲜度 → 中文摘要。纯本地查询，失败不影响监控热路径。
         """
         while not self._stopping:
-            await asyncio.sleep(every)
             try:
                 now = int(time.time() * 1000)
                 snap = self.health.snapshot(now)
@@ -1140,6 +1156,7 @@ class TradingSystem:
                 # ok 时静默不推送（避免噪声）
             except Exception as exc:  # noqa: BLE001 — 健康检查失败不影响监控
                 log.warning("健康检查任务失败: %s", exc)
+            await asyncio.sleep(every)
 
     async def _periodic_hl_digest(self, every: float = 0.0) -> None:
         """周期推送 **HL 抓庄分类汇总卡片**：把窗内零散 HL 事件按分类合并成一张卡片（降噪去刷屏）。
@@ -1151,11 +1168,14 @@ class TradingSystem:
             return
         period = every or self.cfg.digest.interval_sec
         while not self._stopping:
+            try:
+                card = self.hl_digest.render(int(time.time() * 1000))
+                if card:
+                    print(card)
+                    self._push(card)
+            except Exception as e:  # noqa: BLE001
+                log.warning("HL digest 推送失败: %s", e)
             await asyncio.sleep(period)
-            card = self.hl_digest.render(int(time.time() * 1000))
-            if card:
-                print(card)
-                self._push(card)
 
     async def _periodic_ticker_board(self, every: float = 300.0) -> None:
         """周期推送行情监控板：价格/涨跌幅/资金费率/OI（每 5 分钟）。
@@ -1278,8 +1298,8 @@ class TradingSystem:
     async def _periodic_wallet_portfolio(self, every: float = 300.0) -> None:
         """钱包完整持仓画像周期刷新（每 5 分钟）：拉全量持仓、落库、控制台打印+推送。"""
         while not self._stopping:
-            await asyncio.sleep(every)
             if not self.cfg.watchlist:
+                await asyncio.sleep(every)
                 continue
             now = int(time.time() * 1000)
             try:
@@ -1294,6 +1314,7 @@ class TradingSystem:
                     self._push(fmt)
             except Exception as e:  # noqa: BLE001
                 log.warning("钱包持仓画像刷新失败: %s", e)
+            await asyncio.sleep(every)
 
     async def _periodic_exchange_flow(self, every: float = 3600.0) -> None:
         """交易所链上资金流监控（BTC，keyless blockstream）：每小时核对各所 24h 净流入/流出。
@@ -1303,20 +1324,69 @@ class TradingSystem:
         if self.exchange_flow is None:
             return
         while not self._stopping:
-            await asyncio.sleep(every)
             now = int(time.time() * 1000)
             try:
                 rows = await self.exchange_flow.poll_once(now)
+                for row in rows:
+                    arrow = "净流入🔴" if row["net"] >= 0 else "净流出🟢"
+                    print(f"[{_hms(now)}] 🏦 [交易所流] {row['exchange']} {row['chain']} "
+                          f"{arrow} {abs(row['net']):,.0f} BTC "
+                          f"(入{row['inflow']:,.0f}/出{row['outflow']:,.0f})")
+                    if row.get("alert"):
+                        self._push(f"[{_ts(now)}] {fmt_flow_alert(row)}")
             except Exception as e:  # noqa: BLE001 — 资金流轮询失败不影响监控
                 log.warning("交易所资金流轮询失败: %s", e)
-                continue
-            for row in rows:
-                arrow = "净流入🔴" if row["net"] >= 0 else "净流出🟢"
-                print(f"[{_hms(now)}] 🏦 [交易所流] {row['exchange']} {row['chain']} "
-                      f"{arrow} {abs(row['net']):,.0f} BTC "
-                      f"(入{row['inflow']:,.0f}/出{row['outflow']:,.0f})")
-                if row.get("alert"):
-                    self._push(f"[{_ts(now)}] {fmt_flow_alert(row)}")
+            await asyncio.sleep(every)
+
+    async def _periodic_whale_pnl(self, every: float = 300.0) -> None:
+        """庄 PnL 快照周期落库（每 5 分钟）：从排行榜拉 PnL 写 whale_pnl_snapshots 表。
+
+        解决审计发现的 streaming 从未接入 WhaleMomentum → 表永空 → dashboard 健康报"空表"问题。
+        work-first：启动后先落一次数据，再进入周期睡眠。失败 log.warning 不崩。
+        注：排行榜拉取约 16MB，需要网络，首次与 _seed 并发（_seed 完成后 run() 调度）。
+        """
+        while not self._stopping:
+            now = int(time.time() * 1000)
+            try:
+                rows = await fetch_leaderboard_rows()
+                if rows:
+                    pnl_rows = pnl_rows_from(rows, top_n=50)
+                    if pnl_rows:
+                        self.whale_momentum.snapshot(pnl_rows, now)
+                        log.info("庄 PnL 快照落库 %d 条", len(pnl_rows))
+            except Exception as e:  # noqa: BLE001
+                log.warning("庄 PnL 快照失败: %s", e)
+            await asyncio.sleep(every)
+
+    async def _periodic_discover(self, every: float = 3600.0) -> None:
+        """周期排行榜发现新聪明钱（每 1 小时）：即使 watchlist 非空也定期拉排行榜刷新候选庄。
+
+        解决审计发现的 discover_smart_money 只在 watchlist 为空时运行 → 排行榜永不刷新 →
+        健康巡检报"排行榜缓存未建立"。新发现地址 merge 进 watchlist + 订阅监控 + 落库。
+        work-first：启动后先跑一次（与 _seed 错开 30s，避免重叠网络）。
+        """
+        # 等 _seed 播种完成后再首轮发现（避免与播种并发争 REST 带宽）
+        await asyncio.sleep(30.0)
+        while not self._stopping:
+            now = int(time.time() * 1000)
+            try:
+                discovered = await discover_smart_money(top_n=15)
+                existing = {w.address.lower() for w in self.cfg.watchlist}
+                added = 0
+                for w in discovered:
+                    if w.address.lower() not in existing:
+                        self.cfg.watchlist.append(w)
+                        existing.add(w.address.lower())
+                        self.address_monitor.subscribe_address(w)
+                        self.store.upsert_wallet(w.address, w.label, "discover", now)
+                        added += 1
+                if added:
+                    log.info("排行榜周期发现新庄地址 %d 个", added)
+                else:
+                    log.debug("排行榜周期发现：无新增地址（watchlist=%d）", len(self.cfg.watchlist))
+            except Exception as e:  # noqa: BLE001
+                log.warning("排行榜周期发现失败: %s", e)
+            await asyncio.sleep(every)
 
     async def run(self) -> None:
         await self._seed()
@@ -1366,6 +1436,8 @@ class TradingSystem:
             self._periodic_bb_board(),
             self._periodic_harmonic_board(),
             self._periodic_candle_collect(),
+            self._periodic_whale_pnl(),
+            self._periodic_discover(),
             self._periodic_push_drain(),
         )
 

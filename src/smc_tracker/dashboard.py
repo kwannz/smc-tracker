@@ -1030,8 +1030,11 @@ _HARMONIC_KEYS = [
 def build_harmonic_state(store: Any, now_ms: int) -> dict:
     """从 store.conn 查询 harmonic_setups，分 completed/forming 两组返回 dict。
 
+    每行含 asset_class 字段（'tradfi'/'crypto'），用于前端渲染徽章。
     表不存在/为空时各组返回 []，不抛异常（防御性查询）。
     """
+    from .asset_class import asset_class as _asset_class  # 延迟导入，避免循环
+
     gen_str = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(now_ms / 1000))
 
     rows = _safe_rows(
@@ -1046,6 +1049,8 @@ def build_harmonic_state(store: Any, now_ms: int) -> dict:
     forming: list[dict] = []
     for r in rows:
         d = _row_to_dict(r, _HARMONIC_KEYS)
+        # 注入资产类别（TradFi/加密），供前端显示徽章
+        d["asset_class"] = _asset_class(d.get("coin") or "")
         if d.get("kind") == "completed":
             completed.append(d)
         else:
@@ -1103,6 +1108,25 @@ tr:hover td{{background:rgba(255,255,255,.03)}}
 .knn-ok{{color:var(--green)}} .knn-no{{color:var(--muted)}} .knn-unk{{color:var(--yellow)}}
 .of-ok{{color:var(--green)}} .of-no{{color:var(--muted)}}
 #refresh-bar{{font-size:11px;color:var(--muted);padding:4px 24px;border-top:1px solid var(--border)}}
+/* 资产类别徽章 */
+.badge-tradfi{{display:inline-block;padding:1px 5px;border-radius:3px;font-size:10px;
+  font-weight:700;background:#3a2400;color:var(--orange);margin-right:3px}}
+.badge-crypto{{display:inline-block;padding:1px 5px;border-radius:3px;font-size:10px;
+  font-weight:700;background:#0e1f3a;color:var(--blue);margin-right:3px}}
+/* 傻瓜版解释面板 */
+details.explainer{{margin:12px 16px;background:#111820;border:1px solid #2a3f55;
+  border-radius:6px;overflow:hidden}}
+details.explainer summary{{padding:10px 14px;cursor:pointer;font-weight:700;
+  color:var(--blue);font-size:13px;list-style:none;user-select:none}}
+details.explainer summary::-webkit-details-marker{{display:none}}
+details.explainer summary::before{{content:"▶ ";font-size:10px;color:var(--muted)}}
+details[open].explainer summary::before{{content:"▼ ";font-size:10px;color:var(--muted)}}
+.explainer-body{{padding:12px 16px;color:var(--text);font-size:12px;line-height:1.8;
+  border-top:1px solid #2a3f55}}
+.explainer-body dt{{font-weight:700;color:var(--yellow);margin-top:8px}}
+.explainer-body dd{{margin-left:12px;color:var(--text)}}
+.explainer-honest{{margin-top:10px;padding:8px 10px;background:#1c1a10;
+  border-left:3px solid var(--yellow);color:var(--muted);font-size:11px}}
 </style>
 </head>
 <body>
@@ -1111,6 +1135,55 @@ tr:hover td{{background:rgba(255,255,255,.03)}}
   <span id="meta">加载中…</span>
   <a class="nav-link" href="/">← HL 主页</a>
 </header>
+
+<!-- 傻瓜版解释面板（默认展开，可折叠） -->
+<details class="explainer" open>
+  <summary>📖 名词傻瓜解释（点击收起）</summary>
+  <div class="explainer-body">
+    <dl>
+      <dt>看多 / 看空</dt>
+      <dd>看多 = 预期价格上涨，参考买入方向；看空 = 预期价格下跌，参考卖出方向。</dd>
+
+      <dt>完整形态（入场触发）</dt>
+      <dd>形态已走完 D 点，现在是参考入场区（<strong>反应式信号</strong>，价格已到达 PRZ，可观察是否反转确认）。</dd>
+
+      <dt>成形中（前瞻 PRZ）</dt>
+      <dd>形态尚未走完，系统<strong>前瞻预测</strong>未来反转区（PRZ）的价格范围。价格还没到，是预判性信号，不是当前入场点。</dd>
+
+      <dt>斐波那契 / fib_note</dt>
+      <dd>谐波形态本身基于斐波那契比率（0.618、0.786、0.886 等）定义 D 点/PRZ 位置。fib_note 列显示当前形态用到的具体 Fib 比率。</dd>
+
+      <dt>🏦TradFi 徽章</dt>
+      <dd>标的为 Bitget 代币化传统金融资产（美股/ETF/贵金属等，如 XAU、SOXL、AAPL），行情逻辑与原生加密不同。</dd>
+
+      <dt>₿加密 徽章</dt>
+      <dd>标的为原生加密货币（BTC/ETH/SOL 等），Bitget 永续合约。</dd>
+
+      <dt>进场区（entry_lo ~ entry_hi）</dt>
+      <dd>建议参考入场的价格区间（PRZ 范围内）。不是固定点，需结合当前成交量/订单流确认后再考虑介入。</dd>
+
+      <dt>止损（stop）</dt>
+      <dd>一旦价格跌破/突破此位，形态失效，应立即止损离场，不拖延。</dd>
+
+      <dt>止盈（target1 / target2）</dt>
+      <dd>形态结构给出的两个参考目标位（target1=保守，target2=扩展）。可分批止盈。</dd>
+
+      <dt>盈亏比（RR）</dt>
+      <dd>= (目标1 - 进场) / (进场 - 止损)。RR≥2 意味着赔 1 赚 2，是风险管理基础要求。</dd>
+
+      <dt>订单流✓（orderflow）</dt>
+      <dd>该价位附近有大挂单墙或成交量失衡确认（<strong>领先意图信号</strong>，优先于价格）。注意挂单墙可能 spoof（虚假挂单），需结合实际成交判断。</dd>
+
+      <dt>KNN（≈随机基线，仅辅助）</dt>
+      <dd>历史相似形态的方向参考。诚实标注：历史 KNN 命中率接近随机（无真实 alpha），仅供辅助参考，不可单独依赖。</dd>
+    </dl>
+    <div class="explainer-honest">
+      ⚠️ <strong>诚实声明：以上为确认层参考工具，非投资建议。</strong>
+      谐波形态 + 订单流确认提高概率，但不保证盈利；KNN ≈ 随机基线仅辅助；
+      止损必须执行，价格进入进场区不等于必然反转。
+    </div>
+  </div>
+</details>
 
 <div class="disclaimer">
   ⚠️ <strong>确认层非投资建议</strong>：谐波PRZ前瞻 × 订单流确认；
@@ -1171,6 +1244,12 @@ function ofTag(v){{
   return'<span class="of-no">'+v+'</span>';
 }}
 
+// 资产类别徽章：tradfi → 🏦TradFi（橙色）；crypto → ₿加密（蓝色）
+function badgeHtml(ac){{
+  if(ac==='tradfi')return'<span class="badge-tradfi">🏦TradFi</span>';
+  return'<span class="badge-crypto">₿加密</span>';
+}}
+
 // 进场区间 "entry_lo ~ entry_hi"，NULL 安全
 function fmtRange(lo,hi){{
   if(lo==null&&hi==null)return'—';
@@ -1183,12 +1262,13 @@ function fmtRange(lo,hi){{
 function renderCompleted(rows){{
   if(!rows||!rows.length)return none();
   let h='<table><tr>'
-      +'<th>币/周期</th><th>形态</th><th>方向</th><th>进场区</th>'
+      +'<th>类别</th><th>币/周期</th><th>形态</th><th>方向</th><th>进场区</th>'
       +'<th>止损</th><th>目标1</th><th>目标2</th><th>盈亏比</th>'
       +'<th>置信</th><th>KNN</th><th>订单流</th>'
       +'</tr>';
   rows.forEach(r=>{{
     h+='<tr>'
+      +'<td>'+badgeHtml(r.asset_class||'crypto')+'</td>'
       +'<td><span class="coin">'+r.coin+'</span>'
       +' <span style="color:var(--muted);font-size:11px">'+r.tf+'</span></td>'
       +'<td>'+r.pattern+'</td>'
@@ -1210,10 +1290,11 @@ function renderCompleted(rows){{
 function renderForming(rows){{
   if(!rows||!rows.length)return none();
   let h='<table><tr>'
-      +'<th>币/周期</th><th>形态</th><th>方向</th><th>PRZ 区间</th><th>置信</th>'
+      +'<th>类别</th><th>币/周期</th><th>形态</th><th>方向</th><th>PRZ 区间</th><th>置信</th>'
       +'</tr>';
   rows.forEach(r=>{{
     h+='<tr>'
+      +'<td>'+badgeHtml(r.asset_class||'crypto')+'</td>'
       +'<td><span class="coin">'+r.coin+'</span>'
       +' <span style="color:var(--muted);font-size:11px">'+r.tf+'</span></td>'
       +'<td>'+r.pattern+'</td>'

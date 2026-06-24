@@ -5,10 +5,13 @@
 """
 from __future__ import annotations
 
+import logging
 import math
 from typing import Any, Callable
 
 from .util import fmt_ts, to_float
+
+log = logging.getLogger(__name__)
 
 # realized_ret 离群阈值：|ret|>10(=1000%) 几乎必为 emit/eval 单位错配/陈旧价，非真实行情（#98）。
 _RET_OUTLIER = 10.0
@@ -241,10 +244,12 @@ class PredictionReview:
         ).fetchall()
 
         evaluated_count = 0
+        skipped_no_price: int = 0
         for row_id, coin, direction, px_emit, ts, horizon_ms in rows:
             px = price_of(coin)
             px_f = to_float(px, 0.0) if px is not None else 0.0
             if px_f <= 0:
+                skipped_no_price += 1
                 continue  # 当前价格无效，跳过（留待下次）
 
             realized_ret = (px_f - px_emit) / px_emit if px_emit > 0 else 0.0
@@ -266,6 +271,10 @@ class PredictionReview:
             )
             evaluated_count += 1
 
+        # 可见性：静默跳过变显式日志，消除审计发现的静默漏评（无价格可用）
+        if skipped_no_price > 0:
+            log.info("evaluate_due: 评估 %d 条，另 %d 条因无价格跳过（留待下次）",
+                     evaluated_count, skipped_no_price)
         return evaluated_count
 
     # ---- 准确率聚合报告 ----

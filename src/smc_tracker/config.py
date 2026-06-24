@@ -141,10 +141,12 @@ class HarmonicCfg:
     """
     enabled: bool = True
     interval_sec: float = 900.0
+    # 用户#：谐波 7 周期 15m/1h/4h/8h/12h/1d/1w；但 Bitget **不支持 8H**(实证 code 400171)，
+    # 用最接近的 6H 替代（Bitget 支持 6H/12H，无 8H）。
     timeframes: list[str] = field(
-        default_factory=lambda: ["15m", "1H", "4H", "12H", "1D", "1W"]
+        default_factory=lambda: ["15m", "1H", "4H", "6H", "12H", "1D", "1W"]
     )
-    bars: int = 1000                     # 用户#：固定 1000（谐波需 ~60-150 根；大周期取可得历史，429 退避兜底）
+    bars: int = 2500                     # 用户#：每周期保留 2500 bar（历史+实时，不强制；大周期取可得）
     order: int = 3
     tol: float = 0.05
     top_n: int = 12

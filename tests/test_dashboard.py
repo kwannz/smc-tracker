@@ -1124,6 +1124,185 @@ def test_existing_render_html_unchanged():
     assert "/api/harmonic" not in html
 
 
+# ---------------------------------------------------------------------------
+# 新测试：谐波页 asset_class 徽章 + 傻瓜版解释（TDD RED：功能未实现时失败）
+# ---------------------------------------------------------------------------
+
+def test_build_harmonic_state_has_asset_class_field():
+    """build_harmonic_state 每项应含 asset_class 字段（'tradfi' 或 'crypto'）。
+
+    RED：dashboard.py 尚未加 asset_class 字段时，此测试失败。
+    """
+    s, now_ms = _store_with_harmonic()
+    state = build_harmonic_state(s, now_ms)
+    s.close()
+
+    for row in state["completed"] + state["forming"]:
+        assert "asset_class" in row, f"row 缺少 asset_class 字段: {row}"
+        assert row["asset_class"] in ("tradfi", "crypto"), (
+            f"asset_class 应为 'tradfi' 或 'crypto'，实得: {row['asset_class']!r}"
+        )
+
+
+def test_build_harmonic_state_btc_is_crypto():
+    """BTC → asset_class='crypto'。"""
+    s, now_ms = _store_with_harmonic()
+    state = build_harmonic_state(s, now_ms)
+    s.close()
+
+    btc_rows = [r for r in state["completed"] if r["coin"] == "BTC"]
+    assert btc_rows, "应有 BTC completed 行"
+    assert btc_rows[0]["asset_class"] == "crypto", (
+        f"BTC asset_class 应为 'crypto'，实得: {btc_rows[0]['asset_class']!r}"
+    )
+
+
+def _store_with_harmonic_tradfi() -> tuple:
+    """建含 harmonic_setups + XAU(TradFi) coin 的临时 Store。"""
+    d = __import__("tempfile").mkdtemp()
+    s = Store(__import__("pathlib").Path(d) / "t.db")
+    now_ms = 1_700_000_000_000
+
+    s.conn.executescript(_HARMONIC_SCHEMA)
+    # XAU = TradFi
+    s.conn.execute(
+        "INSERT INTO harmonic_setups VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        (
+            now_ms - 60_000, "XAU", "1h", "completed", "Gartley", "long",
+            2350.0, 2340.0, 2350.0, 2300.0, 2400.0, 2450.0,
+            2.0, 0.78, "✓", "✓ 买压", "XA=0.618", 2330.0, 2360.0,
+        ),
+    )
+    s.conn.commit()
+    return s, now_ms
+
+
+def test_build_harmonic_state_xau_is_tradfi():
+    """XAU（黄金） → asset_class='tradfi'。"""
+    s, now_ms = _store_with_harmonic_tradfi()
+    state = build_harmonic_state(s, now_ms)
+    s.close()
+
+    xau_rows = [r for r in state["completed"] if r["coin"] == "XAU"]
+    assert xau_rows, "应有 XAU completed 行"
+    assert xau_rows[0]["asset_class"] == "tradfi", (
+        f"XAU asset_class 应为 'tradfi'，实得: {xau_rows[0]['asset_class']!r}"
+    )
+
+
+def test_render_harmonic_html_contains_tradfi_badge():
+    """render_harmonic_html（含 XAU）应含「TradFi」徽章字样。"""
+    s, now_ms = _store_with_harmonic_tradfi()
+    state = build_harmonic_state(s, now_ms)
+    s.close()
+
+    html = render_harmonic_html(state)
+    assert "TradFi" in html, "谐波 HTML 应含 TradFi 徽章字样（XAU 行）"
+
+
+def test_render_harmonic_html_contains_crypto_badge():
+    """render_harmonic_html（含 BTC/ETH）应含「加密」徽章字样。"""
+    s, now_ms = _store_with_harmonic()
+    state = build_harmonic_state(s, now_ms)
+    s.close()
+
+    html = render_harmonic_html(state)
+    assert "加密" in html, "谐波 HTML 应含加密徽章字样（BTC/ETH 行）"
+
+
+def test_render_harmonic_html_has_explainer_panel():
+    """render_harmonic_html 应含傻瓜版解释折叠块（通俗中文解释）。
+
+    要求含：看多/前瞻/斐波那契 解释字样。
+    """
+    s, now_ms = _store_with_harmonic()
+    state = build_harmonic_state(s, now_ms)
+    s.close()
+
+    html = render_harmonic_html(state)
+    assert "看多" in html, "解释面板应含「看多」"
+    assert "前瞻" in html, "解释面板应含「前瞻」"
+    assert "斐波那契" in html, "解释面板应含「斐波那契」"
+
+
+def test_render_harmonic_html_explainer_covers_entry_and_knn():
+    """解释面板应覆盖进场/止损/止盈/KNN/订单流的一句话解释。"""
+    s, now_ms = _store_with_harmonic()
+    state = build_harmonic_state(s, now_ms)
+    s.close()
+
+    html = render_harmonic_html(state)
+    # KNN 解释（≈随机基线，仅辅助）
+    assert "KNN" in html, "解释面板应含 KNN 说明"
+    # 订单流解释（领先意图）
+    assert "订单流" in html, "解释面板应含订单流说明"
+
+
+def test_render_harmonic_html_honest_disclaimer_in_explainer():
+    """解释面板应有诚实声明（非投资建议）。"""
+    s, now_ms = _store_with_harmonic()
+    state = build_harmonic_state(s, now_ms)
+    s.close()
+
+    html = render_harmonic_html(state)
+    assert "非投资建议" in html, "解释面板应有诚实声明"
+
+
+def test_render_harmonic_html_badge_in_table_rows():
+    """谐波表格行（coin 列）应含徽章 HTML（区分 TradFi/加密）。
+
+    含 XAU(TradFi) 的 state → HTML 中「TradFi」在表格行里。
+    """
+    s, now_ms = _store_with_harmonic_tradfi()
+    state = build_harmonic_state(s, now_ms)
+    s.close()
+
+    html = render_harmonic_html(state)
+    # 徽章应通过 JS 渲染到 <td> 中，模板里定义 badgeHtml 函数即可
+    # 确认模板含「TradFi」和「加密」的 badge 定义（字符串出现在 script 里）
+    assert "TradFi" in html
+    assert "加密" in html
+
+
+def test_render_harmonic_html_no_cdn_after_new_features():
+    """加入解释面板 + 徽章后仍不含外部 CDN（自包含单页）。"""
+    s, now_ms = _store_with_harmonic_tradfi()
+    state = build_harmonic_state(s, now_ms)
+    s.close()
+
+    html = render_harmonic_html(state)
+    import re
+    for kw in ("cdn.", "unpkg.com", "jsdelivr", "googleapis"):
+        assert kw not in html, f"谐波 HTML 不应含外部资源: {kw}"
+    bad = [m for m in re.findall(r'https?://[^\s"\'<>]+', html)
+           if "w3.org/2000/svg" not in m]
+    assert not bad, f"不应含外部链接: {bad[:3]}"
+
+
+def test_existing_harmonic_tests_still_pass():
+    """新功能不破坏现有谐波测试（completed/forming 分组，生成时间，字段完整性）。"""
+    s, now_ms = _store_with_harmonic()
+    state = build_harmonic_state(s, now_ms)
+    s.close()
+
+    # 分组正确
+    assert len(state["completed"]) == 1
+    assert len(state["forming"]) == 1
+    assert state["completed"][0]["coin"] == "BTC"
+    assert state["forming"][0]["coin"] == "ETH"
+    # generated_at 存在
+    assert "generated_at" in state
+    # 所有原有字段仍存在（asset_class 是新增，不影响旧字段）
+    old_fields = [
+        "ts", "coin", "tf", "kind", "pattern", "direction", "price",
+        "entry_lo", "entry_hi", "stop", "target1", "target2", "rr",
+        "confidence", "knn", "orderflow", "fib_note", "prz_lo", "prz_hi",
+    ]
+    for row in state["completed"] + state["forming"]:
+        for f in old_fields:
+            assert f in row, f"新功能不应删除旧字段: {f}"
+
+
 if __name__ == "__main__":
     for name, fn in list(globals().items()):
         if name.startswith("test_") and callable(fn):

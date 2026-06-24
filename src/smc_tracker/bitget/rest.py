@@ -207,7 +207,7 @@ class BitgetREST:
                 f"合法值: {sorted(GRANULARITY_MS.keys())}"
             )
         # bars clamp 守卫（用户要求每个周期控制 2000 以下）
-        bars = max(1, min(bars, 1999))
+        bars = max(1, min(bars, 2500))   # 上限 2500（用户#：每周期保留 2500 bar；不强制，取可得）
         coin_label = coin if coin else symbol
 
         # ---- 第一阶段：candles 端点取最近 min(bars,1000) 根 ----
@@ -226,7 +226,7 @@ class BitgetREST:
         # 即便 limit=1000 也如此 ≈90 天上限）。故**不论 bars 是否 >1000**，只要 collected<bars
         # 就回填，直到够 bars / 无更多数据 / 达页预算上限——否则大周期(尤其 1W) 永远不足 BB 所需 21 根。
         # endTime 排他(返回其之前的根)，跨页按 open_time_ms 末尾统一去重，故无需精确计数。
-        max_pages = 6  # 页预算上限（防大周期无限翻页 + 控请求量避 429；1W≈6×13+13≈90 根足够 BB/谐波）
+        max_pages = 10  # 页预算上限（防大周期无限翻页；bars=2500 时小周期 1000+9×200 可逼近，大周期取可得）
         pages = 0
         while collected and len(collected) < bars and pages < max_pages:
             oldest_ts = min(c.open_time_ms for c in collected)
