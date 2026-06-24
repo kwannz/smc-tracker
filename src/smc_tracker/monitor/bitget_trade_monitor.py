@@ -60,7 +60,10 @@ class BitgetTradeMonitor:
     ) -> None:
         self._sym2coin = dict(sym2coin)            # {bitget_symbol: coin}
         self.ws = ws
-        self._fp = FlowPredictor(accel_scale=accel_scale, window_ms=window_ms)
+        # C.2: min_accel_samples=1（最宽松）：BitgetTradeMonitor 面向实际成交，
+        # 样本到达时间不规则；只要有至少 1 个非空 bin 即计算加速度（flow_score 有死区兜底）。
+        self._fp = FlowPredictor(accel_scale=accel_scale, window_ms=window_ms,
+                                 min_accel_samples=1)
         self._seen: set[str] = set()               # 已收到成交的 coin
         self._now_fn = now_fn or (lambda: int(time.time() * 1000))
         self._last_px: dict[str, float] = {}       # coin -> 最新成交价（供 forming 逼近用实时价）
@@ -102,11 +105,17 @@ class BitgetTradeMonitor:
         return self._last_px.get(coin)
 
     def flow_score(self, coin: str, now_ms: int | None = None) -> float | None:
-        """资金流加速度信号 ∈[-1,1]（正=加速流入=看涨）；无样本→None；噪声级→0（死区）。"""
+        """资金流加速度信号 ∈[-1,1]（正=加速流入=看涨）；无样本/不足→None；噪声级→0（死区）。
+
+        C.2: flow_acceleration 返回 float|None（样本不足降权 None）→ 直接透传 None。
+        """
         if coin not in self._seen:
             return None
         now = now_ms if now_ms is not None else self._now_fn()
         accel = self._fp.flow_acceleration(coin, now)
+        # C.2: 样本不足 → 返回 None（诚实降权，不伪造 0 加速度）
+        if accel is None:
+            return None
         score = max(-1.0, min(1.0, math.tanh(accel / self._fp.accel_scale)))
         # 死区（M1 修复）：与 FlowPredictor.threshold 哲学一致，噪声级加速度不当前瞻信号
         return 0.0 if abs(score) < _DEAD_ZONE else score

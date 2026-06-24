@@ -215,6 +215,58 @@ class BollingerCfg:
 
 
 @dataclass(slots=True)
+class CorrelationCfg:
+    """地址协同显著性阈值配置。
+
+    设计依据(B2 spec)：
+      min_lift=2.0  — 共现强度 ≥2× 随机期望才算显著（业界常用强关联阈；lift>2 排除高频偶然）；
+      max_p=0.01    — 二项右尾 p ≤1%（99% 置信非随机，闭式确定性）；
+      min_shared=3  — 协同事件至少 3 次（防单次巧合）；
+      min_coins=2   — 跨≥2 币（单币追涨人群隔离；跨币=同一实体硬证据，CLAUDE.md 点名）。
+    宽松降级：min_lift=0/max_p=1 等价旧行为（无显著性过滤）。
+    """
+    min_lift: float = 2.0       # 共现强度下限(lift >= 此值才显著)
+    max_p: float = 0.01         # 二项右尾 p 上限(p <= 此值才显著)
+    min_shared: int = 3         # 协同事件最小次数
+    min_coins: int = 2          # 最少跨币数(硬证据门槛)
+
+
+@dataclass(slots=True)
+class SmartScoreCfg:
+    """smart_money_score 权重/封顶/折扣——全部依据文档化，非魔数。
+
+    权重设计依据(CLAUDE.md 聪明钱原则):
+      w_alltime=28  : 全期 PnL 是最可靠的 edge 证明，权重最大；
+      w_month=18    : 近月盈利验证持续性，去除历史遥远运气；
+      w_consistency_all=16: 三窗皆正(周/月/全期)=持续 edge，区分一次性运气；
+      w_consistency_part=7 : 仅月+全期正=过渡状态，给予部分分数；
+      w_roi=14      : 月化 ROI=单位本金真实 alpha，区分「大资金碰运气」与「高手」；
+      w_realized=8  : 已实现盈利≠浮盈，是真实出金能力；
+      w_account=8   : 账户规模=资金认可度，辅助验证地址真实性；
+      w_winrate=8   : 聪明钱常低胜率高盈亏比，胜率权重低，仅辅助；
+    封顶设计: 防单一维度无限拉分；churn 折扣: 高成交额低方向盈亏=做市/刷量非 alpha。
+    min_trades_winrate: 胜率 Wilson 守卫触发阈(< 此值=小样本，下界大幅压缩)。
+    """
+    w_alltime: float = 28.0
+    cap_alltime: float = 50_000_000.0     # 全期 PnL 5000 万封顶
+    w_month: float = 18.0
+    cap_month: float = 10_000_000.0       # 近月 PnL 1000 万封顶
+    w_consistency_all: float = 16.0       # 三窗皆正=持续 edge
+    w_consistency_part: float = 7.0       # 仅月+全期正=过渡
+    w_roi: float = 14.0
+    cap_roi_monthly: float = 0.5          # 月化 50% 封顶(防杠杆短期爆发虚高)
+    w_realized: float = 8.0
+    w_account: float = 8.0
+    cap_account: float = 10_000_000.0     # 账户规模 1000 万封顶
+    w_winrate: float = 8.0
+    cap_winrate: float = 0.7              # 胜率 70% 封顶(聪明钱无需高胜率)
+    churn_vol_floor: float = 1_000_000.0  # 刷量判别成交额门槛(100 万 USD)
+    churn_eff_max: float = 0.001          # 方向盈亏效率上限(0.1%)，低于此=做市/刷量
+    churn_penalty: float = 0.85           # 刷量整体折扣(×0.85)
+    min_trades_winrate: int = 20          # 胜率最小样本(Wilson 守卫触发阈)
+
+
+@dataclass(slots=True)
 class HarmonicCfg:
     """Bitget 永续多周期谐波形态（Harmonic Patterns）分析配置。
 
@@ -258,6 +310,8 @@ class Config:
     bollinger: BollingerCfg = field(default_factory=BollingerCfg)
     harmonic: HarmonicCfg = field(default_factory=HarmonicCfg)
     universe: UniverseCfg = field(default_factory=UniverseCfg)
+    smart_score: SmartScoreCfg = field(default_factory=SmartScoreCfg)
+    correlation: CorrelationCfg = field(default_factory=CorrelationCfg)
 
     @classmethod
     def load(cls, path: str | Path) -> "Config":
@@ -293,6 +347,8 @@ class Config:
             bollinger=BollingerCfg(**bb_raw),
             harmonic=HarmonicCfg(**harm_raw),
             universe=UniverseCfg(**univ_raw),
+            smart_score=SmartScoreCfg(**(raw.get("smart_score") or {})),
+            correlation=CorrelationCfg(**(raw.get("correlation") or {})),
         )
 
 

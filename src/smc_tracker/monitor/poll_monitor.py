@@ -168,7 +168,7 @@ class PollMonitor:
         # 消孤儿：AddressCorrelation 被 import 但之前 run_once 从未实例化，cron 路径缺庄家集团
         groups: list[dict] = []
         try:
-            corr = AddressCorrelation(self.store)
+            corr = AddressCorrelation(self.store, cfg=self.cfg.correlation)
             since_corr = now_ms - 1_800_000   # 近 30min
             groups = corr.clusters_detailed(
                 since_corr, window_sec=120, min_shared=3, min_coins=2)
@@ -237,8 +237,8 @@ class PollMonitor:
                     else:
                         plines.append(f"  {w.label} 评分{p['score']:.0f}/100 净敞口偏{p['net_bias']} "
                                       f"近期{p['n_trades']}单 胜率{p['win_rate']*100:.0f}%")
-            cp = AddressCorrelation(self.store).counterparties(now_ms - 86_400_000,
-                                                               min_count=10, limit=3)
+            cp = AddressCorrelation(self.store, cfg=self.cfg.correlation).counterparties(
+                now_ms - 86_400_000, min_count=10, limit=3)
             if cp:
                 plines.append("🤝 高频对手方(近24h):")
                 plines += [f"  {a[:10]}…↔{b[:10]}… ×{c}" for a, b, c in cp]

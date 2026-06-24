@@ -186,8 +186,11 @@ def test_clusters_detected_in_digest():
 
     pm = PollMonitor(Config(), s)
     # 直接调 AddressCorrelation 验证集群确实被检测到
+    # 小样本测试：显式传全放行配置(等价 B2 前旧行为)，功能正确性不受统计阈值干扰
+    from smc_tracker.config import CorrelationCfg
     from smc_tracker.monitor.address_correlation import AddressCorrelation
-    corr = AddressCorrelation(s)
+    _no_filter = CorrelationCfg(min_lift=0.0, max_p=1.0, min_shared=3, min_coins=2)
+    corr = AddressCorrelation(s, cfg=_no_filter)
     since_corr = now_ms - 1_800_000
     groups = corr.clusters_detailed(since_corr, window_sec=120, min_shared=3, min_coins=2)
     # 确保合成数据产生了至少一个跨币协同群
@@ -221,7 +224,10 @@ def test_clusters_leader_in_digest():
     now_ms = 1_700_000_000_000
 
     _insert_corr_trades(s, now_ms)
-    corr = AddressCorrelation(s)
+    # 小样本测试：显式传全放行配置(等价 B2 前旧行为)
+    from smc_tracker.config import CorrelationCfg
+    _no_filter = CorrelationCfg(min_lift=0.0, max_p=1.0, min_shared=3, min_coins=2)
+    corr = AddressCorrelation(s, cfg=_no_filter)
     since_corr = now_ms - 1_800_000
     groups = corr.clusters_detailed(since_corr, window_sec=120, min_shared=3, min_coins=2)
     assert groups, "合成数据应产生至少一个群"

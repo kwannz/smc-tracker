@@ -1,4 +1,9 @@
-"""地址关联性单测：co_movers / counterparties / clusters（合成 hl_meme_trades，无网络）。"""
+"""地址关联性单测：co_movers / counterparties / clusters（合成 hl_meme_trades，无网络）。
+
+注：B2 升级后 clusters/clusters_detailed 加了显著性门(二项 null model)。
+小样本合成测试传 CorrelationCfg(min_lift=0.0, max_p=1.0) 等价旧行为（全放行），
+保证功能正确性测试不被统计阈值干扰。显著性过滤的独立测试在 test_cooccur_stats.py。
+"""
 from __future__ import annotations
 
 import sys
@@ -7,8 +12,12 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
+from smc_tracker.config import CorrelationCfg
 from smc_tracker.monitor.address_correlation import AddressCorrelation
 from smc_tracker.storage import Store
+
+# 全放行配置：等价 B2 前旧行为（无显著性过滤），用于小样本功能测试
+_NO_FILTER = CorrelationCfg(min_lift=0.0, max_p=1.0, min_shared=3, min_coins=1)
 
 
 def _trade(coin, side, buyer, seller, taker, t):
@@ -29,21 +38,23 @@ def _store_with_comovers():
 
 def test_co_movers_finds_pair():
     s = _store_with_comovers()
-    cm = AddressCorrelation(s).co_movers(since_ms=0, window_sec=60, min_shared=3)
+    # co_movers 不受显著性门影响（只按 lift 排序，min_shared 过滤）
+    cm = AddressCorrelation(s, cfg=_NO_FILTER).co_movers(since_ms=0, window_sec=60, min_shared=3)
     assert any({a, b} == {"0xA", "0xB"} and c == 4 for a, b, c in cm)
     s.close()
 
 
 def test_correlated_with():
     s = _store_with_comovers()
-    rel = AddressCorrelation(s).correlated_with("0xA", since_ms=0, min_shared=3)
+    rel = AddressCorrelation(s, cfg=_NO_FILTER).correlated_with("0xA", since_ms=0, min_shared=3)
     assert rel and rel[0][0] == "0xB"
     s.close()
 
 
 def test_clusters_union():
     s = _store_with_comovers()
-    groups = AddressCorrelation(s).clusters(since_ms=0, min_shared=3)
+    # 传 min_coins=1 + 全放行配置：等价旧行为
+    groups = AddressCorrelation(s, cfg=_NO_FILTER).clusters(since_ms=0, min_shared=3, min_coins=1)
     assert any(set(g) == {"0xA", "0xB"} for g in groups)
     s.close()
 
@@ -58,7 +69,7 @@ def test_co_movers_boundary_fix():
         rows.append(_trade("kPEPE", "B", "0xA", "0xM", "0xA", base))
         rows.append(_trade("kPEPE", "B", "0xB", "0xM", "0xB", base + 2000))  # 跨桶边界
     s.insert_hl_meme_trades(rows)
-    cm = AddressCorrelation(s).co_movers(since_ms=0, window_sec=60, min_shared=3)
+    cm = AddressCorrelation(s, cfg=_NO_FILTER).co_movers(since_ms=0, window_sec=60, min_shared=3)
     assert any({a, b} == {"0xA", "0xB"} and c == 4 for a, b, c in cm)
     s.close()
 
@@ -72,7 +83,7 @@ def test_single_coin_crowd_filtered_by_min_coins():
         for addr in ("0xA", "0xB", "0xC"):   # 三地址同窗买同一个币(像拉盘人群)
             rows.append(_trade("kPEPE", "B", addr, "0xM", addr, t + 1000))
     s.insert_hl_meme_trades(rows)
-    ac = AddressCorrelation(s)
+    ac = AddressCorrelation(s, cfg=_NO_FILTER)
     assert ac.clusters(since_ms=0, min_shared=3, min_coins=1)   # 单币默认能聚成群
     assert ac.clusters(since_ms=0, min_shared=3, min_coins=2) == []  # 要求跨2币→过滤
     s.close()
@@ -88,7 +99,10 @@ def test_multi_coin_cluster_detected():
             rows.append(_trade(coin, "B", "0xA", "0xM", "0xA", t))
             rows.append(_trade(coin, "B", "0xB", "0xM", "0xB", t + 1000))
     s.insert_hl_meme_trades(rows)
-    det = AddressCorrelation(s).clusters_detailed(since_ms=0, min_shared=3, min_coins=2)
+    # 全放行配置（小样本），验证跨币聚合逻辑
+    cfg_no_filter = CorrelationCfg(min_lift=0.0, max_p=1.0, min_shared=3, min_coins=2)
+    det = AddressCorrelation(s, cfg=cfg_no_filter).clusters_detailed(
+        since_ms=0, min_shared=3, min_coins=2)
     assert det and set(det[0]["members"]) == {"0xA", "0xB"}
     assert det[0]["coins"] == 2            # 跨 2 币(硬证据)
     assert det[0]["events"] == 8           # 每币 4 次 × 2 币

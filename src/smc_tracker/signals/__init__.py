@@ -18,6 +18,8 @@ from .funding_extreme import funding_extreme_signal
 from .oi_velocity import oi_directional_velocity
 from .harmonic_dedup import setup_fingerprint, SetupDedup
 from .harmonic_review import build_harmonic_predictions
+# C.1: 微观结构盘口信号三件套（OFI + queue_imbalance + micro_price）
+from .microprice import OFITracker, queue_imbalance, micro_price, ofi_delta
 
 __all__ = ["Signal", "SignalEngine", "DivergenceDetector", "DivergenceSignal",
            "ConsensusSignal", "CoinPositioning", "WhaleConsensus", "positioning",
@@ -33,4 +35,5 @@ __all__ = ["Signal", "SignalEngine", "DivergenceDetector", "DivergenceSignal",
            "CoinSignalProfile", "build_profile", "signal_asset_class",
            "forward_mult", "apply_forward",
            "funding_extreme_signal", "oi_directional_velocity",
-           "setup_fingerprint", "SetupDedup", "build_harmonic_predictions"]
+           "setup_fingerprint", "SetupDedup", "build_harmonic_predictions",
+           "OFITracker", "queue_imbalance", "micro_price", "ofi_delta"]

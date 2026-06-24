@@ -286,10 +286,50 @@ def test_sessions_and_killzones(hour, session, killzone):
 # knn
 # --------------------------------------------------------------------------- #
 def test_feature_matrix_shape(patch_adx):
-    """feature_matrix 形状 (n, 11)。"""
+    """feature_matrix 形状 (n, 21)：11 原有特征 + 10 SFG 因子。"""
     cs = _uptrend_candles(150)
     fm = feature_matrix(cs)
-    assert fm.shape == (150, 11)
+    assert fm.shape == (150, 21)
+
+
+def test_feature_matrix_sfg_columns_present(patch_adx):
+    """feature_matrix 第 11-20 列（SFG）经 imputation 后全部有限。
+
+    SFG 因子的 nan（warmup/无结构/fail-closed）已被替换为 0.0（中性值）。
+    形状应为 (n, 21)，SFG 部分 (n, 10) 全有限。
+    """
+    # 使用较长序列以覆盖各因子 warmup（ami ~40根, ai_st ~109根）
+    cs = _uptrend_candles(250)
+    fm = feature_matrix(cs)
+    assert fm.shape == (250, 21)
+    # SFG 列（11-20）应全部有限（nan→0.0 imputation）
+    sfg_cols = fm[:, 11:]
+    assert sfg_cols.shape == (250, 10)
+    assert np.all(np.isfinite(sfg_cols)), (
+        "SFG 列经 imputation（nan→0.0）后应全部有限"
+    )
+    # atr2 等短 warmup 因子在长序列尾部应有非零有限值（非全部为 imputed 0）
+    sfg_atr2_col = fm[-50:, 17]  # 最后 50 行的 atr2 列（index 17）
+    assert np.any(sfg_atr2_col != 0.0), "atr2_series 在 250 根 K 线尾部应有非零有限值"
+
+
+def test_feature_matrix_warmup_rows_have_nan(patch_adx):
+    """原有 11 列的 warmup 行应含 nan，被 np.all(isfinite) 过滤为无效训练行。
+
+    SFG 列（11-20）在 feature_matrix 内已做 nan→0.0 imputation，
+    所以 SFG 列本身不含 nan；行有效性由原有 11 列决定。
+    """
+    cs = _uptrend_candles(150)
+    fm = feature_matrix(cs)
+    # SFG 列（11-20）应全部有限（nan 已被 impute 为 0.0）
+    sfg_cols = fm[:, 11:]
+    assert np.all(np.isfinite(sfg_cols)), "SFG 列经 imputation 后应全部有限（nan→0.0）"
+    # 原有 11 列（0-10）在 warmup 段含 nan（rsi warmup=14）
+    base_cols = fm[:, :11]
+    assert np.any(~np.isfinite(base_cols[:14])), "原有前 14 行应有 nan（技术指标 warmup）"
+    # 行过滤（np.all(isfinite)）：前 warmup 行因原有列含 nan 而被正确排除
+    valid_mask = np.all(np.isfinite(fm), axis=1)
+    assert not np.all(valid_mask[:14]), "warmup 行不应全部通过 isfinite 检查"
 
 
 def test_knn_fit_and_predict(patch_adx):
@@ -304,6 +344,24 @@ def test_knn_fit_and_predict(patch_adx):
     assert pred["direction"] in ("long", "short")
     assert 0.0 <= pred["p_up"] <= 1.0
     assert 0.0 <= pred["confidence"] <= 1.0
+
+
+def test_knn_fit_21d_succeeds_on_250_candles(patch_adx):
+    """21 维特征 KNN 在 >=250 根合成 K 线上 fit 成功（返回 True）。
+
+    250 根足以覆盖 ai_st warmup(~109根) + horizon(3) + k(5) margin。
+    """
+    cs = _uptrend_candles(250)
+    knn = KNNPredictor(k=5, horizon=3)
+    result = knn.fit(cs)
+    # 诚实：若因 SFG 大量 nan 导致有效行<k，优雅降级返回 False；
+    # 但 250 根且 k=5 时应能 fit 成功（atr2/dmha 等短 warmup 因子应提供足够行）
+    assert result is True, (
+        "250 根 K 线 + k=5 时 KNN fit 应成功；SFG warmup 饿死时请检查有效行数"
+    )
+    pred = knn.predict_latest(cs)
+    assert pred is not None
+    assert 0.0 <= pred["p_up"] <= 1.0
 
 
 # --------------------------------------------------------------------------- #

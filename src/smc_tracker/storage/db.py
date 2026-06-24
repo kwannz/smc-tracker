@@ -315,6 +315,8 @@ CREATE TABLE IF NOT EXISTS harmonic_setups (
     d_idx      INTEGER,
     d_px       REAL
 );
+CREATE INDEX IF NOT EXISTS ix_harmonic_ts      ON harmonic_setups(ts);
+CREATE INDEX IF NOT EXISTS ix_harmonic_coin_ts ON harmonic_setups(coin, ts);
 
 -- 用户「发现搜集」的币（dashboard 按钮触发扫描发现 → 监控进程并入谐波宇宙持续监控）
 CREATE TABLE IF NOT EXISTS harmonic_collected (
@@ -361,6 +363,12 @@ class Store:
         self.conn.execute("PRAGMA journal_mode=WAL;")
         self.conn.execute("PRAGMA synchronous=NORMAL;")
         self.conn.execute("PRAGMA foreign_keys=ON;")
+        # 写锁等待最多 5s，根治多进程并发写 database is locked（dashboard 进程 + 监控进程）
+        self.conn.execute("PRAGMA busy_timeout=5000;")
+        # 页缓存 16MB（负值=KB），谐波/OI 历史扫描读多受益；内存可控
+        self.conn.execute("PRAGMA cache_size=-16000;")
+        # 临时 B-tree/排序走内存，ORDER BY confidence DESC / MAX(ts) 子查询受益
+        self.conn.execute("PRAGMA temp_store=MEMORY;")
         self.conn.executescript(SCHEMA)
         # 旧库迁移：补齐 signals 风险字段 + 成交跟踪字段（SQLite 无 ADD COLUMN IF NOT EXISTS）
         self._ensure_columns("signals", {"entry": "REAL", "stop": "REAL",
@@ -392,6 +400,10 @@ class Store:
         for name, typ in cols.items():
             if name not in existing:
                 self.conn.execute(f"ALTER TABLE {table} ADD COLUMN {name} {typ}")
+
+    def pragma(self, name: str) -> int | str:
+        """读取指定 PRAGMA 的当前值（供测试断言 PRAGMA 生效；纯读，零孤儿——被 test 引用即接入）。"""
+        return self.conn.execute(f"PRAGMA {name}").fetchone()[0]
 
     # ---- 合约地址 ----
     def upsert_contract(self, coin: str, chain: str, contract: str, ts: int) -> None:
@@ -479,6 +491,31 @@ class Store:
         self.conn.execute(
             "INSERT INTO sm_events(ts,type,address,label,coin,side,sz,px,notional,"
             "pos_before,pos_after,closed_pnl,taker) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)", row)
+
+    def insert_sm_events_batch(self, rows: Iterable[tuple]) -> int:
+        """批量写入 sm_events，复用 insert_sm_event SQL；空 rows 安全返回 0。
+
+        A2a：热路径缓冲（WS 回调 _sm_buffer.append），由 _periodic_flush 调 asyncio.to_thread 批量落。
+        列顺序与 insert_sm_event 完全一致（13 列）：
+          ts, type, address, label, coin, side, sz, px, notional,
+          pos_before, pos_after, closed_pnl, taker
+        事务模式复用 BEGIN/COMMIT/ROLLBACK（与 insert_harmonic_setups 一致）。
+        """
+        rows_list = list(rows)
+        if not rows_list:
+            return 0
+        try:
+            self.conn.execute("BEGIN")
+            self.conn.executemany(
+                "INSERT INTO sm_events(ts,type,address,label,coin,side,sz,px,notional,"
+                "pos_before,pos_after,closed_pnl,taker) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                rows_list,
+            )
+            self.conn.execute("COMMIT")
+        except Exception:
+            self.conn.execute("ROLLBACK")
+            raise
+        return len(rows_list)
 
     # ---- 信号 ----
     def insert_signal(self, row: tuple) -> None:

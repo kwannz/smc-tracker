@@ -42,6 +42,27 @@ output:
   jsonl_path: "data/signals.jsonl"
   webhook_url: ""                    # 留空则不推送
 
+# 聪明钱评分权重/封顶（SmartScoreCfg）
+# 默认值已文档化依据，无需修改；如需调参请按注释说明调整。
+smart_score:
+  w_alltime: 28.0        # 全期 PnL 主导权重(最可靠 edge 证明)
+  cap_alltime: 50000000  # 全期 PnL 封顶 5000 万 USD
+  w_month: 18.0          # 近月 PnL(验证持续性)
+  cap_month: 10000000    # 近月 PnL 封顶 1000 万 USD
+  w_consistency_all: 16.0   # 三窗皆正=持续 edge(区分一次性运气)
+  w_consistency_part: 7.0   # 仅月+全期正=过渡状态
+  w_roi: 14.0            # 月化 ROI=单位本金真实 alpha
+  cap_roi_monthly: 0.5   # 月化 50% 封顶(防短期杠杆爆发)
+  w_realized: 8.0        # 已实现盈利=真实出金能力
+  w_account: 8.0         # 账户规模=资金认可度
+  cap_account: 10000000  # 账户规模封顶 1000 万 USD
+  w_winrate: 8.0         # 胜率辅助(聪明钱常低胜率高盈亏比，权重低)
+  cap_winrate: 0.7       # 胜率 70% 封顶
+  churn_vol_floor: 1000000   # 刷量判别成交额门槛(100 万 USD)
+  churn_eff_max: 0.001       # 方向盈亏效率上限(0.1%)
+  churn_penalty: 0.85        # 刷量整体折扣(×0.85)
+  min_trades_winrate: 20     # 胜率最小样本(< 20 单时 Wilson 下界大幅压缩，附 ⚠ 标注)
+
 # LLM 前瞻研判（Codex OAuth GPT-5.4，无需 apikey；需本机 `codex login`）
 # 周期把双所态势摘要喂给模型 → 抓庄研判 → 推送。失败优雅降级，不影响监控。
 llm:

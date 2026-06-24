@@ -34,6 +34,7 @@ from typing import Any
 import numpy as np
 
 from .patterns import swing_highs, swing_lows
+from ..smc.structure import MarketStructure
 
 log = logging.getLogger("harmonic")
 
@@ -126,6 +127,10 @@ def _clean_alternating(
     """把枢轴序列清洗为严格交替 H/L。
 
     相邻同类型：取更极端者（H 取更高，L 取更低）。
+
+    @deprecated 此函数存在 repaint 问题（新增 K 线若产生更极端同类型枢轴，
+    会回改历史段已选枢轴）。运行时已弃用，改用 _alternate_immutable。
+    保留仅供历史对照测试。
     """
     if not pivots:
         return []
@@ -142,6 +147,98 @@ def _clean_alternating(
         else:
             out.append(cur)
     return out
+
+
+def _alternate_immutable(
+    swings: list[tuple[int, float, str]],
+) -> list[tuple[int, float, str]]:
+    """把已确认 swing 序列规整为严格交替 H/L，但保持因果不可变。
+
+    遇相邻同类型，保留先确认者（index 更小者）、丢弃后者——绝不回改前缀。
+
+    与 _clean_alternating 的本质差异：
+    - _clean_alternating: 贪心取更极端（改历史→repaint）。
+    - _alternate_immutable: first-wins（只追加不回改），保证
+      「给定前缀的输出不随后续 swing 变化」。
+
+    关键不变量: 对任意 k, _alternate_immutable(swings[:k]) 是
+    _alternate_immutable(swings[:k+1]) 的前缀。
+
+    取舍: first-wins 牺牲「同段更极端枢轴」的几何最优性，换来确定性/无 repaint。
+    这是 CLAUDE.md「诚实/可验证」优先于「事后最优」的体现。
+    """
+    if not swings:
+        return []
+    out: list[tuple[int, float, str]] = [swings[0]]
+    for cur in swings[1:]:
+        prev = out[-1]
+        if cur[2] == prev[2]:
+            # 同类型：first-wins，丢弃后者（不回改已选枢轴）
+            pass
+        else:
+            out.append(cur)
+    return out
+
+
+class _CandleAdapter:
+    """鸭类型适配器：为缺少 close_time_ms 的轻量合成对象补零时间戳。
+
+    MarketStructure.update() 需要 .h/.l/.c/.close_time_ms。
+    真实 Candle 已有所有字段；仅合成测试对象（_C）缺 close_time_ms。
+    """
+    __slots__ = ("h", "l", "c", "close_time_ms")
+
+    def __init__(self, candle: Any, idx: int) -> None:
+        self.h = float(candle.h)
+        self.l = float(candle.l)
+        self.c = float(candle.c)
+        self.close_time_ms: int = getattr(candle, "close_time_ms", idx * 60_000)
+
+
+def pivots_from_structure(
+    candles: list[Any],
+    order: int = 3,
+) -> list[tuple[int, float, str]]:
+    """用 smc.MarketStructure 的不可变 swing 流构造交替枢轴序列（根治 repaint）。
+
+    与 find_pivots 同返回契约: [(idx, price, 'H'|'L'), ...] 升序，< 5 返回 []。
+
+    差异: swing 由 append-only 引擎确认，同一历史段不随新 K 线改变。
+    交替性由 _alternate_immutable 强制，但不回改已选枢轴（冻结语义）。
+
+    审查强制护栏:
+    - MarketStructure 用与谐波同一 order 实例化（lookback=order），枢轴定义一致。
+    - _alternate_immutable 用 first-wins，保证 prefix 不变量。
+
+    Args:
+        candles: K 线列表，需有 .h/.l/.c 属性（.close_time_ms 可选，缺省补 0）。
+        order:   分形邻域大小（与 MarketStructure lookback 对齐）。
+
+    Returns:
+        [(idx, price, 'H'|'L'), ...] 升序，长度 < 5 返回 []。
+    """
+    if not candles:
+        return []
+
+    # 审查护栏①: MarketStructure 必须用与谐波同一 order 实例化
+    ms = MarketStructure(lookback=order)
+
+    for i, c in enumerate(candles):
+        ms.update(_CandleAdapter(c, i))
+
+    # ms.swings: append-only，kind ∈ {"high","low"}，index 升序
+    # 映射为 (index, price, 'H'|'L')
+    raw: list[tuple[int, float, str]] = [
+        (sw.index, float(sw.price), "H" if sw.kind == "high" else "L")
+        for sw in ms.swings
+    ]
+
+    # 交替化：first-wins（不回改已选枢轴）
+    pivots = _alternate_immutable(raw)
+
+    if len(pivots) < 5:
+        return []
+    return pivots
 
 
 def detect_xabcd(
@@ -449,7 +546,8 @@ def analyze_candles(
     price = float(candles[-1].c) if candles else 0.0
     empty = {"completed": [], "forming": [], "price": price}
 
-    pivots = find_pivots(candles, order=order)
+    # 使用 pivots_from_structure（append-only 不可变 swing 流，根治 repaint）
+    pivots = pivots_from_structure(candles, order=order)
     if len(pivots) < 5:
         return empty
 

@@ -6,6 +6,7 @@ from .bitget_oi_monitor import BitgetOIMonitor
 from .okx_perp_monitor import OKXPerpMonitor
 from .address_analyzer import AddressAnalyzer
 from .address_correlation import AddressCorrelation
+from .cooccur_stats import pair_lift, is_significant
 from .address_dossier import build_dossier, fmt_dossier
 from .whale_discovery import discover_smart_money, fetch_leaderboard_rows, rank_smart_money
 from .whale_momentum import WhaleMomentum, pnl_rows_from
@@ -24,7 +25,8 @@ __all__ = [
     "EventType", "SmartMoneyEvent", "AddressMonitor",
     "MemeTradeMonitor", "BitgetOIMonitor", "OKXPerpMonitor",
     "HLOrderbookMonitor", "detect_walls",
-    "AddressAnalyzer", "AddressCorrelation", "build_dossier", "fmt_dossier",
+    "AddressAnalyzer", "AddressCorrelation", "pair_lift", "is_significant",
+    "build_dossier", "fmt_dossier",
     "discover_smart_money", "rank_smart_money", "fetch_leaderboard_rows",
     "WhaleMomentum", "pnl_rows_from",
     "WalletPortfolio", "WalletSnapshot",

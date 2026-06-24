@@ -6,7 +6,8 @@
   2. 从每条 ticker 解析 OI(持仓量 holdingAmount) / 资金费 / 标记价 → 缓冲批量落 SQLite(bitget_oi)；
   3. 维护内存中 per-symbol 最新 OI 快照，提供查询；
   4. 与上次 OI 比较，相对变化超过 surge_pct 记「OI 异动」并打印 + 触发可选回调；
-  5. flush() 把缓冲批量 executemany 落库。
+  5. flush() 把缓冲批量 executemany 落库；
+  6. oi_window() 纯内存读取 OI 历史窗口（A2b：替换 _on_structure 热路径磁盘查询）。
 
 WS ticker 字段（已实证，wss://ws.bitget.com/v2/ws/public，channel=ticker）：
   data[0] = {instId, symbol, lastPr, markPrice, indexPrice, fundingRate,
@@ -17,6 +18,7 @@ from __future__ import annotations
 
 import logging
 import math
+from collections import deque
 from typing import Any, Callable
 
 from ..bitget import BitgetREST, BitgetSub
@@ -55,6 +57,11 @@ class BitgetOIMonitor:
         self._latest: dict[str, dict[str, float | int]] = {}
         # symbol → 上一次用于比较的 OI(币数)，用于算异动
         self._prev_oi: dict[str, float] = {}
+        # A2b：OI 历史窗口环形缓存（纯内存，替换 _on_structure 热路径磁盘 SELECT）
+        # symbol → list[(ts_ms, oi_size)]；保留最近 1200s（2×600s 窗口）的数据点
+        self._oi_window_data: dict[str, list[tuple[int, float]]] = {}
+        # 超过此时长的 OI 历史点自动丢弃（节省内存，保留 2 倍窗口足够）
+        self._oi_window_retain_ms: int = 1_200_000  # 1200s = 20 min
         # 统计
         self.ticks_seen = 0
         self.surges_seen = 0
@@ -137,6 +144,17 @@ class BitgetOIMonitor:
                         log.exception("on_surge 回调出错")
         # 更新比较基准（无论是否触发异动）
         self._prev_oi[symbol] = oi_size
+
+        # A2b：维护 OI 历史窗口（纯内存，供 oi_window() 热路径查询，替代磁盘 SELECT）
+        if ts and oi_size > 0:
+            window = self._oi_window_data.setdefault(symbol, [])
+            window.append((ts, oi_size))
+            # 剪裁过老数据（保留 retain_ms 以内的点，避免内存单调增长）
+            if len(window) > 1:
+                cutoff = ts - self._oi_window_retain_ms
+                while window and window[0][0] < cutoff:
+                    window.pop(0)
+
         # 注意：不在热路径内调用 maybe_flush()；落库由 app._periodic_flush(every=5s) 周期驱动
 
     # ---- 落库 ----
@@ -224,6 +242,35 @@ class BitgetOIMonitor:
         # 按 abs(chg24) 降序排列，涨跌幅最大的排前
         rows.sort(key=lambda r: abs(r["chg24"]), reverse=True)
         return rows
+
+    def oi_window(
+        self, symbol: str, window_ms: int, now_ms: int
+    ) -> tuple[float, float | None] | None:
+        """纯内存 OI 窗口查询（A2b：替代 _on_structure 热路径磁盘 SELECT）。
+
+        返回 (latest_oi, past_oi)：
+          - latest_oi：最新一条 oi_size（_oi_window_data 最后一条）。
+          - past_oi：窗口边界前（≤ now_ms - window_ms）最近一条 oi_size；无历史则为 None。
+        无数据（未收到该 symbol 任何 tick）→ 返回 None。
+        与旧 db.oi_change(symbol, window_ms, now_ms) 语义一致，可直接替换。
+        守卫 `if chg and chg[1]` 兼容 past=None。
+        """
+        window = self._oi_window_data.get(symbol)
+        if not window:
+            return None
+
+        # latest = 最后一个点
+        latest_oi = window[-1][1]
+
+        # past = 窗口边界前（ts ≤ now_ms - window_ms）最近一条（从右往左找）
+        boundary = now_ms - window_ms
+        past_oi: float | None = None
+        for ts, oi in reversed(window):
+            if ts <= boundary:
+                past_oi = oi
+                break
+
+        return (latest_oi, past_oi)
 
 
 from ..util import to_float as _f  # 统一安全数值解析

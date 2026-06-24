@@ -20,9 +20,15 @@ from .volume import (relative_volume, volume_spike, volume_trend, volume_profile
                      VolumeMonitor)
 from .engine import analyze, fmt_analysis
 from .bollinger_bands import bb_bands, analyze_tf, aggregate_coin
-from .harmonic import (find_pivots, detect_xabcd, project_prz, analyze_candles,
+from .harmonic import (find_pivots, pivots_from_structure, _alternate_immutable,
+                       detect_xabcd, project_prz, analyze_candles,
                        HARMONIC_RATIOS)
 from .atr2_signals import atr2_confirmation
+from .sfg import (
+    lrsd_series, gpi_series, vap_series, pdbb_series, pivot_series,
+    ami_series, atr2_series, msfvg_series, ai_st_series, dmha_series,
+    level_factor,
+)
 
 __all__ = [
     "detect_double_top", "detect_double_bottom", "dow_trend", "swing_highs", "swing_lows",
@@ -36,6 +42,11 @@ __all__ = [
     "current_session", "in_killzone",
     "KNNPredictor", "feature_matrix", "analyze", "fmt_analysis",
     "bb_bands", "analyze_tf", "aggregate_coin",
-    "find_pivots", "detect_xabcd", "project_prz", "analyze_candles", "HARMONIC_RATIOS",
+    "find_pivots", "pivots_from_structure", "_alternate_immutable",
+    "detect_xabcd", "project_prz", "analyze_candles", "HARMONIC_RATIOS",
     "atr2_confirmation",
+    # SFG 10 因子 series（向量化，供 KNN feature_matrix 使用，零孤儿）
+    "lrsd_series", "gpi_series", "vap_series", "pdbb_series", "pivot_series",
+    "ami_series", "atr2_series", "msfvg_series", "ai_st_series", "dmha_series",
+    "level_factor",
 ]

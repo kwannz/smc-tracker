@@ -980,7 +980,8 @@ class TestAnalyzeCandlesFormingOrderValidation:
 
         dummy_candles = [_C(h=1, l=0, c=0.5)] * 5
 
-        with patch.object(_harm, "find_pivots", return_value=fake_pivots):
+        # analyze_candles 现在内部调用 pivots_from_structure（非 find_pivots）
+        with patch.object(_harm, "pivots_from_structure", return_value=fake_pivots):
             with patch.object(_harm, "project_prz", return_value=fake_prz_result):
                 result = _harm.analyze_candles(dummy_candles, order=2, tol=0.05)
 
@@ -1014,7 +1015,8 @@ class TestAnalyzeCandlesFormingOrderValidation:
 
         dummy_candles = [_C(h=1, l=0, c=0.5)] * 5
 
-        with patch.object(_harm, "find_pivots", return_value=fake_pivots):
+        # analyze_candles 现在内部调用 pivots_from_structure（非 find_pivots）
+        with patch.object(_harm, "pivots_from_structure", return_value=fake_pivots):
             with patch.object(_harm, "project_prz", return_value=fake_prz_result):
                 result = _harm.analyze_candles(dummy_candles, order=2, tol=0.06)
 
@@ -1051,7 +1053,8 @@ class TestAnalyzeCandlesFormingOrderValidation:
 
         dummy_candles = [_C(h=1, l=0, c=0.5)] * 5
 
-        with patch.object(_harm, "find_pivots", return_value=fake_pivots):
+        # analyze_candles 现在内部调用 pivots_from_structure（非 find_pivots）
+        with patch.object(_harm, "pivots_from_structure", return_value=fake_pivots):
             with patch.object(_harm, "project_prz", return_value=fake_prz_result):
                 result = _harm.analyze_candles(dummy_candles, order=2, tol=0.05)
 

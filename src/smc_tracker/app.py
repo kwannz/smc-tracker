@@ -44,10 +44,11 @@ from .signals import (ConfluenceAggregator, ConfluenceSignal, ConsensusSignal,
                       DivergenceDetector, DivergenceSignal, FlowPredictor, PositionChange,
                       PumpRadar, Signal, SignalEngine, SignalEfficacy, TASignal, WhaleConsensus,
                       WhalePositionTracker, orderbook_imbalance, positioning,
-                      SetupDedup)
+                      SetupDedup, oi_directional_velocity)
 from .signals.harmonic_review import build_harmonic_predictions
 from .smc import LiquidityEngine, StructureEvent, StructureFeed, ZoneEngine
 from .storage import Store
+from .supervisor import supervise  # A3：per-task 指数退避重启监督
 
 log = logging.getLogger("app")
 
@@ -134,7 +135,7 @@ class TradingSystem:
         self.consensus = WhaleConsensus(store=store, on_signal=self._on_consensus)
         self.pos_tracker = WhalePositionTracker(store=store, on_change=self._on_pos_change)
         self.confluence = ConfluenceAggregator(store, on_signal=self._on_confluence)
-        self.correlation = AddressCorrelation(store)   # 地址协同(庄家集团)检测
+        self.correlation = AddressCorrelation(store, cfg=cfg.correlation)  # 地址协同(庄家集团)检测
         self._seen_clusters: set[tuple] = set()
         self.flow_predictor = FlowPredictor()          # 前瞻资金流预测(挂单意图+流加速度)
         self._harmonic_dedup = SetupDedup()            # 谐波 completed 进 review 闭环的结构指纹去重
@@ -159,7 +160,10 @@ class TradingSystem:
         # HL 事件分类汇总：零散事件按分类聚合，_periodic_hl_digest 周期推一张汇总卡片（降噪去刷屏）
         self.hl_digest = HLDigest(cfg.digest.max_per_cat)
         # 推送串行队列：(text, notifier) 入队，单 worker 按最小间隔逐条发到指定 notifier（防限流丢卡 + 多通道路由）
-        self._push_queue: asyncio.Queue[tuple[str, Any]] = asyncio.Queue()
+        # A4：maxsize=2000 背压，爆发推送有界不 OOM（drain worker 37.5条/min，正常远不触发）
+        self._push_queue: asyncio.Queue[tuple[str, Any]] = asyncio.Queue(maxsize=2000)
+        # A4：丢最旧计数器（满时弃头，不静默——log+计数可见）
+        self._push_dropped: int = 0
         self.analyst = build_analyst(cfg)     # LLM(Codex GPT-5.4) 前瞻研判，未配置则 None
         self.latency = LatencyTracker()       # 热路径「接收→信号」延迟埋点(实证低延迟)
         self.coin_to_symbol: dict[str, str] = {}              # canonical -> bitget symbol
@@ -181,6 +185,8 @@ class TradingSystem:
         self._stopping = False
         self._bg_tasks: set[asyncio.Task] = set()       # 持有 _push 后台任务引用，防 GC
         self._okx_task: asyncio.Task | None = None      # OKX streaming 任务（仅 enabled 时创建）
+        # A2a：sm_events 热路径缓冲（WS 回调 append，_periodic_flush 批量落，不阻塞 event loop）
+        self._sm_buffer: list[tuple] = []
 
         # ---- 钱包持仓画像管理器 ----
         self.wallet_portfolio = WalletPortfolio(store, cfg.hyperliquid.rest_url)
@@ -246,7 +252,9 @@ class TradingSystem:
         big = evt.notional >= self.cfg.detection.large_fill_notional_usd
         if self.cfg.output.console:
             print(f"[{_hms(evt.time_ms)}] {'🔴' if big else '  '} {evt.fmt()}")
-        self.store.insert_sm_event((
+        # A2a：热路径不直接写 DB，append 入缓冲（_periodic_flush 每 5s 批量落，不阻塞 event loop）
+        # 推送链路不依赖 DB 读，仍即时；sm_events 仅复盘用，5s 延迟无害
+        self._sm_buffer.append((
             evt.time_ms, evt.type.value, evt.address, evt.label, evt.coin,
             evt.side.name, evt.sz, evt.px, evt.notional,
             evt.position_before, evt.position_after, evt.closed_pnl, int(evt.is_taker)))
@@ -349,7 +357,10 @@ class TradingSystem:
         self.signal_engine.set_flow(coin, self.meme_monitor.coin_net(coin))
         symbol = self.coin_to_symbol.get(normalize(coin))
         if symbol:
-            chg = self.store.oi_change(symbol, window_ms=600_000, now_ms=now)
+            # A2b：改读 OI monitor 内存环形缓存，完全不碰 DB（热路径）。
+            # 回退：内存无足够历史时返回 None，与 `if chg and chg[1]` 守卫兼容。
+            chg = (self.oi_monitor.oi_window(symbol, window_ms=600_000, now_ms=now)
+                   if self.oi_monitor else None)
             if chg and chg[1]:
                 self.signal_engine.set_oi_change(coin, (chg[0] - chg[1]) / chg[1])
         # 区域共振：突破方向是否存在未回补的同向 OB/FVG
@@ -464,17 +475,35 @@ class TradingSystem:
         except Exception as exc:  # noqa: BLE001 — 记录失败不影响推送
             log.debug("_record_pred 失败 %s %s: %s", kind, coin, exc)
 
+    def _enqueue_push(self, text: str, notifier: Any) -> None:
+        """A4 背压入队：满时丢最旧一条（get_nowait 弃头）再入新，保证最新告警不丢、队列有界。
+
+        maxsize=2000，drain worker 37.5条/min，正常工况远不触发背压。
+        满时不静默：弃头 + _push_dropped 计数 + log.warning。
+        """
+        try:
+            self._push_queue.put_nowait((text, notifier))
+        except asyncio.QueueFull:
+            try:
+                self._push_queue.get_nowait()      # 弃最旧
+                self._push_queue.task_done()
+            except asyncio.QueueEmpty:
+                pass
+            self._push_queue.put_nowait((text, notifier))
+            self._push_dropped += 1
+            log.warning("push queue 已满，丢弃最旧告警（累计丢弃=%d）", self._push_dropped)
+
     def _push(self, text: str) -> None:
         """非阻塞**入队**推送到 HL 主通道：经单一 worker 按最小间隔逐条发，
-        避免飞书(1.5s)/TG(1.2s) 限流静默丢卡（多周期任务并发推送易撞车）。队列无界，put_nowait 不阻塞热路径。"""
+        避免飞书(1.5s)/TG(1.2s) 限流静默丢卡（多周期任务并发推送易撞车）。"""
         if self.notifier.enabled:
-            self._push_queue.put_nowait((text, self.notifier))
+            self._enqueue_push(text, self.notifier)
 
     def _push_harmonic(self, text: str) -> None:
         """谐波系统**专用通道**推送（独立飞书，与 HL 分开）；未配置独立飞书时回退主通道。"""
         n = self.harmonic_notifier
         if getattr(n, "enabled", False):
-            self._push_queue.put_nowait((text, n))
+            self._enqueue_push(text, n)
 
     async def _periodic_push_drain(self, min_interval_sec: float = 1.6) -> None:
         """推送排队串行发送：单 worker 逐条出队、按最小间隔(>飞书1.5s)发送到**指定 notifier**，杜绝限流丢卡。
@@ -750,6 +779,10 @@ class TradingSystem:
             self.orderbook_monitor.flush()   # 挂单墙事件批量落库（dashboard 消费）
             if self.oi_monitor:
                 self.oi_monitor.flush()
+            # A2a：sm_events 热路径缓冲批量落库（asyncio.to_thread 不阻塞 event loop）
+            if self._sm_buffer:
+                rows, self._sm_buffer = self._sm_buffer, []
+                await asyncio.to_thread(self.store.insert_sm_events_batch, rows)
 
     # DB 时间序列保留策略（窗口远大于功能回看，保守删除）
     # 格式：(表名, 时间列, 保留毫秒)
@@ -794,6 +827,12 @@ class TradingSystem:
                 total_pruned += deleted
             if total_pruned:
                 log.info("数据质量：DB 清理旧数据 %d 行", total_pruned)
+            # A1：每轮清理末尾触发 PRAGMA optimize（SQLite 分析查询计划优化，
+            # 只在有足够变更时才执行，通常毫秒级；不放 __init__，空库无意义）
+            try:
+                self.store.conn.execute("PRAGMA optimize")
+            except Exception:  # noqa: BLE001
+                pass
 
     async def _periodic_onchain(self, every: float = 30.0) -> None:
         while not self._stopping:
@@ -821,7 +860,12 @@ class TradingSystem:
                 log.warning("链上轮询失败: %s", e)
 
     async def _periodic_flow_predict(self, every: float = 30.0) -> None:
-        """前瞻资金流预测：采样净流向加速度 + 订单簿挂单意图 + OI 速度 → 预测方向。"""
+        """前瞻资金流预测：采样净流向加速度 + 订单簿挂单意图 + OI 速度 → 预测方向。
+
+        C.2: flow_acceleration 返回 float|None，用 abs(... or 0.0) 兼容 None。
+        C.3: OI 速度用 oi_directional_velocity（方向化），替换裸比率。
+        C.1: book_intent 优先（WS 逐帧 OFI+queue+micro），降级到 REST orderbook_imbalance。
+        """
         while not self._stopping:
             await asyncio.sleep(every)
             now = int(time.time() * 1000)
@@ -832,25 +876,40 @@ class TradingSystem:
                 self._last_coin_net[coin] = cur
                 self.flow_predictor.push(coin, delta, now)
             # 2) 取资金流加速度最强的几个币，拉订单簿 + OI 速度 → 预测
+            # C.2: flow_acceleration 可返回 None（样本不足），用 or 0.0 兼容
             ranked = sorted(self.meme_markets,
-                            key=lambda c: abs(self.flow_predictor.flow_acceleration(c, now)),
+                            key=lambda c: abs(
+                                self.flow_predictor.flow_acceleration(c, now) or 0.0
+                            ),
                             reverse=True)[:3]
             try:
                 async with HyperliquidInfo(self.cfg.hyperliquid.rest_url) as info:
                     for coin in ranked:
-                        book_imb = 0.0
-                        try:
-                            l2 = await info._post({"type": "l2Book", "coin": coin})
-                            lv = l2.get("levels") or [[], []]
-                            book_imb = orderbook_imbalance(lv[0], lv[1])["imbalance"]
-                        except Exception:  # noqa: BLE001
-                            pass
+                        # C.1: WS book_intent 优先，降级到 REST orderbook_imbalance
+                        book_imb: float = (
+                            self.orderbook_monitor.book_intent(coin, now)
+                            if self.orderbook_monitor is not None else None
+                        ) or 0.0
+                        if book_imb == 0.0:
+                            # REST 降级
+                            try:
+                                l2 = await info._post({"type": "l2Book", "coin": coin})
+                                lv = l2.get("levels") or [[], []]
+                                book_imb = orderbook_imbalance(lv[0], lv[1])["imbalance"]
+                            except Exception:  # noqa: BLE001
+                                pass
+                        # C.3: 方向化 OI 速度（替换裸比率 (chg[0]-chg[1])/chg[1]）
                         oi_vel = 0.0
                         sym = self.coin_to_symbol.get(normalize(coin))
                         if sym:
                             chg = self.store.oi_change(sym, 600_000, now)
                             if chg and chg[1]:
-                                oi_vel = (chg[0] - chg[1]) / chg[1]
+                                # 取同窗口价（用当前 mid；无价史则退化到 0）
+                                price_now = self._mids.get(coin, 0.0)
+                                price_past = self._last_close.get(coin, 0.0)
+                                oi_vel = oi_directional_velocity(
+                                    chg[0], chg[1], price_now, price_past
+                                )
                         pred = self.flow_predictor.predict(coin, now, book_imb, oi_vel)
                         if pred and now - self._flow_pred_seen.get(coin, 0) >= 600_000:
                             self._flow_pred_seen[coin] = now
@@ -1518,34 +1577,42 @@ class TradingSystem:
             log.info("OKX streaming 已启动 (top_n=%d)", self.cfg.okx.top_n)
         log.info("双所系统启动：watchlist=%d meme=%d markets=%s",
                  len(self.cfg.watchlist), len(self.meme_markets), self.cfg.markets)
+        # A3：每个任务用 supervise 包裹，任一异常 → 指数退避重启，不连累其余（不静默死）
+        # WS run() 自身有自重连，supervise 仅兜逃逸到任务边界的非网络异常（backoff 稍大）
+        # return_exceptions=True 作第二道防线（supervise 已吞，理论不触发；防御性）
+        def _sv(fn, name: str, base: float = 1.0, max_b: float = 60.0):
+            """快捷：factory = lambda 包装当前方法，返回 supervise coro。"""
+            return supervise(fn, name=name, base_backoff=base, max_backoff=max_b, log=log)
+
         await asyncio.gather(
-            self.hl_ws.run(),
-            self.bg_ws.run(),
-            self._periodic_flush(),
-            self._periodic_onchain(),
-            self._periodic_solana(),
-            self._periodic_divergence(),
-            self._periodic_consensus(),
-            self._periodic_correlation(),
-            self._periodic_flow_predict(),
-            self._periodic_report(),
-            self._periodic_llm(),
-            self._periodic_cleanup(),
-            self._periodic_review(),
-            self._periodic_efficacy(),
-            self._periodic_health(),
-            self._periodic_ticker_board(),
-            self._periodic_hl_digest(),
-            self._periodic_exchange_flow(),
-            self._periodic_wallet_portfolio(),
-            self._periodic_config_reload(),
-            self._periodic_bb_board(),
-            self._periodic_harmonic_board(),
-            self._periodic_prz_approach(),
-            self._periodic_candle_collect(),
-            self._periodic_whale_pnl(),
-            self._periodic_discover(),
-            self._periodic_push_drain(),
+            _sv(lambda: self.hl_ws.run(), "hl_ws", base=5.0, max_b=60.0),
+            _sv(lambda: self.bg_ws.run(), "bg_ws", base=5.0, max_b=60.0),
+            _sv(lambda: self._periodic_flush(), "periodic_flush"),
+            _sv(lambda: self._periodic_onchain(), "periodic_onchain"),
+            _sv(lambda: self._periodic_solana(), "periodic_solana"),
+            _sv(lambda: self._periodic_divergence(), "periodic_divergence"),
+            _sv(lambda: self._periodic_consensus(), "periodic_consensus"),
+            _sv(lambda: self._periodic_correlation(), "periodic_correlation"),
+            _sv(lambda: self._periodic_flow_predict(), "periodic_flow_predict"),
+            _sv(lambda: self._periodic_report(), "periodic_report"),
+            _sv(lambda: self._periodic_llm(), "periodic_llm"),
+            _sv(lambda: self._periodic_cleanup(), "periodic_cleanup"),
+            _sv(lambda: self._periodic_review(), "periodic_review"),
+            _sv(lambda: self._periodic_efficacy(), "periodic_efficacy"),
+            _sv(lambda: self._periodic_health(), "periodic_health"),
+            _sv(lambda: self._periodic_ticker_board(), "periodic_ticker_board"),
+            _sv(lambda: self._periodic_hl_digest(), "periodic_hl_digest"),
+            _sv(lambda: self._periodic_exchange_flow(), "periodic_exchange_flow"),
+            _sv(lambda: self._periodic_wallet_portfolio(), "periodic_wallet_portfolio"),
+            _sv(lambda: self._periodic_config_reload(), "periodic_config_reload"),
+            _sv(lambda: self._periodic_bb_board(), "periodic_bb_board"),
+            _sv(lambda: self._periodic_harmonic_board(), "periodic_harmonic_board"),
+            _sv(lambda: self._periodic_prz_approach(), "periodic_prz_approach"),
+            _sv(lambda: self._periodic_candle_collect(), "periodic_candle_collect"),
+            _sv(lambda: self._periodic_whale_pnl(), "periodic_whale_pnl"),
+            _sv(lambda: self._periodic_discover(), "periodic_discover"),
+            _sv(lambda: self._periodic_push_drain(), "periodic_push_drain"),
+            return_exceptions=True,
         )
 
     async def stop(self) -> None:
@@ -1557,6 +1624,10 @@ class TradingSystem:
             self._push(card)
         if self.oi_monitor:
             self.oi_monitor.flush()
+        # A2a：退出前同步冲刷剩余 sm_events 缓冲（退出非热路径，同步落库即可，不丢事件）
+        if self._sm_buffer:
+            rows, self._sm_buffer = self._sm_buffer, []
+            self.store.insert_sm_events_batch(rows)
         # OKX streaming 任务：优雅取消（仅 enabled=True 时存在）
         if self._okx_task is not None and not self._okx_task.done():
             self._okx_task.cancel()

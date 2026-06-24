@@ -69,31 +69,46 @@ def _frame(coin: str, bids: list[dict], asks: list[dict], t: int) -> dict:
 
 
 def test_on_l2book_build_then_pull():
+    """C.5: 墙需存活 >= min_lifetime_ms 才 emit build 事件。
+
+    第1帧: 墙出现，记录 born（不 emit build）
+    第2帧(t=1000+5000=6000，存活5s≥3s): 墙仍在 → emit build
+    第3帧: 墙消失 → emit pull
+    """
     events: list[dict] = []
     ws = _FakeWS()
     mon = HLOrderbookMonitor(["BTC"], ws, store=None,
-                             on_wall_signal=events.append, min_wall_usd=200_000.0)
+                             on_wall_signal=events.append, min_wall_usd=200_000.0,
+                             min_lifetime_ms=3000)
     mon.attach()
     # attach 注册了一个 l2Book 订阅
     assert len(ws.subs) == 1
     assert isinstance(ws.subs[0][0], Subscription)
     assert ws.subs[0][0].type == "l2Book" and ws.subs[0][0].coin == "BTC"
 
-    # 第一帧：bid 侧有一个大墙（px=60000, sz=10 → notional=600k ≥ 均值3× 且 ≥ min_wall_usd）
     small_bids = [_lv(60000.0 - i, 0.001) for i in range(1, 19)]   # 18 档极小档
     big_bid = _lv(60000.0, 10.0, n=7)                              # 大墙 600k
     bids1 = [big_bid] + small_bids
     asks1 = [_lv(60100.0 + i, 0.001) for i in range(19)]
-    mon._on_l2book(_frame("BTC", bids1, asks1, 1000), 0)
-    builds = [e for e in events if e["kind"] == "build"]
-    assert any(e["px"] == 60000.0 and e["side"] == "bid" for e in builds), events
-    b = next(e for e in builds if e["px"] == 60000.0)
-    assert abs(b["notional"] - 600_000.0) < 1e-3 and b["ts"] == 1000
 
-    # 第二帧：该大墙消失（抽单）→ pull
+    # 第一帧 t=1000：墙新现，记录 born，不 emit build
+    mon._on_l2book(_frame("BTC", bids1, asks1, 1000), 0)
+    builds_after_1 = [e for e in events if e["kind"] == "build"]
+    assert len(builds_after_1) == 0, f"第1帧不应 emit build（存活未满）: {builds_after_1}"
+
+    # 第二帧 t=6000（存活5s≥3s=min_lifetime_ms）：墙仍在 → emit build
+    mon._on_l2book(_frame("BTC", bids1, asks1, 6000), 0)
+    builds = [e for e in events if e["kind"] == "build"]
+    assert any(e["px"] == 60000.0 and e["side"] == "bid" for e in builds), (
+        f"第2帧存活≥3s应 emit build: {events}"
+    )
+    b = next(e for e in builds if e["px"] == 60000.0)
+    assert abs(b["notional"] - 600_000.0) < 1e-3
+
+    # 第三帧：该大墙消失（抽单）→ pull
     events.clear()
     bids2 = [_lv(60000.0, 0.001)] + small_bids   # 原墙价位变成极小档 = 墙抽走
-    mon._on_l2book(_frame("BTC", bids2, asks1, 2000), 0)
+    mon._on_l2book(_frame("BTC", bids2, asks1, 9000), 0)
     pulls = [e for e in events if e["kind"] == "pull"]
     assert any(e["px"] == 60000.0 and e["side"] == "bid" for e in pulls), events
 
@@ -105,7 +120,7 @@ def test_on_l2book_no_callback_still_updates_state():
     small = [_lv(3000.0 - i, 0.01) for i in range(1, 19)]
     big = _lv(3000.0, 50.0)            # 150k 墙
     mon._on_l2book(_frame("ETH", [big] + small, [_lv(3001.0, 0.01)], 1), 0)
-    # 无回调也更新状态
+    # 无回调也更新状态（_walls 维护，无论 emit 是否发生）
     walls = mon.all_walls()
     assert 3000.0 in walls["ETH"]["bid"], walls
     # 失衡也维护了
@@ -144,16 +159,27 @@ def test_db_orderbook_walls_roundtrip():
 
 
 def test_flush_with_store():
+    """C.5: build 事件在存活满 min_lifetime_ms 后才 emit/flush。
+
+    发两帧：第1帧 t=1000（记录 born），第2帧 t=5000（存活4s≥3s→emit）。
+    """
     store = Store(Path(tempfile.mkdtemp()) / "ob2.db")
     try:
         ws = _FakeWS()
         mon = HLOrderbookMonitor(["BTC"], ws, store=store,
-                                 on_wall_signal=None, min_wall_usd=200_000.0)
+                                 on_wall_signal=None, min_wall_usd=200_000.0,
+                                 min_lifetime_ms=3000)
         small = [_lv(60000.0 - i, 0.001) for i in range(1, 19)]
         big = _lv(60000.0, 10.0)   # 600k
-        mon._on_l2book(_frame("BTC", [big] + small, [_lv(60100.0, 0.001)], 1000), 0)
+        bids1 = [big] + small
+        asks1 = [_lv(60100.0, 0.001)]
+        # 第1帧：记录 born，不 emit
+        mon._on_l2book(_frame("BTC", bids1, asks1, 1000), 0)
+        assert mon.flush() == 0  # 还未 emit
+        # 第2帧 t=5000（存活4s≥3s）：emit build
+        mon._on_l2book(_frame("BTC", bids1, asks1, 5000), 0)
         n = mon.flush()
-        assert n == 1
+        assert n == 1, f"expected 1 event flushed, got {n}"
         assert store.count("hl_orderbook_walls") == 1
         # 缓冲已清空
         assert mon.flush() == 0
