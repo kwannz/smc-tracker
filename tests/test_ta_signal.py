@@ -113,6 +113,19 @@ def test_fmt_handles_none_and_signal():
     assert "做多" in text and "TEST" in text
 
 
+def test_evaluate_returns_dict_not_object():
+    """回归：evaluate 返回 **dict**，消费方须用 sig['direction'] 下标，禁 sig.direction 属性访问。
+
+    曾因 app.py:_on_closed_candle 误用 `sig.direction`（属性）在 HL candle 热路径每次 TA 信号
+    触发即 'dict' object has no attribute 'direction' 崩溃，中断后续结构处理（生产暴露）。
+    """
+    sig = TASignal(threshold=0.3).evaluate(_uptrend(150), now_ms=0)
+    assert isinstance(sig, dict) and "direction" in sig
+    assert not hasattr(sig, "direction"), "evaluate 结果是 dict，属性访问 sig.direction 必崩"
+    # 生产调用模式（app.py add_bias 入参）——下标访问可用
+    assert (sig["direction"] == "long") in (True, False)
+
+
 if __name__ == "__main__":
     for name, fn in list(globals().items()):
         if name.startswith("test_") and callable(fn):
