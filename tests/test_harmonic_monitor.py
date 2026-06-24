@@ -1710,10 +1710,11 @@ class TestHarmonicSetupDB:
         for row in result:
             assert len(row) == 29, f"期望 29 列，实际 {len(row)}"
 
-    def test_delete_old_snapshot_on_reinsert(self) -> None:
-        """第二次 insert 时先 DELETE 旧快照，只保最新（防膨胀）。"""
+    def test_per_coin_latest_on_reinsert(self) -> None:
+        """B2 per-coin latest：同 (coin,tf) 写新 ts 后，recent 取该 coin/tf 最新行；
+        其他 coin/tf 仍各取自身最新（不会被「全局 MAX」排除）。"""
         self.store.insert_harmonic_setups(self._sample_rows())
-        # 第二次 insert 不同数据
+        # 第二次 insert：仅 BTC/4H 更新（ts 更新），ETH/SOL 未更新
         new_rows = [
             (
                 _NOW_REC + 1000, "BTC", "4H", "completed", "Gartley", "long",
@@ -1724,8 +1725,18 @@ class TestHarmonicSetupDB:
         ]
         self.store.insert_harmonic_setups(new_rows)
         result = self.store.recent_harmonic_setups()
-        # 旧 3 行应被删除，只保新的 1 行
-        assert len(result) == 1, f"应只保留最新快照 1 行，实际 {len(result)}"
+        # per-coin latest：BTC/4H 取最新 ts + ETH/1H + SOL/15m = 3 行
+        assert len(result) == 3, f"应含 BTC/ETH/SOL 共 3 行（per-coin latest），实际 {len(result)}"
+        btc_rows = [r for r in result if r[1] == "BTC" and r[2] == "4H"]
+        assert len(btc_rows) == 1
+        assert btc_rows[0][0] == _NOW_REC + 1000, (
+            f"BTC/4H 应取最新 ts={_NOW_REC + 1000}, 实际 {btc_rows[0][0]}"
+        )
+        # ETH 和 SOL 仍在列表中（per-coin latest 不因 BTC 更新而消失）
+        eth_coins = [r for r in result if r[1] == "ETH"]
+        sol_coins = [r for r in result if r[1] == "SOL"]
+        assert eth_coins, "ETH 应在 per-coin latest 结果中"
+        assert sol_coins, "SOL 应在 per-coin latest 结果中"
 
     def test_recent_ordered_by_confidence_desc(self) -> None:
         """recent_harmonic_setups 按 confidence DESC 排序。"""

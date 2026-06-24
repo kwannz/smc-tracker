@@ -705,7 +705,13 @@ class Store:
             raise
 
     def recent_harmonic_setups(self) -> list[tuple]:
-        """返回最新快照批（ts = max(ts)）的所有谐波行，按 confidence DESC。
+        """返回每币每周期最新行（per-coin per-tf latest），按 confidence DESC。
+
+        B2 变更：原「全局 MAX(ts) 快照」改为「每币每 tf 各自取最新 ts」，
+        使实时层可按单币落库而不会导致其他币从列表消失（per-coin latest 语义）。
+
+        利用 ix_harmonic_coin_ts 索引（CREATE INDEX IF NOT EXISTS ix_harmonic_coin_ts
+        ON harmonic_setups(coin, ts DESC)）提升 GROUP BY 子查询效率。
 
         返回列（29 列）：
           ts, coin, tf, kind, pattern, direction, price,
@@ -720,9 +726,27 @@ class Store:
             "prz_lo,prz_hi,"
             "x_idx,x_px,a_idx,a_px,b_idx,b_px,c_idx,c_px,d_idx,d_px "
             "FROM harmonic_setups "
-            "WHERE ts=(SELECT MAX(ts) FROM harmonic_setups) "
+            "WHERE (coin,tf,ts) IN ("
+            "  SELECT coin,tf,MAX(ts) FROM harmonic_setups GROUP BY coin,tf"
+            ") "
             "ORDER BY confidence DESC"
         ).fetchall()
+
+    def delete_harmonic_coin_tf(self, coin: str, tf: str) -> None:
+        """删除指定 (coin, tf) 的全部历史行，供实时单币落库前去重。
+
+        实时层（B2）在写入新行前调用，防止每次 K 线收盘都追加旧行造成膨胀。
+        7 天 prune_before 是长期防线；此方法是短期「按币清旧」机制。
+        事务提交由调用方保证（autocommit 连接，execute 立即生效）。
+        """
+        try:
+            self.conn.execute(
+                "DELETE FROM harmonic_setups WHERE coin=? AND tf=?",
+                (coin, tf),
+            )
+        except Exception:  # noqa: BLE001
+            log.warning("delete_harmonic_coin_tf 失败 %s/%s", coin, tf)
+            raise
 
     # ---- 「发现搜集」的币（用户按钮触发，监控进程并入谐波宇宙）----
     def add_harmonic_collected(self, items: Iterable[tuple]) -> None:

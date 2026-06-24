@@ -1331,7 +1331,7 @@ def _store_with_harmonic_multi() -> tuple:
     now_ms = 1_700_000_000_000
 
     # 插入 BTC completed(long,0.82) + ETH forming(short,0.65) + XAU completed(long,0.78)
-    # 注意：recent_harmonic_setups() 用 WHERE ts=MAX(ts) 过滤，故所有行必须使用相同 ts
+    # B2：recent_harmonic_setups() 改为 per-coin latest，各币可用不同 ts（此处同 ts 仅为简化）
     s.insert_harmonic_setups([
         (now_ms, "BTC", "1h", "completed", "Gartley", "long",
          65000.0, 64500.0, 64800.0, 63000.0, 67000.0, 69000.0,

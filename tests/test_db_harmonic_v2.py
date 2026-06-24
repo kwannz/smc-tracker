@@ -136,9 +136,9 @@ def test_backward_compat_mixed_rows():
     total = s.conn.execute("SELECT COUNT(*) FROM harmonic_setups").fetchone()[0]
     assert total == 2, f"期望 2 行, 实际 {total}"
 
-    # recent 取 ts=max(ts)=1000, 应返回 2 行
+    # per-coin latest：BTC/1H 最新=1000, ETH/4H 最新=1000, 各取最新共 2 行
     rows = s.recent_harmonic_setups()
-    assert len(rows) == 2, f"recent 期望 2 行(同 ts 批), 实际 {len(rows)}"
+    assert len(rows) == 2, f"recent 期望 2 行(per-coin latest), 实际 {len(rows)}"
 
     # ETH 新行: XABCD 有值
     eth_rows = [r for r in rows if r[1] == "ETH"]
@@ -174,8 +174,12 @@ def test_history_append_not_delete():
     s.close()
 
 
-def test_recent_harmonic_setups_returns_latest_snapshot():
-    """recent_harmonic_setups() 返回 ts=max(ts) 的批次, 不含旧批。"""
+def test_recent_harmonic_setups_per_coin_latest():
+    """recent_harmonic_setups() 返回每币每 tf 各自最新行（B2 per-coin latest）。
+
+    BTC@ts=1000 和 ETH/SOL@ts=2000 都有数据时，3 行全部返回（各取自身最新）。
+    原「全局 MAX(ts) 快照」语义已废弃，改为 per-coin per-tf latest（B2 变更）。
+    """
     s = _store()
     batch1 = [_row29(ts=1000, coin="BTC", tf="1H")]
     batch2 = [_row29(ts=2000, coin="ETH", tf="4H"),
@@ -184,10 +188,35 @@ def test_recent_harmonic_setups_returns_latest_snapshot():
     s.insert_harmonic_setups(batch2)
 
     recent = s.recent_harmonic_setups()
-    # 应只返回 ts=2000 的批次（2 行）
-    assert len(recent) == 2, f"期望 2 行(最新快照), 实际 {len(recent)}"
-    for r in recent:
-        assert r[0] == 2000, f"期望 ts=2000, 实际 {r[0]}"
+    # 每币各取最新：BTC@1000 + ETH@2000 + SOL@2000 = 3 行
+    assert len(recent) == 3, f"期望 3 行(per-coin latest), 实际 {len(recent)}"
+    coins_in_recent = {r[1] for r in recent}
+    assert "BTC" in coins_in_recent
+    assert "ETH" in coins_in_recent
+    assert "SOL" in coins_in_recent
+    # 每币取自身最新 ts
+    btc_rows = [r for r in recent if r[1] == "BTC"]
+    assert btc_rows[0][0] == 1000, f"BTC 期望 ts=1000, 实际 {btc_rows[0][0]}"
+    eth_rows = [r for r in recent if r[1] == "ETH"]
+    assert eth_rows[0][0] == 2000, f"ETH 期望 ts=2000, 实际 {eth_rows[0][0]}"
+    s.close()
+
+
+def test_recent_harmonic_setups_same_coin_multi_ts():
+    """同币多次落库，recent 仅返回该币最新一行（旧行不出现）。
+
+    B2 per-coin latest 核心约束：同一 (coin,tf) 只读最新 ts 行。
+    """
+    s = _store()
+    # BTC/1H 写 3 次（不同 ts）
+    s.insert_harmonic_setups([_row29(ts=1000, coin="BTC", tf="1H")])
+    s.insert_harmonic_setups([_row29(ts=2000, coin="BTC", tf="1H")])
+    s.insert_harmonic_setups([_row29(ts=3000, coin="BTC", tf="1H")])
+
+    recent = s.recent_harmonic_setups()
+    btc_rows = [r for r in recent if r[1] == "BTC" and r[2] == "1H"]
+    assert len(btc_rows) == 1, f"同一 coin/tf 期望 1 行, 实际 {len(btc_rows)}"
+    assert btc_rows[0][0] == 3000, f"期望最新 ts=3000, 实际 {btc_rows[0][0]}"
     s.close()
 
 
@@ -451,6 +480,157 @@ def test_recent_harmonic_setups_confidence_order():
     rows = s.recent_harmonic_setups()
     confs = [r[13] for r in rows]
     assert confs == sorted(confs, reverse=True), f"期望降序, 实际 {confs}"
+    s.close()
+
+
+# --------------------------------------------------------------------------- #
+# B2：per-coin latest 读取 + 实时单币落库 + 重复行治理                         #
+# --------------------------------------------------------------------------- #
+
+def test_per_coin_latest_two_coins_different_ts():
+    """B2 核心：2 币不同 ts → 各取各自最新，列表含两币。"""
+    s = _store()
+    # BTC 落库时间早（ts=1000），ETH 落库时间晚（ts=5000）
+    s.insert_harmonic_setups([_row29(ts=1000, coin="BTC", tf="1H")])
+    s.insert_harmonic_setups([_row29(ts=5000, coin="ETH", tf="4H")])
+
+    recent = s.recent_harmonic_setups()
+    coins = {r[1] for r in recent}
+    assert "BTC" in coins, "BTC 应在 per-coin latest 结果中"
+    assert "ETH" in coins, "ETH 应在 per-coin latest 结果中"
+    # 各取自身最新 ts
+    btc = next(r for r in recent if r[1] == "BTC")
+    assert btc[0] == 1000, f"BTC 最新 ts=1000, 实际 {btc[0]}"
+    eth = next(r for r in recent if r[1] == "ETH")
+    assert eth[0] == 5000, f"ETH 最新 ts=5000, 实际 {eth[0]}"
+    s.close()
+
+
+def test_realtime_single_coin_insert_does_not_collapse_list():
+    """B2 核心：实时写入单币不导致其他币从列表消失（list 仍含其他币）。"""
+    s = _store()
+    # periodic 全量落库（BTC+ETH+SOL，同 ts）
+    batch_ts = 2_000_000
+    s.insert_harmonic_setups([
+        _row29(ts=batch_ts, coin="BTC", tf="1H"),
+        _row29(ts=batch_ts, coin="ETH", tf="4H"),
+        _row29(ts=batch_ts, coin="SOL", tf="1H"),
+    ])
+
+    # 实时单币落库：仅 BTC 更新（模拟 on_update 回调行为）
+    realtime_ts = 2_100_000  # 晚于批次 ts
+    s.insert_harmonic_setups([_row29(ts=realtime_ts, coin="BTC", tf="1H")])
+
+    # 列表应包含全部 3 个币（BTC 有新 ts，ETH/SOL 仍有旧 ts）
+    recent = s.recent_harmonic_setups()
+    coins_in_recent = {r[1] for r in recent}
+    assert "BTC" in coins_in_recent, "BTC 应在 per-coin latest 结果中"
+    assert "ETH" in coins_in_recent, "ETH 不应从列表消失"
+    assert "SOL" in coins_in_recent, "SOL 不应从列表消失"
+    # BTC 应是最新 ts
+    btc = next(r for r in recent if r[1] == "BTC")
+    assert btc[0] == realtime_ts, f"BTC 应取实时 ts={realtime_ts}, 实际 {btc[0]}"
+    s.close()
+
+
+def test_delete_harmonic_coin_tf_clears_old_rows():
+    """delete_harmonic_coin_tf 清除指定 (coin,tf) 全部旧行，不影响其他 coin/tf。"""
+    s = _store()
+    s.insert_harmonic_setups([
+        _row29(ts=1000, coin="BTC", tf="1H"),
+        _row29(ts=2000, coin="BTC", tf="1H"),
+        _row29(ts=1000, coin="BTC", tf="4H"),  # 不同 tf，不应被删
+        _row29(ts=1000, coin="ETH", tf="1H"),  # 不同 coin，不应被删
+    ])
+
+    s.delete_harmonic_coin_tf("BTC", "1H")
+
+    # BTC/1H 应全部删除
+    btc_1h = s.conn.execute(
+        "SELECT COUNT(*) FROM harmonic_setups WHERE coin='BTC' AND tf='1H'"
+    ).fetchone()[0]
+    assert btc_1h == 0, f"BTC/1H 应被全部删除, 实际 {btc_1h}"
+
+    # BTC/4H 和 ETH/1H 不受影响
+    btc_4h = s.conn.execute(
+        "SELECT COUNT(*) FROM harmonic_setups WHERE coin='BTC' AND tf='4H'"
+    ).fetchone()[0]
+    assert btc_4h == 1, f"BTC/4H 不应被删, 实际 {btc_4h}"
+
+    eth_1h = s.conn.execute(
+        "SELECT COUNT(*) FROM harmonic_setups WHERE coin='ETH' AND tf='1H'"
+    ).fetchone()[0]
+    assert eth_1h == 1, f"ETH/1H 不应被删, 实际 {eth_1h}"
+    s.close()
+
+
+def test_realtime_upsert_no_row_accumulation():
+    """实时先删后写（模拟 on_update 行为）：同 coin/tf 只存最新，无旧行堆积。"""
+    s = _store()
+    # 初始 periodic 批次
+    s.insert_harmonic_setups([_row29(ts=1000, coin="BTC", tf="1H")])
+    s.insert_harmonic_setups([_row29(ts=2000, coin="BTC", tf="1H")])
+
+    # 实时 on_update：先删再写（B2 策略）
+    s.delete_harmonic_coin_tf("BTC", "1H")
+    s.insert_harmonic_setups([_row29(ts=3000, coin="BTC", tf="1H")])
+
+    # BTC/1H 只应有 1 行（旧行已删）
+    cnt = s.conn.execute(
+        "SELECT COUNT(*) FROM harmonic_setups WHERE coin='BTC' AND tf='1H'"
+    ).fetchone()[0]
+    assert cnt == 1, f"先删后写应只有 1 行, 实际 {cnt}"
+
+    # 该行是最新 ts
+    row = s.conn.execute(
+        "SELECT ts FROM harmonic_setups WHERE coin='BTC' AND tf='1H'"
+    ).fetchone()
+    assert row[0] == 3000, f"期望 ts=3000, 实际 {row[0]}"
+    s.close()
+
+
+def test_per_coin_latest_multi_tf_same_coin():
+    """同一 coin 多个 tf，per-coin latest 对每个 (coin,tf) 各取最新。"""
+    s = _store()
+    # BTC 两个 tf，各有 2 批次
+    s.insert_harmonic_setups([
+        _row29(ts=1000, coin="BTC", tf="1H"),
+        _row29(ts=1000, coin="BTC", tf="4H"),
+    ])
+    s.insert_harmonic_setups([
+        _row29(ts=3000, coin="BTC", tf="1H"),   # 1H 更新到 ts=3000
+        # 4H 不更新（仍 ts=1000）
+    ])
+
+    recent = s.recent_harmonic_setups()
+    btc_rows = [r for r in recent if r[1] == "BTC"]
+    tf_map = {r[2]: r[0] for r in btc_rows}  # tf -> ts
+
+    assert "1H" in tf_map, "BTC/1H 应在 per-coin latest 结果中"
+    assert "4H" in tf_map, "BTC/4H 应在 per-coin latest 结果中"
+    assert tf_map["1H"] == 3000, f"BTC/1H 最新 ts=3000, 实际 {tf_map['1H']}"
+    assert tf_map["4H"] == 1000, f"BTC/4H 最新 ts=1000, 实际 {tf_map['4H']}"
+    s.close()
+
+
+def test_per_coin_latest_confidence_order_preserved():
+    """per-coin latest 结果仍按 confidence DESC 排序（多币不同置信度）。"""
+    s = _store()
+    def _with_conf(coin: str, ts: int, conf: float) -> tuple:
+        r = list(_row29(ts=ts, coin=coin, tf="1H"))
+        r[13] = conf
+        return tuple(r)
+
+    # 各币不同 ts（per-coin latest 场景），置信度不同
+    s.insert_harmonic_setups([
+        _with_conf("LOW",  ts=1000, conf=0.2),
+        _with_conf("HIGH", ts=3000, conf=0.95),
+        _with_conf("MID",  ts=2000, conf=0.55),
+    ])
+
+    recent = s.recent_harmonic_setups()
+    confs = [r[13] for r in recent]
+    assert confs == sorted(confs, reverse=True), f"期望 confidence 降序, 实际 {confs}"
     s.close()
 
 

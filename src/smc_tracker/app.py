@@ -774,39 +774,67 @@ class TradingSystem:
                 )
                 log.info("谐波监控器已建，top_%d 币: %s", harm_n, list(harm_c2s.keys())[:6])
 
-            # ---- 谐波 K线 WS 增量驱动（B1）：可选实时性层（harmonic.realtime_ws=True 时启用）----
+            # ---- 谐波 K线 WS 增量驱动（B1+B2）：可选实时性层（harmonic.realtime_ws=True 时启用）----
             # realtime_ws=False 时跳过，行为不变（纯 periodic refresh 模式，向后兼容）。
             # 启用时：订阅 candle{tf} channel，收盘线即触发增量 analyze_candles + 可选回调。
             # periodic refresh 保留作全量兜底（两者共存，互不排斥）。
             #
-            # Gap 2 修复：填入 on_update 回调，实现「收盘即推送」实时性端到端。
-            #
-            # 落库协调设计（关键权衡）：
-            #   - recent_harmonic_setups() 用 WHERE ts=(SELECT MAX(ts) FROM harmonic_setups) 读最新快照批。
-            #   - periodic refresh 以同一 now_ms 落全量（所有币），dashboard 读 MAX(ts) 拿全部币。
-            #   - 若实时层逐 (coin,tf) 单独写，MAX(ts) 变成仅含 1 个币的新 ts，dashboard 列表塌陷。
-            #   - 选择方案：on_update 仅做**推送通知**（实时卡片 → harmonic 飞书），**不写 harmonic_setups**。
-            #   - 优点：零风险不破坏 dashboard 全量视图；仍实现「K线收盘即通知」实时性目标。
-            #   - 缺点：实时层不单独落库（DB 历史仅由 periodic refresh 每 N 分钟一次写入）；
-            #     若需实时落库，未来可改用独立 harmonic_realtime_setups 表 + dashboard 改读两表。
+            # B2 落库协调设计（per-coin latest，解 B1 gap）：
+            #   - recent_harmonic_setups() 已改为 per-coin per-tf latest 子查询（GROUP BY coin,tf）。
+            #   - 实时层现可安全按单币落库（不会导致其他币消失）：
+            #     on_update 先 delete_harmonic_coin_tf(coin,tf) 清旧行，再 insert_harmonic_setups 写新行。
+            #   - 7 天 prune_before 是长期防膨胀；delete_harmonic_coin_tf 是短期去重。
+            #   - periodic refresh 仍按需落全量（多币同 ts 批），两者共存无冲突（per-coin latest 读）。
             if (self.cfg.harmonic.realtime_ws
                     and self.harmonic_monitor is not None
                     and self.cfg.harmonic.enabled):
                 from .monitor.harmonic_candle_ws import HarmonicCandleWS  # noqa: PLC0415
 
-                # Gap 2: on_update 回调——收盘分析完成 → 推送单币谐波实时卡片（不落库，见上方权衡注释）
+                # B2: on_update 回调——收盘分析完成 → 落库（单币）+ 推送实时卡片
                 _hmon_ref = self.harmonic_monitor  # 避免闭包捕获 self 循环引用
+                _store_ref = self.store            # 避免闭包捕获 self 循环引用
 
                 async def _on_harmonic_ws_update(
                     coin: str, tf: str, result: dict | None, now_ms: int,
                 ) -> None:
-                    """K 线 WS 收盘后谐波分析完成回调：推送单币实时通知（不写 harmonic_setups）。
+                    """K 线 WS 收盘后谐波分析完成回调：per-coin 落库 + 推送单币实时通知。
 
-                    落库协调：不调用 insert_harmonic_setups，避免破坏 recent_harmonic_setups
-                    的「WHERE ts=MAX(ts)」全量快照语义。实时性端到端通过推送通知实现。
+                    B2 实现：
+                    1. 先删该 (coin,tf) 旧行（防短期堆积），再写新行（per-coin latest 语义）。
+                    2. 推送实时卡片（同 B1 行为，不阻塞热路径）。
+                    落库失败只 warn，不阻塞推送。
                     """
                     if result is None:
                         return  # 无形态，静默跳过
+                    # 1. 单币落库（B2：per-coin upsert 策略）
+                    try:
+                        # 生成 to_records 格式（复用 harmonic_monitor.to_records）
+                        row_dict = {
+                            "coin":      coin,
+                            "symbol":    _hmon_ref.coin_to_symbol.get(coin, coin + "USDT"),
+                            "price":     float(result.get("price", 0.0) or 0.0),
+                            "tf":        tf,
+                            "completed": result.get("completed") or [],
+                            "forming":   result.get("forming") or [],
+                        }
+                        records = await asyncio.to_thread(
+                            _hmon_ref.to_records, [row_dict], now_ms
+                        )
+                        if records:
+                            # 先删旧行，再写新行（防同 coin/tf 堆积）
+                            await asyncio.to_thread(
+                                _store_ref.delete_harmonic_coin_tf, coin, tf
+                            )
+                            await asyncio.to_thread(
+                                _store_ref.insert_harmonic_setups, records
+                            )
+                            log.debug(
+                                "谐波 WS B2 落库 %s/%s: %d 行",
+                                coin, tf, len(records),
+                            )
+                    except Exception as _db_exc:  # noqa: BLE001
+                        log.warning("谐波 WS on_update 落库失败 %s/%s: %s", coin, tf, _db_exc)
+                    # 2. 推送实时卡片（同 B1，落库失败不影响推送）
                     try:
                         completed = result.get("completed") or []
                         forming = result.get("forming") or []

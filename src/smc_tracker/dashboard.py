@@ -1029,10 +1029,11 @@ async def serve(db_path: str, host: str = "127.0.0.1", port: int = 8787) -> None
         from .util import to_float as _f  # noqa: PLC0415
         now = int(_t.time() * 1000)
         try:
-            # 已监控（最新快照）+ 已收集的币 → 排除，避免重复扫描
+            # 已监控（per-coin latest）+ 已收集的币 → 排除，避免重复扫描
             existing = store.recent_harmonic_setups()
-            # 沿用当前最新批次 ts，让发现的币**并入**列表而非用新 ts 把监控币挤掉
-            batch_ts = int(existing[0][0]) if existing else now
+            # B2：recent_harmonic_setups 已改 per-coin latest，各币 ts 可不同。
+            # 新发现的币用 now 作 ts（独立于已有币的各自最新 ts，per-coin latest 读取保证各自显示）。
+            batch_ts = now
             current = {r[1] for r in existing}
             current |= set(store.get_harmonic_collected())
             async with BitgetREST() as bg:

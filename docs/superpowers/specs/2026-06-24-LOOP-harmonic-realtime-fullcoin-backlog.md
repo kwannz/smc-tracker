@@ -29,7 +29,13 @@
 - [x] B1 **完成(loop#6,Opus 验证 + 固化 d4cbfca)**:2 gap 已收口(O(1) 预建映射 + on_update 端到端推送);
   落库协调=实时层只推送通知不写库(保 dashboard 全量快照),**全量 1859 passed**。诚实:页面实时读取(per-coin
   latest)是 B2 单独做。known limit:all_perp+harmonic_collected 动态加币需重新 attach(预存架构限制)。
-- [ ] B2 **谐波页页面级实时读取(实现方案已设计,loop#16,待 H2 后执行)**:核心 = 解 B1 留的 gap
+- [x] B2 **完成(loop#18,Sonnet 执行 + Opus 验证,全量 1891 passed)**:`recent_harmonic_setups` 改 per-coin
+  latest(`WHERE (coin,tf,ts) IN (SELECT coin,tf,MAX(ts) GROUP BY coin,tf)`,走 ix_harmonic_coin_ts);B1 实时层
+  `_on_harmonic_ws_update` 恢复按币落库(delete_harmonic_coin_tf 删旧 + insert 新);batch_ts 修正;消费方
+  (build_harmonic_list/build_coin_detail)兼容验证;7 测试。**谐波形态最新实时动态端到端达成**(WS 收盘→按币落库→
+  页面读最新)。**诚实权衡**:开 realtime_ws(默认 false)时 delete 删该币历史 → harmonic_history 退化为最新
+  (默认 false 无影响;方案 b 独立 realtime 表可两全,后续按需)。
+  --- 原方案(已执行): 核心 = 解 B1 留的 gap
   (实时层只推送不落库,因 `recent_harmonic_setups` 用 `WHERE ts=MAX(ts)` 全量快照,单币落库会塌列表)。
   **方案 a(选)**:`recent_harmonic_setups` 改 **per-coin latest** —— `WHERE (coin,tf,ts) IN (SELECT coin,tf,
   MAX(ts) GROUP BY coin,tf)`(或窗口函数),每币各自最新而非全局 MAX(ts);则 B1 实时层可恢复**按币落库**
@@ -80,7 +86,11 @@
   「无 CDN/无依赖」是 checked-in 硬约束(部署稳定),**排除 React DSL+CDN 方案**;数据契约已对齐 smc API,
   现有 aiohttp dashboard.py 内联基座可用。提取设计语言(IBM Plex 字体、浅色金融终端配色 `--bg:#eef3fa
   --blue:#2563eb --long:#16a34a --short:#e23744`、卡片、三栏)→ 原生重写。(如用户坚持 React 版可改。)
-- [ ] D2 合并两终端为统一前端(系统 tab:HL / 谐波 / 量析),原生 HTML/CSS/JS,接 dashboard 真实 API。
+- [ ] D2 **量析终端规范(loop#18,次要,谐波+HL 完成后做)**:新增 `/quant` 页(同 /hl2 模式,复用 D3 token)——
+  三栏:左 `watchlist`(币+价+涨跌)/ 中 symbol header + price chart(SVG K线)+ volume bars + indicator subchart(MACD/RSI/KDJ tab)
+  + positions / 右 signals + indicator gauge。数据映射:`candles/volBars`→build_coin_detail；`indRows`→指标引擎(technical.py)；
+  `signals`→信号；`positions`→whale_positions。**order panel 跳过**(smc 无 API key 不下单,诚实)。系统 tab 三页统一
+  (/hl2↔/harmonic2↔/quant)= H4 完整。零 Math.random,无 CDN。**与 B2 串行**(都碰 dashboard)。
 - [x] D3 **完成(loop#7-8,Sonnet 执行 + Opus 验证/修复,commit 020fe77)**:dashboard.py
   `_HARMONIC_DETAIL_TEMPLATE` 原生重写 —— 浅色金融终端三栏(262/主/372)+ 16 设计 token + IBM Plex
   fallback(无 CDN)+ KPI strip + LIVE 脉冲 + 全币种列表(搜索/过滤/排序/分页 50)+ SVG 配色升级;
