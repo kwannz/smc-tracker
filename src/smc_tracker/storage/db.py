@@ -316,6 +316,13 @@ CREATE TABLE IF NOT EXISTS harmonic_setups (
     d_px       REAL
 );
 
+-- 用户「发现搜集」的币（dashboard 按钮触发扫描发现 → 监控进程并入谐波宇宙持续监控）
+CREATE TABLE IF NOT EXISTS harmonic_collected (
+    coin     TEXT    NOT NULL PRIMARY KEY,
+    symbol   TEXT    NOT NULL,
+    added_ts INTEGER NOT NULL
+);
+
 -- 7 周期布林带压力/支撑层（S/R 前瞻层，供详情页多周期叠加）
 CREATE TABLE IF NOT EXISTS bb_levels (
     coin     TEXT    NOT NULL,
@@ -679,6 +686,33 @@ class Store:
             "WHERE ts=(SELECT MAX(ts) FROM harmonic_setups) "
             "ORDER BY confidence DESC"
         ).fetchall()
+
+    # ---- 「发现搜集」的币（用户按钮触发，监控进程并入谐波宇宙）----
+    def add_harmonic_collected(self, items: Iterable[tuple]) -> None:
+        """加入收集币（幂等 upsert）。items: [(coin, symbol, added_ts), ...]。空安全返回。"""
+        rows = list(items)
+        if not rows:
+            return
+        try:
+            self.conn.execute("BEGIN")
+            self.conn.executemany(
+                "INSERT INTO harmonic_collected(coin,symbol,added_ts) VALUES(?,?,?) "
+                "ON CONFLICT(coin) DO UPDATE SET symbol=excluded.symbol",
+                rows,
+            )
+            self.conn.execute("COMMIT")
+        except Exception:
+            self.conn.execute("ROLLBACK")
+            raise
+
+    def get_harmonic_collected(self) -> dict[str, str]:
+        """返回收集币 {coin: symbol}。"""
+        return {
+            coin: sym
+            for coin, sym in self.conn.execute(
+                "SELECT coin, symbol FROM harmonic_collected"
+            ).fetchall()
+        }
 
     def harmonic_history(self, coin: str, limit: int = 50) -> list[tuple]:
         """返回指定 coin 的历史谐波形态，按 ts 降序（最新在前），最多 limit 行。

@@ -1400,6 +1400,20 @@ def test_build_harmonic_list_structure():
         assert "has_completed" in r and isinstance(r["has_completed"], bool)
 
 
+def test_build_harmonic_list_has_data_ts():
+    """每项含 ts（最新 setup 计算时刻），供前端显示真实"数据时间/年龄"而非浏览器时钟。
+
+    至少一币应有非空 ts；ts 为 int(epoch ms) 或 None。回归保护"数据没实时性"修复。
+    """
+    s, _ = _store_with_harmonic_multi()
+    result = build_harmonic_list(s)
+    s.close()
+    for r in result:
+        assert "ts" in r, "每项必须含 ts 字段"
+        assert r["ts"] is None or isinstance(r["ts"], int)
+    assert any(r["ts"] is not None for r in result), "至少一币应有数据时间戳"
+
+
 def test_build_harmonic_list_sorted_by_conf_desc():
     """按 best_conf 降序排列（BTC 0.82 > XAU 0.78 > ETH 0.65）。"""
     s, _ = _store_with_harmonic_multi()
@@ -1584,8 +1598,15 @@ def test_render_harmonic_detail_html_doctype():
     assert "<!DOCTYPE html>" in html or "<!doctype html>" in html.lower()
 
 
+def test_render_harmonic_detail_html_theme_vars():
+    """重设计后为浅色/白底主题：含 CSS 变量 --bg 且底色为 #f6f8fa。"""
+    html = render_harmonic_detail_html([])
+    assert "--bg" in html
+    assert "#f6f8fa" in html  # 浅色/白底主题底色
+
+
 def test_render_harmonic_detail_html_dark_theme():
-    """含深色主题 CSS 变量 --bg。"""
+    """向后兼容别名：含 CSS 变量 --bg（主题已切浅色，断言仍成立）。"""
     html = render_harmonic_detail_html([])
     assert "--bg" in html
 

@@ -24,9 +24,10 @@ from typing import Any
 from ..asset_class import asset_badge as _asset_badge
 from ..bitget.rest import BitgetREST
 from ..indicators.harmonic import analyze_candles
+from ..signals.forward_confirm import apply_forward as _apply_forward
 from ..signals.orderflow_confirm import confirm_setup as _confirm_setup
 from ..signals.trade_setup import TradeSetup, build_setups
-from ..util import fmt_px, fmt_ts
+from ..util import fmt_px, fmt_ts, to_float as _to_float
 
 log = logging.getLogger("harmonic_monitor")
 
@@ -62,6 +63,7 @@ class HarmonicMonitor:
     __slots__ = (
         "coin_to_symbol", "timeframes", "bars", "order", "tol", "top_n",
         "account_usd", "risk_pct", "target_rr", "ob_provider", "store",
+        "forward_provider",
     )
 
     def __init__(
@@ -77,6 +79,7 @@ class HarmonicMonitor:
         target_rr: float = 2.0,
         ob_provider: Any | None = None,
         store: Any | None = None,
+        forward_provider: Any | None = None,
     ) -> None:
         self.coin_to_symbol = coin_to_symbol
         self.timeframes = timeframes
@@ -93,6 +96,10 @@ class HarmonicMonitor:
         # K 线缓存 store（实现 get_candles/upsert_candles 契约）
         # None=纯 live 模式（向后兼容）
         self.store = store
+        # 前瞻信号提供者：callable (coin, direction) -> (CoinSignalProfile, flow_score,
+        # funding_extreme) | None。None=无前瞻数据（forward_mult 不施加，置信不变，诚实）。
+        # 对 completed + forming 都施加（解除旧 orderflow 的 completed 门控，QA 修复）。
+        self.forward_provider = forward_provider
 
     async def refresh(self, now_ms: int) -> list[dict]:
         """并发拉取所有币种 × 周期 K 线，分析谐波形态，返回有形态的行。
@@ -170,6 +177,11 @@ class HarmonicMonitor:
                                         # 订单流确认 boost 置信（领先意图×PRZ，诚实封顶）
                                         s.confidence = min(0.90, s.confidence * 1.1)
 
+                        # 前瞻确认：对 completed + forming **都**施加 forward_mult（解除 completed
+                        # 门控，QA 修复）。provider=None 或无数据→不调整（诚实，缺数据=中性）。
+                        if self.forward_provider is not None:
+                            _apply_forward(all_setups, self.forward_provider)
+
                         # 🔴-1: 注入 setup 到每条 completed hit（按 src_key 精确匹配）
                         for hit in result.get("completed") or []:
                             pat = str(hit.get("pattern", ""))
@@ -211,6 +223,25 @@ class HarmonicMonitor:
 
         # 共享单一 BitgetREST session（T1：避免每 币×周期 新建会话的 N+1 握手/限流放大）
         async with BitgetREST() as bg:
+            # 前瞻信号：取一次 tickers 快照（OI/funding 现成字段）更新 provider，
+            # 供 _fetch_tf 内 apply_forward 对 completed+forming 施加前瞻乘子。
+            # provider=None 或失败 → 跳过（apply_forward 不调用/缺数据=中性，诚实不崩、不阻塞）。
+            if self.forward_provider is not None and hasattr(self.forward_provider, "update"):
+                try:
+                    tk_map = await bg.tickers()
+                    parsed = {}
+                    for coin, symbol in coins:
+                        tk = tk_map.get(symbol) or {}
+                        parsed[coin] = {
+                            "symbol": symbol,
+                            "oi": _to_float(tk.get("holdingAmount")),
+                            "funding": _to_float(tk.get("fundingRate")),
+                            "price": _to_float(tk.get("markPrice") or tk.get("lastPr")),
+                        }
+                    self.forward_provider.update(parsed, now_ms)
+                except Exception as exc:  # noqa: BLE001
+                    log.warning("谐波前瞻信号 tickers 更新失败: %s", exc)
+
             tasks = [
                 _fetch_tf(bg, symbol, coin, tf)
                 for coin, symbol in coins
@@ -554,6 +585,10 @@ class HarmonicMonitor:
                         lines.append(line)
                         # fib_note 附注行（缩进）
                         lines.append(f"   {setup.fib_note}")
+                        # 前瞻确认附注行（OI/funding/资金流加速度领先信号，QA 修复后真实接入；
+                        # completed+forming 都施加，缺数据=中性，纯股票 funding=0 自动跳过）
+                        if setup.forward:
+                            lines.append(f"   🔮 {setup.forward}")
                         # 订单流详情附注行（仅有墙，追加失衡数据）
                         if of is not None and of.confirmed:
                             side_label = "bid" if setup.direction == "long" else "ask"
@@ -592,6 +627,10 @@ class HarmonicMonitor:
                         f"{crab_note}"
                     )
                     lines.append(line)
+                    # 前瞻确认附注行（forming 也接入领先信号，QA 修复解除 completed 门控）
+                    fsetup: TradeSetup | None = hit.get("setup")
+                    if fsetup is not None and fsetup.forward:
+                        lines.append(f"   🔮 {fsetup.forward}")
 
             if omit > 0:
                 lines.append(f"  …省略 {omit} 条（低 confidence）")

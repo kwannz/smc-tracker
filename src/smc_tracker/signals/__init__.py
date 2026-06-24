@@ -12,6 +12,12 @@ from .risk import PositionSize, compute_position_size
 from .knn_validator import KNNVerdict, validate_direction
 from .trade_setup import TradeSetup, build_setups
 from .orderflow_confirm import OrderflowConfirm, confirm_setup
+from .coin_profile import CoinSignalProfile, build_profile, signal_asset_class
+from .forward_confirm import forward_mult, apply_forward
+from .funding_extreme import funding_extreme_signal
+from .oi_velocity import oi_directional_velocity
+from .harmonic_dedup import setup_fingerprint, SetupDedup
+from .harmonic_review import build_harmonic_predictions
 
 __all__ = ["Signal", "SignalEngine", "DivergenceDetector", "DivergenceSignal",
            "ConsensusSignal", "CoinPositioning", "WhaleConsensus", "positioning",
@@ -23,4 +29,8 @@ __all__ = ["Signal", "SignalEngine", "DivergenceDetector", "DivergenceSignal",
            "PositionSize", "compute_position_size",
            "KNNVerdict", "validate_direction",
            "TradeSetup", "build_setups",
-           "OrderflowConfirm", "confirm_setup"]
+           "OrderflowConfirm", "confirm_setup",
+           "CoinSignalProfile", "build_profile", "signal_asset_class",
+           "forward_mult", "apply_forward",
+           "funding_extreme_signal", "oi_directional_velocity",
+           "setup_fingerprint", "SetupDedup", "build_harmonic_predictions"]

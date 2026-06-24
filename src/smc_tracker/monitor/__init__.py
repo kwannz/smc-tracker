@@ -15,6 +15,9 @@ from .trader_classify import classify_trader, fmt_classify
 from .orderbook_monitor import HLOrderbookMonitor, detect_walls
 from .bitget_bb_monitor import BitgetBBMonitor
 from .harmonic_monitor import HarmonicMonitor
+from .harmonic_forward import HarmonicForwardSignals
+from .bitget_trade_monitor import BitgetTradeMonitor, parse_trade_delta
+from .forming_approach import FormingApproachTracker
 from .candle_collector import BitgetCandleCollector
 
 __all__ = [
@@ -29,5 +32,9 @@ __all__ = [
     "classify_trader", "fmt_classify",
     "BitgetBBMonitor",
     "HarmonicMonitor",
+    "HarmonicForwardSignals",
+    "BitgetTradeMonitor",
+    "parse_trade_delta",
+    "FormingApproachTracker",
     "BitgetCandleCollector",
 ]
