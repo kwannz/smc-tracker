@@ -1431,22 +1431,61 @@ class TradingSystem:
         启动后先延迟 20s（避开 HL seed 带宽），采一次填 DB（让首个板周期可直接读 DB），
         之后每 every 秒刷新（work-first 已在延迟后立即执行）。
 
-        增量轮转（661 币分多轮）：每轮采 batch_size=60 个币，_collect_offset 环绕滚动，
+        增量轮转（661 币分多轮）：每轮采 batch_size 个币，_collect_offset 环绕滚动，
         避免单轮爆量请求。采集失败只 log.warning，不阻塞其他任务。
+
+        冷启动加速（CLAUDE.md §三-1 第一性原理）：
+          DB 覆盖度 < 80% 时（冷启动期）：batch_size=120（稳态 60），且批次间不等待（every=0），
+          快速铺满全集 665 币 K 线（冷启动约 5~6 轮 × 120 = 720 币次即可全覆盖，远快于稳态 11 轮）。
+          覆盖度 >= 80% 时（稳态）：batch_size=60，每轮等待 every=300s，恢复正常节奏。
+          覆盖度检测用首个 tf 做代理（多 tf 覆盖通常同步），若无 tf 配置降级为稳态。
+          Bitget _SEMA=8 且谐波侧已验证多轮无 429，冷启动 batch_size=120 并发量在安全范围内。
         """
         if self.candle_collector is None:
             return
         # work-first：延迟 20s 后立即首轮采集（让 BB/谐波首个板周期可直接读 DB）
         await asyncio.sleep(20.0)
+
+        # 冷启动参数
+        _COLD_BATCH = 120      # 冷启动：每轮采集币数（更快铺满）
+        _WARM_BATCH = 60       # 稳态：每轮采集币数（维持现有节奏）
+        _COLD_THRESHOLD = 0.8  # 覆盖度低于此阈值 → 冷启动模式
+        # 用首个 tf 做冷启动代理（多 tf 同步，取最有代表性的一个）
+        _probe_tf: str | None = (
+            self.candle_collector.timeframes[0]
+            if self.candle_collector.timeframes else None
+        )
+        _total_coins = len(self.candle_collector.coin_to_symbol)
+
         while not self._stopping:
+            # ---- 冷启动 vs 稳态判断 ----
+            is_cold = False
+            if _probe_tf and _total_coins > 0:
+                covered = self.candle_collector.covered_coin_count(_probe_tf)
+                coverage = covered / _total_coins
+                is_cold = coverage < _COLD_THRESHOLD
+                if is_cold:
+                    log.info(
+                        "K线采集冷启动模式：已覆盖 %d/%d 币（%.1f%%），batch_size=%d，连续回填",
+                        covered, _total_coins, coverage * 100, _COLD_BATCH,
+                    )
+
+            batch_size = _COLD_BATCH if is_cold else _WARM_BATCH
+
             try:
-                # 每轮采 60 个币；661 币约 11 轮覆盖一次（每轮 5 分钟 = 约 55 分钟全覆盖）
                 self._collect_offset = await self.candle_collector.collect_batch(
-                    self._collect_offset, 60)
-                log.info("K线批量采集落 DB（offset→%d）", self._collect_offset)
+                    self._collect_offset, batch_size)
+                log.info(
+                    "K线批量采集落 DB（offset→%d，batch=%d，%s）",
+                    self._collect_offset, batch_size,
+                    "冷启动" if is_cold else "稳态",
+                )
             except Exception as exc:  # noqa: BLE001
                 log.warning("K线采集失败: %s", exc)
-            await asyncio.sleep(every)
+
+            # 冷启动期不等待：立即开始下一批，尽快铺满 DB；稳态等 every 秒
+            if not is_cold:
+                await asyncio.sleep(every)
 
     async def _periodic_bb_board(self) -> None:
         """周期推送 Bitget 永续多周期布林带压力/支撑卡片（默认 15 分钟）。

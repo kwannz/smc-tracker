@@ -1507,13 +1507,155 @@ def build_harmonic_list(store: Any) -> list[dict]:
     return result
 
 
+def _knn_note_from_flag(knn_flag: str | None) -> str:
+    """把 DB knn 列（'✓'/'✗'/'?'/None）映射为友好说明文字。
+
+    注：KNN 命中率实测 ≈50%（随机基线），诚实标注，不伪造概率。
+    """
+    if knn_flag == "✓":
+        return "找到历史相似态（注：KNN≈随机基线，仅辅助参考）"
+    if knn_flag == "✗":
+        return "历史无相似态（注：KNN≈随机基线，仅辅助参考）"
+    return "样本不足或未计算（KNN≈随机基线，不可单独依赖）"
+
+
+def _prz_proximity(price: float | None, prz_lo: float | None, prz_hi: float | None) -> str:
+    """描述当前价格相对 PRZ 区间的位置（前瞻信号强度指示）。
+
+    返回中文描述字符串，用于"前瞻接近度"展示。价格/PRZ 缺失时返回 '—'。
+    util.to_float(None) 返回 0.0 而非 None，故先检查原始值是否为 None。
+    """
+    from smc_tracker.util import to_float as _to_float
+    if price is None or prz_lo is None or prz_hi is None:
+        return "—"
+    p = _to_float(price)
+    lo = _to_float(prz_lo)
+    hi = _to_float(prz_hi)
+    if p is None or lo is None or hi is None:
+        return "—"
+    if lo > hi:
+        lo, hi = hi, lo
+    span = hi - lo
+    if span <= 0:
+        return "—"
+    mid = (lo + hi) / 2
+    if mid <= 0 or p <= 0:
+        return "—"
+    dist_pct = abs(p - mid) / mid * 100
+    if lo <= p <= hi:
+        return f"价格在 PRZ 内 ⚡（距中轴 {dist_pct:.1f}%）"
+    elif p < lo:
+        gap_pct = (lo - p) / p * 100
+        return f"价格低于 PRZ {gap_pct:.1f}%（尚未触及，前瞻等待）"
+    else:
+        gap_pct = (p - hi) / p * 100
+        return f"价格高于 PRZ {gap_pct:.1f}%（已突破 PRZ 上沿）"
+
+
+def _compute_confluence(all_setups: list[dict]) -> list[dict]:
+    """检测跨 TF PRZ 区间重叠（多周期共振）——前瞻强化信号。
+
+    算法：枚举所有 TF pair，两个 setup 的 [prz_lo, prz_hi] 有非空交集
+    且方向一致 → 共振。返回共振列表，每项含：
+      tf_a, tf_b, direction, overlap_lo, overlap_hi, kind_a, kind_b
+
+    业界 multi-TF confluence 标准：多周期在同价区均有反转意愿 = 更高确定性。
+    共振 forming 优于共振 completed（forming 是前瞻信号）。
+    """
+    from smc_tracker.util import to_float as _to_float
+    results: list[dict] = []
+    seen: set[tuple] = set()
+    for i, a in enumerate(all_setups):
+        tf_a = a.get("tf") or ""
+        dir_a = a.get("direction") or ""
+        raw_lo_a = a.get("prz_lo")
+        raw_hi_a = a.get("prz_hi")
+        # util.to_float(None)=0.0 不是 None，须先检查原始值
+        if raw_lo_a is None or raw_hi_a is None or not dir_a:
+            continue
+        lo_a = _to_float(raw_lo_a)
+        hi_a = _to_float(raw_hi_a)
+        if lo_a is None or hi_a is None:
+            continue
+        if lo_a > hi_a:
+            lo_a, hi_a = hi_a, lo_a
+        for b in all_setups[i + 1:]:
+            tf_b = b.get("tf") or ""
+            if tf_b == tf_a:
+                continue
+            dir_b = b.get("direction") or ""
+            if dir_b != dir_a:
+                continue
+            raw_lo_b = b.get("prz_lo")
+            raw_hi_b = b.get("prz_hi")
+            if raw_lo_b is None or raw_hi_b is None:
+                continue
+            lo_b = _to_float(raw_lo_b)
+            hi_b = _to_float(raw_hi_b)
+            if lo_b is None or hi_b is None:
+                continue
+            if lo_b > hi_b:
+                lo_b, hi_b = hi_b, lo_b
+            overlap_lo = max(lo_a, lo_b)
+            overlap_hi = min(hi_a, hi_b)
+            if overlap_lo > overlap_hi:
+                continue
+            key = tuple(sorted([tf_a, tf_b]) + [dir_a])
+            if key in seen:
+                continue
+            seen.add(key)
+            kind_a = a.get("kind") or "—"
+            kind_b = b.get("kind") or "—"
+            fwd_count = sum(1 for k in (kind_a, kind_b) if k == "forming")
+            results.append({
+                "tf_a": tf_a,
+                "tf_b": tf_b,
+                "direction": dir_a,
+                "overlap_lo": round(overlap_lo, 6),
+                "overlap_hi": round(overlap_hi, 6),
+                "kind_a": kind_a,
+                "kind_b": kind_b,
+                "fwd_count": fwd_count,
+            })
+    results.sort(key=lambda x: x["fwd_count"], reverse=True)
+    return results
+
+
+def _enrich_setup(d: dict, current_price: float | None) -> dict:
+    """补充 setup dict 的派生展示字段（纯函数，不改原始字段）。
+
+    新增字段：
+      knn_note   — 由 knn 旗标派生的友好说明
+      honest_label — completed=回顾型/forming=前瞻预警
+      prz_proximity — 当前价格 vs PRZ 位置描述（前瞻接近度）
+    """
+    d = dict(d)
+    d["knn_note"] = _knn_note_from_flag(d.get("knn"))
+    kind = d.get("kind") or ""
+    if kind == "completed":
+        d["honest_label"] = "completed（回顾型：D点已发生，反应式信号）"
+    elif kind == "forming":
+        d["honest_label"] = "forming（前瞻预警：XABCD 成形中，D点尚未到达）"
+    else:
+        d["honest_label"] = "—"
+    price = current_price if current_price is not None else d.get("price")
+    d["prz_proximity"] = _prz_proximity(price, d.get("prz_lo"), d.get("prz_hi"))
+    return d
+
+
 def build_coin_detail(store: Any, coin: str, tf: str | None = None) -> dict:
-    """组装指定 coin（和 tf）的详情数据：蜡烛/setup/S/R/历史。
+    """组装指定 coin（和 tf）的详情数据：蜡烛/setup/S/R/历史/多周期共振。
 
     tf 缺省时取该币在 recent_harmonic_setups 中首个 setup 的 tf。
     tfs_available 固定返回 7 周期（15m/30m/1H/4H/12H/1D/1W），无论该周期是否有形态。
     无形态周期的 setups=[]，candles 仍尝试拉取（让前端显示 K 线）。
     表缺/空时各字段返回 []，不抛。
+
+    新增字段：
+      setups[].knn_note      — KNN 旗标友好说明（从 knn 列派生）
+      setups[].honest_label  — 形态类型诚实标注（completed=回顾/forming=前瞻）
+      setups[].prz_proximity — 当前价格相对 PRZ 位置（前瞻接近度描述）
+      confluence             — 多周期 PRZ 共振列表（前瞻强化信号）
     """
     from .asset_class import asset_class as _asset_class
 
@@ -1539,7 +1681,7 @@ def build_coin_detail(store: Any, coin: str, tf: str | None = None) -> dict:
     resolved_tf: str = tf or first_setup_tf or _FIXED_TFS[0]
 
     # 只保留目标 tf 的 setup
-    setups = [d for d in all_setups if d.get("tf") == resolved_tf]
+    setups_raw = [d for d in all_setups if d.get("tf") == resolved_tf]
 
     # 2. 蜡烛（200 根）——无形态的周期也拉（K 线仍有意义）
     candles: list[list] = []
@@ -1551,6 +1693,17 @@ def build_coin_detail(store: Any, coin: str, tf: str | None = None) -> dict:
         ]
     except Exception:  # noqa: BLE001
         pass
+
+    # 当前价格（最新蜡烛收盘，供 prz_proximity 计算）
+    current_price: float | None = None
+    if candles:
+        try:
+            current_price = float(candles[-1][4])
+        except (IndexError, TypeError, ValueError):
+            pass
+
+    # setup 字段丰富化（补 knn_note / honest_label / prz_proximity）
+    setups = [_enrich_setup(d, current_price) for d in setups_raw]
 
     # 3. S/R（该币所有 tf 的最新 bb_levels）
     sr: list[dict] = []
@@ -1576,6 +1729,9 @@ def build_coin_detail(store: Any, coin: str, tf: str | None = None) -> dict:
     except Exception:  # noqa: BLE001
         pass
 
+    # 5. 多周期 PRZ 共振（跨所有 tf setups，前瞻强化）
+    confluence: list[dict] = _compute_confluence(all_setups)
+
     return {
         "coin": coin,
         "asset_class": _asset_class(coin),
@@ -1586,6 +1742,7 @@ def build_coin_detail(store: Any, coin: str, tf: str | None = None) -> dict:
         "setups": setups,
         "sr": sr,
         "history": history,
+        "confluence": confluence,
     }
 
 
@@ -2266,7 +2423,7 @@ function renderSrTable(sr){{
   return h+'</table>';
 }}
 
-// ---- Setup 明细（右侧栏 kv 表）----
+// ---- Setup 明细（右侧栏 kv 表，含全字段展示）----
 function renderSetupDetail(setups){{
   if(!setups||!setups.length)return'<div style="color:var(--t2);padding:12px 0;line-height:1.6">'+
     '<span style="font-weight:600;color:var(--amber)">该周期暂无谐波形态</span><br>'+
@@ -2278,19 +2435,31 @@ function renderSetupDetail(setups){{
   const prz=su.prz_lo!=null||su.prz_hi!=null
     ?(fmtN(su.prz_lo,4)+' ~ '+fmtN(su.prz_hi,4)):'—';
   const conf=su.confidence!=null?Math.round(su.confidence*100)+'%':'—';
+  const knnFlag=su.knn||'?';
+  const knnNote=su.knn_note||'—';
+  const honestLabel=su.honest_label||'—';
+  const przProx=su.prz_proximity||'—';
+  const isForming=su.kind==='forming';
+  const formingBadge=isForming
+    ?'<span style="background:#eef3fa;color:#2563eb;border:1px solid #93c5fd;border-radius:4px;font-size:10px;padding:1px 6px;margin-left:4px">前瞻预警</span>'
+    :'<span style="background:#f0fdf4;color:#16a34a;border:1px solid #86efac;border-radius:4px;font-size:10px;padding:1px 6px;margin-left:4px">已完成</span>';
   return`<table class="kv">
-    <tr><th>形态</th><td>${{su.pattern||'—'}}</td></tr>
+    <tr><th>形态</th><td>${{su.pattern||'—'}}${{formingBadge}}</td></tr>
     <tr><th>方向</th><td>${{dirTag(su.direction)}}</td></tr>
+    <tr><th>信号类型</th><td style="font-size:11px;color:var(--t2)">${{esc(honestLabel)}}</td></tr>
+    <tr><th>PRZ 区间</th><td class="mono">${{prz}}</td></tr>
+    <tr><th>PRZ 接近度</th><td style="font-size:11px;color:var(--blue)">${{esc(przProx)}}</td></tr>
     <tr><th>进场区</th><td class="mono">${{entry}}</td></tr>
-    <tr><th>PRZ区</th><td class="mono">${{prz}}</td></tr>
     <tr><th>止损</th><td class="${{su.direction==='long'?'neg':'pos'}} mono">${{fmtN(su.stop,4)}}</td></tr>
     <tr><th>目标1</th><td class="pos mono">${{fmtN(su.target1,4)}}</td></tr>
     <tr><th>目标2</th><td class="pos mono">${{fmtN(su.target2,4)}}</td></tr>
     <tr><th>盈亏比</th><td class="pos mono">${{fmtN(su.rr,2)}}</td></tr>
-    <tr><th>置信</th><td class="mono">${{conf}}</td></tr>
-    <tr><th>KNN</th><td>${{su.knn||'—'}}</td></tr>
-    <tr><th>订单流</th><td>${{su.orderflow||'—'}}</td></tr>
-    <tr><th>Fib注记</th><td>${{su.fib_note||'—'}}</td></tr>
+    <tr><th>置信度</th><td class="mono">${{conf}}</td></tr>
+    <tr><th>Fib 注记</th><td style="font-size:11px">${{esc(su.fib_note||'—')}}</td></tr>
+    <tr><th>KNN 旗标</th><td class="mono">${{esc(knnFlag)}}</td></tr>
+    <tr><th>KNN 详情</th><td style="font-size:11px;color:var(--t2)">${{esc(knnNote)}}</td></tr>
+    <tr><th>订单流</th><td style="font-size:11px">${{esc(su.orderflow||'—')}}</td></tr>
+    <tr><th>当前价格</th><td class="mono">${{fmtN(su.price,4)}}</td></tr>
   </table>`;
 }}
 
@@ -2311,6 +2480,32 @@ function renderKnnCard(setups){{
   </div>
   <div class="knn-note">⚠️ KNN ≈ 随机基线（项目实测 ~50%，无 alpha）。仅作历史相似态展示，
     不产生概率预测、不可作信号依赖。后端 knn 标记：${{esc(knnTxt||'未知')}}</div>`;
+}}
+
+// ---- 多周期 PRZ 共振卡（前瞻强化信号）----
+function renderConfluenceCard(confluence){{
+  if(!confluence||!confluence.length)return'<span class="none" style="font-size:12px">'+
+    '暂无多周期 PRZ 共振。需要 ≥2 个不同周期方向一致且 PRZ 区间有重叠。</span>';
+  let h='<table><tr><th>周期 A</th><th>周期 B</th><th>方向</th><th>共振价区</th><th>信号性质</th></tr>';
+  confluence.forEach(c=>{{
+    const dirT=c.direction==='long'?'<span class="long">看多</span>':'<span class="short">看空</span>';
+    const overlapTxt=fmtN(c.overlap_lo,4)+' ~ '+fmtN(c.overlap_hi,4);
+    const fwdBadge=c.fwd_count>0
+      ?'<span style="color:#2563eb;font-weight:600">前瞻('+c.fwd_count+'forming)</span>'
+      :'<span style="color:var(--t2)">回顾</span>';
+    h+=`<tr>
+      <td class="mono">${{esc(c.tf_a||'—')}}</td>
+      <td class="mono">${{esc(c.tf_b||'—')}}</td>
+      <td>${{dirT}}</td>
+      <td class="mono" style="font-size:11px">${{overlapTxt}}</td>
+      <td>${{fwdBadge}}</td>
+    </tr>`;
+  }});
+  h+='</table>';
+  h+='<div style="font-size:11px;color:var(--t2);margin-top:6px">'+
+    '多周期共振 = 不同 TF 在同价区均预期反转，是前瞻性更强的叠加信号。'+
+    '含 forming 周期的共振表示价格尚未到达，领先量更大。</div>';
+  return h;
 }}
 
 // ---- 历史形态 ----
@@ -2393,7 +2588,7 @@ function renderMainArea(d){{
   redrawChart();
 }}
 
-// ---- 右侧栏渲染（Setup + S/R + KNN + 解释）----
+// ---- 右侧栏渲染（Setup + 多周期共振 + S/R + KNN + 解释）----
 function renderRightSide(d){{
   if(!d){{
     document.getElementById('right-side').innerHTML=
@@ -2401,10 +2596,15 @@ function renderRightSide(d){{
     return;
   }}
   document.getElementById('right-side').innerHTML=
-    // Setup 明细卡（accent 蓝边）
+    // Setup 明细卡（accent 蓝边，含全字段）
     `<div class="card accent">
-       <div class="card-title">Setup 明细（交易计划）</div>
+       <div class="card-title">Setup 明细（含 KNN 详情 · PRZ 接近度 · 诚实标注）</div>
        <div class="card-body">${{renderSetupDetail(d.setups||[])}}</div>
+     </div>`+
+    // 多周期 PRZ 共振（前瞻强化信号）
+    `<div class="card">
+       <div class="card-title">多周期 PRZ 共振（前瞻强化）</div>
+       <div class="card-body">${{renderConfluenceCard(d.confluence||[])}}</div>
      </div>`+
     // 多周期 S/R
     `<div class="card">
@@ -2432,10 +2632,13 @@ function renderRightSide(d){{
            <dt>斐波那契 / fib_note</dt><dd>谐波形态基于斐波那契比率（0.618/0.786/0.886等）定义 PRZ。</dd>
            <dt>订单流（前瞻领先信号）</dt><dd>PRZ 附近挂单/成交量异常确认。注意挂单墙可能 spoof（虚假）。</dd>
            <dt>KNN（仅辅助，≈随机基线）</dt><dd>历史相似形态参考，诚实标注：命中率接近随机，不可单独依赖。</dd>
+           <dt>信号类型（completed/forming）</dt><dd>completed=D点已发生，是回顾型反应信号；forming=XABCD还在成形中，D点未到，是前瞻预警信号，领先量更大。</dd>
+           <dt>PRZ 接近度</dt><dd>当前价格距 PRZ 区间的距离。价格在 PRZ 内⚡=最强入场区；价格低于 PRZ=等待靠近；价格高于 PRZ=已突破。</dd>
+           <dt>多周期 PRZ 共振</dt><dd>不同时间周期（如 1H+4H）的 PRZ 价区重叠，且方向一致=更强前瞻信号。含 forming 周期的共振前瞻性最强。</dd>
          </dl>
          <div class="honest-note">⚠️ <strong>诚实声明：确认层非投资建议。</strong>
            谐波 PRZ + 订单流提高概率，不保证盈利；KNN ≈ 随机；挂单墙可能 spoof；
-           止损必须执行。前瞻预测为参考，不是入场信号。</div>
+           止损必须执行。前瞻预测为参考，不是入场信号。forming 信号=D点尚未到达，是预警而非入场触发。</div>
        </div>
      </details>`+
     `<div class="disclaimer">⚠️ 确认层非投资建议：PRZ 前瞻 × 订单流确认；KNN ≈ 随机基线；墙可能 spoof。</div>`;

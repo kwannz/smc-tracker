@@ -8,6 +8,8 @@
   - 写入通过 store.upsert_candles（INSERT OR REPLACE），跨重启持久，去重安全。
   - collect_batch：增量轮转采集，每次取 batch_size 个币，offset 滚动覆盖全集（661 币分多轮）。
   - _clean_candles：数据质量守卫——拒 NaN/inf、ts 严格递增去重、价格>0、h>=l。
+  - 超时重试：单 coin/tf TimeoutError 时以 retry_bars 减小分页页数重试 1 次（指数退避不无限重试）。
+  - 冷启动检测：covered_coin_count 供调用方判断 DB 覆盖度，加速批量填满阶段。
 """
 from __future__ import annotations
 
@@ -21,6 +23,9 @@ from ..models import Candle
 from ..util import to_float as _f
 
 log = logging.getLogger(__name__)
+
+# 超时重试：单次最大延迟（秒），防止重试本身阻塞轮转
+_RETRY_DELAY_S: float = 1.0
 
 
 def _clean_candles(candles: list[Candle]) -> list[Candle]:
@@ -83,9 +88,11 @@ class BitgetCandleCollector:
         bars:           每个 coin/tf 拉取根数（传给 BitgetREST.klines）。
         store:          实现了 upsert_candles() 的存储对象（Store 实例或 duck-type）。
         sema_limit:     并发 semaphore 上限（防 429）。
+        retry_bars:     超时时降级重试的 bars 数（减少分页页数，默认 100）。
+                        100 根在单次 candles 端点即可覆盖（无需历史分页），大幅降低超时风险。
     """
 
-    __slots__ = ("coin_to_symbol", "timeframes", "bars", "store", "sema_limit")
+    __slots__ = ("coin_to_symbol", "timeframes", "bars", "store", "sema_limit", "retry_bars")
 
     def __init__(
         self,
@@ -94,12 +101,47 @@ class BitgetCandleCollector:
         bars: int,
         store: Any,
         sema_limit: int = 4,
+        retry_bars: int = 100,
     ) -> None:
         self.coin_to_symbol = coin_to_symbol
         self.timeframes = timeframes
         self.bars = bars
         self.store = store
         self.sema_limit = sema_limit
+        # retry_bars 必须 <= bars，否则与原 bars 无区别；确保缩减
+        self.retry_bars = min(retry_bars, bars) if bars > 0 else retry_bars
+
+    def covered_coin_count(self, tf: str) -> int:
+        """查询 DB 中指定 tf 已有数据的去重 coin 数（冷启动检测）。
+
+        鸭子类型：若 store 有 SQLite conn（Store 实例），直接执行聚合查询（O(1)）；
+        否则降级逐 coin 调用 count_candles（兜底，慢但正确）。
+        任何异常静默返回 0（不阻塞主路径）。
+
+        Args:
+            tf: K 线周期，如 "1H"
+
+        Returns:
+            已有 >=1 根 K 线的去重 coin 数量；异常时返回 0。
+        """
+        try:
+            conn = getattr(self.store, "conn", None)
+            if conn is not None:
+                # 快速路径：SQLite 聚合
+                row = conn.execute(
+                    "SELECT COUNT(DISTINCT coin) FROM bitget_candles WHERE tf=?",
+                    (tf,),
+                ).fetchone()
+                return row[0] if row else 0
+            # 慢速路径：逐 coin 查询（duck-type 兜底）
+            count_fn = getattr(self.store, "count_candles", None)
+            if count_fn is None:
+                return 0
+            return sum(
+                1 for coin in self.coin_to_symbol if count_fn(coin, tf) > 0
+            )
+        except Exception:  # noqa: BLE001
+            return 0
 
     async def collect_once(self) -> int:
         """采集所有 coin×tf 的 K 线并写入 DB，返回总写入根数。
@@ -173,28 +215,49 @@ class BitgetCandleCollector:
     ) -> int:
         """采集单个 coin/tf 的 K 线，清洗后写入 DB，返回写入根数。
 
-        异常在此层 log.warning 吞掉（单组合失败不影响整批）。
+        超时处理策略（防 TimeoutError 永卡死长尾币）：
+          - 首次 TimeoutError：等待 _RETRY_DELAY_S 后以 retry_bars 重试一次。
+            retry_bars << bars，减少历史分页页数（如 100 根无需 history-candles 分页，
+            可在 candles 单次端点完成，避免多次 HTTP 往返超时）。
+          - 重试仍失败：log.warning 记录，跳过此 coin/tf，下轮再试。
+            诚实跳过，不假装成功（CLAUDE.md §三-3：诚实标注）。
+          - 非超时异常：直接 log.warning 吞掉，维持原有行为。
         """
         async with sema:
             try:
                 candles = await bg.klines(symbol, tf, bars=self.bars, coin=coin)
-                if not candles:
+            except asyncio.TimeoutError:
+                # 首次超时：降级 bars 重试一次（减少分页，提高单次成功率）
+                log.debug(
+                    "candle_collector: coin=%s tf=%s 首次超时，降级 bars=%d 重试",
+                    coin, tf, self.retry_bars,
+                )
+                await asyncio.sleep(_RETRY_DELAY_S)
+                try:
+                    candles = await bg.klines(symbol, tf, bars=self.retry_bars, coin=coin)
+                except Exception as retry_exc:  # noqa: BLE001
+                    log.warning(
+                        "candle_collector: coin=%s tf=%s 重试仍失败，跳过。原因: %r",
+                        coin, tf, retry_exc,
+                    )
                     return 0
-                # 数据质量守卫：清洗脏行（NaN/inf/负价/h<l/ts重复）
-                candles = _clean_candles(candles)
-                if not candles:
-                    return 0
-                rows = [
-                    (c.coin, c.interval, c.open_time_ms, c.o, c.h, c.l, c.c, c.v)
-                    for c in candles
-                ]
-                self.store.upsert_candles(rows)
-                return len(rows)
             except Exception as exc:  # noqa: BLE001
-                # 用 repr(exc) 而非 str(exc)：无消息异常(TimeoutError()/ClientError() 等)
-                # str() 为空会打出 "原因: "(空白，无法诊断)；repr 必含类型名，可诊断(§三-3)。
+                # 非超时异常：与原有行为一致，直接吞掉 log.warning
                 log.warning(
                     "candle_collector: coin=%s tf=%s 采集失败，跳过。原因: %r",
                     coin, tf, exc,
                 )
                 return 0
+
+            if not candles:
+                return 0
+            # 数据质量守卫：清洗脏行（NaN/inf/负价/h<l/ts重复）
+            candles = _clean_candles(candles)
+            if not candles:
+                return 0
+            rows = [
+                (c.coin, c.interval, c.open_time_ms, c.o, c.h, c.l, c.c, c.v)
+                for c in candles
+            ]
+            self.store.upsert_candles(rows)
+            return len(rows)
