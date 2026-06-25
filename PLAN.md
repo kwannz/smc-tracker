@@ -213,6 +213,12 @@ D 多空符号 · E 真实 userFills 解析/分类自洽 · F WS webData2==REST 
 > 据 codex-loop 反幻觉纪律保持开放，区别于「已实现但 backlog 写保守」的项（已核实证据后闭合）。
 
 ## 迭代日志
+- 2026-06-26 #115: **dashboard.py 谐波数据层迁出 → 全 dashboard 层 ≤800 达标(4190→552)**（Sonnet 执行/Opus 复核）。
+  抽共享 helper `_safe_rows`/`_row_to_dict` → 新叶子 `dashboard_common.py`(20 行)破循环；谐波数据层(build_harmonic_state/
+  list/coin_detail + 4 helpers + _HARMONIC_KEYS ~354 行)迁入 dashboard_harmonic.py(→394)。dashboard.py **915→552**。
+  依赖图 dashboard→dashboard_harmonic→dashboard_common(无环)。**全部 7 个 dashboard*.py 均 ≤800**
+  (552/394/289/111/106/37/20)。Opus 复核:复跑 2359 passed、7 路由全 200、package-data 已覆盖。
+  **dashboard.py 总历程 4190→552(削 87%)**:4 渲染模块 + 4 HTML 资源外置 + 数据层拆分 + common 叶子。零回归。
 - 2026-06-26 #114: **主页/hl2 模板外置成资源(dashboard.py 2345→915，4190→915 累计削 78%)**（Sonnet 执行/Opus 复核）。
   同 #113 范式：把 `_HTML_TEMPLATE`(主页)/`_HL_TEMPLATE`(hl2) 外置成 `templates/index.html`(649)+`templates/hl2.html`(785)，
   dashboard.py 改 read_text 加载，render 函数不动。round-trip 逐字一致。**dashboard.py 915 行**(剩 build_*/handlers/serve
