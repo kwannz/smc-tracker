@@ -318,6 +318,13 @@ class HLOrderbookMonitor:
             # C.5: 跳过 spoof 标记墙
             if self._spoof_flag.get(key, False):
                 continue
+            # C.5: 存活时间检查——仅返回已通过 lifetime gate 的墙
+            # _wall_born[key]=0 表示已 emit（存活确认）；>0 表示仍在等待确认；
+            # key 不在 _wall_born 中表示无 WS 生命周期记录（直接注入或早期状态），视为已确认。
+            born_ts = self._wall_born.get(key, 0)
+            if born_ts > 0:
+                # 尚未通过存活检验，不作为确认意图返回
+                continue
             if notional > best_notional:
                 best_notional = notional
                 best = {"px": px, "notional": notional, "n": n, "dist_pct": dist_pct}

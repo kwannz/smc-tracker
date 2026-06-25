@@ -20,6 +20,9 @@ def oi_directional_velocity(
     """
     if oi_past <= 0.0:
         return 0.0
+    # 对称守卫：price_past/price_now <= 0 为冷启动或异常数据，无法判断方向 → 中性
+    if price_past <= 0.0 or price_now <= 0.0:
+        return 0.0
     d_oi = (oi_now - oi_past) / oi_past
     if price_now > price_past:
         price_sign = 1.0

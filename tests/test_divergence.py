@@ -59,6 +59,22 @@ def test_persist():
     store.close()
 
 
+def test_oi_decrease_attenuates_score():
+    """OI 下降(去杠杆/拥挤瓦解)时，score 应低于 OI 中性时，不应高估背离强度。"""
+    d = DivergenceDetector()
+    # OI 中性（不变）
+    s_neutral = d.evaluate("C", funding=0.0003, oi_change_pct=0.0,
+                           dex_flow_usd=-150_000, now_ms=1)
+    # OI 大幅下降（去杠杆）
+    s_dec = d.evaluate("D", funding=0.0003, oi_change_pct=-0.05,
+                       dex_flow_usd=-150_000, now_ms=1)
+    # 去杠杆场景背离强度应被衰减
+    assert s_dec is not None, "OI 下降时背离信号应仍触发"
+    assert s_dec.score < s_neutral.score, (
+        f"OI 下降应衰减 score: dec={s_dec.score:.4f} >= neutral={s_neutral.score:.4f}"
+    )
+
+
 if __name__ == "__main__":
     for name, fn in list(globals().items()):
         if name.startswith("test_") and callable(fn):

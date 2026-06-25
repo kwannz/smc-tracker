@@ -42,3 +42,17 @@ def test_zero_oi_past_returns_zero():
 def test_flat_price_returns_zero():
     """价格不变 → sign(Δprice)=0 → 0.0。"""
     assert oi_directional_velocity(1050.0, 1000.0, 100.0, 100.0) == 0.0
+
+
+def test_cold_start_price_past_zero_returns_neutral():
+    """冷启动 price_past=0（app 默认 _last_close=0）且 OI 升 → 应返回 0.0 中性，不偏多。
+
+    Bug：原实现只守 oi_past<=0，price_past=0 时 price_now>0=price_past 触发 price_sign=+1.0，
+    OI 速度被静默偏置为看涨，造成冷启动偏多。
+    """
+    assert oi_directional_velocity(1050.0, 1000.0, 110.0, 0.0) == 0.0
+
+
+def test_cold_start_price_now_zero_returns_neutral():
+    """price_now=0（异常数据）→ 应返回 0.0 中性，不产生虚假看跌信号。"""
+    assert oi_directional_velocity(1050.0, 1000.0, 0.0, 100.0) == 0.0

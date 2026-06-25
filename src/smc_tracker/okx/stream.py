@@ -287,7 +287,12 @@ async def run_stream(
     print(sig_line)
 
     # 6. 资金费 × 净流向背离（散户杠杆拥挤 vs taker 实际方向）
-    divs = detect_divergences(monitor.all_latest(), dict(monitor.all_net_flows()))
+    # 用窗口口径（windowed_net_flow）对齐常驻路径 run_okx_streaming：
+    # run_stream 是一次性 CLI，prev_net={} → 窗口增量 == 当前累积值；
+    # 但显式走 windowed_net_flow 保证口径语义统一，避免未来被改成非零 prev_net 时遗漏。
+    _cur_net = dict(monitor.all_net_flows())
+    _win_net = windowed_net_flow(_cur_net, {})
+    divs = detect_divergences(monitor.all_latest(), _win_net)
     if divs:
         div_hdr = f"funding×flow 背离 {len(divs)}:"
         lines.append(div_hdr)

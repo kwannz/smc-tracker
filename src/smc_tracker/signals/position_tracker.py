@@ -8,6 +8,12 @@
 - reversal(反手)：上轮与本轮反向且至少一边够大。
 - reduce(减仓)：仍持仓但名义大幅下降。
 首轮仅建基线(庄的存量持仓不算「新动作」)。
+
+局限说明：
+- 缺价（prices 里没有该 coin 的行情）时，该 (addr, coin) 键无法计算名义值。
+  对上轮有持仓的 coin，缺价轮会跳过（沿用上轮 prev，不产生任何事件），
+  避免因数据缺失误报 exit。代价是缺价期间的真实平仓会被延迟发现
+  （等价格数据恢复后下一轮才会 diff 出来）。
 """
 from __future__ import annotations
 
@@ -61,10 +67,16 @@ class WhalePositionTracker:
     def scan(self, positions: dict[tuple[str, str], float], prices: dict[str, float],
              labels: dict[str, str], now_ms: int) -> list[PositionChange]:
         current: dict[tuple[str, str], float] = {}
+        # 本轮有持仓数据但缺价的 key 集合（无法计算名义值，需跳过 diff）
+        price_missing: set[tuple[str, str]] = set()
+
         for (addr, coin), szi in positions.items():
             px = prices.get(coin)
             if px and szi != 0:
                 current[(addr, coin)] = szi * px
+            elif szi != 0 and not px:
+                # 有持仓但缺价 → 记录，后续 diff 时跳过该 key
+                price_missing.add((addr, coin))
 
         if not self._initialized:
             self._prev = current
@@ -73,6 +85,13 @@ class WhalePositionTracker:
 
         out: list[PositionChange] = []
         for key in set(self._prev) | set(current):
+            # 缺价时沿用上轮，不产生事件（避免误报 exit）
+            if key in price_missing:
+                continue
+            # 上轮有持仓但本轮整个 coin 都无行情数据（positions 里也没该 key）
+            # 且该 key 已在 price_missing 中标记 → 上面已 continue；
+            # 但若 positions 里压根就没该 (addr,coin)（庄已退出交易所返回里消失），
+            # 则 price_missing 不含该 key，正常走归零逻辑。
             prev = self._prev.get(key, 0.0)
             new = current.get(key, 0.0)
             chg = self._classify(prev, new)
@@ -91,7 +110,13 @@ class WhalePositionTracker:
             if self.on_change is not None:
                 self.on_change(pc)
             out.append(pc)
-        self._prev = current
+
+        # 更新 prev：缺价 key 保留上轮值（沿用），其余用 current 覆盖
+        next_prev = dict(current)
+        for key in price_missing:
+            if key in self._prev:
+                next_prev[key] = self._prev[key]
+        self._prev = next_prev
         return out
 
     def _classify(self, prev: float, new: float) -> str | None:

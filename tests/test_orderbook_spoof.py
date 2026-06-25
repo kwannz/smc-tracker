@@ -182,3 +182,59 @@ def test_book_intent_none_for_unknown_coin():
     """未收到 WS 帧的 coin → book_intent 返回 None（调用方降级）。"""
     mon, events = _make_mon()
     assert mon.book_intent("UNKNOWN", now_ms=99999) is None
+
+
+# ──────────────────── confirming_wall 存活时间检查 ────────────────────
+
+def test_confirming_wall_rejects_newborn_wall():
+    """confirming_wall 不返回存活时间 < min_lifetime_ms 的墙（名实一致）。
+
+    TDD：此测试先于实现存在，初始应 FAIL（当前实现未检查 born_ts）。
+    """
+    mon, events = _make_mon(min_lifetime_ms=3000)
+    # 第1帧 t=1000：大墙刚出现，_wall_born 记录 born_ts=1000，存活=0ms < 3000ms
+    mon._on_l2book(_big_bid_frame(1000), 0)
+    # 刚出现的墙不应被 confirming_wall 返回（未满足存活要求）
+    result = mon.confirming_wall("BTC", price=60000.0, side="bid", tol_pct=0.02)
+    assert result is None, (
+        f"confirming_wall 不应返回存活 < min_lifetime_ms 的墙: {result}"
+    )
+
+
+def test_confirming_wall_returns_after_sufficient_lifetime():
+    """confirming_wall 在墙存活 >= min_lifetime_ms 后才返回它（build 已 emit）。
+
+    TDD：需配合实现修复才能通过。
+    """
+    mon, events = _make_mon(min_lifetime_ms=3000)
+    # 第1帧 t=1000：记录 born（存活 0ms，未确认）
+    mon._on_l2book(_big_bid_frame(1000), 0)
+    assert mon.confirming_wall("BTC", price=60000.0, side="bid", tol_pct=0.02) is None
+
+    # 第2帧 t=5000（存活 4000ms >= 3000ms）：build 已确认 emit → 应返回
+    mon._on_l2book(_big_bid_frame(5000), 0)
+    result = mon.confirming_wall("BTC", price=60000.0, side="bid", tol_pct=0.02)
+    assert result is not None, (
+        "存活 >= min_lifetime_ms 后 confirming_wall 应返回该墙"
+    )
+    assert result["px"] == 60000.0
+
+
+def test_confirming_wall_rejects_wall_disappeared_before_maturity():
+    """墙在未满 min_lifetime_ms 前消失后重新出现，不应立即被 confirming_wall 返回。
+
+    重现场景：同一 px 在 born 后快速 pull 再 build → born_ts 重置 → 仍需等待。
+    """
+    mon, events = _make_mon(min_lifetime_ms=5000)
+    # t=1000：墙出现（born=1000）
+    mon._on_l2book(_big_bid_frame(1000), 0)
+    # t=2000（存活1s < 5s）：墙消失（pull，born 清除）
+    mon._on_l2book(_no_wall_frame(2000), 0)
+    # t=2500：墙重新出现（born 重置为 2500）
+    mon._on_l2book(_big_bid_frame(2500), 0)
+    # t=4000（距第2次 born 仅1.5s < 5s）：仍不应返回
+    mon._on_l2book(_big_bid_frame(4000), 0)
+    result = mon.confirming_wall("BTC", price=60000.0, side="bid", tol_pct=0.02)
+    assert result is None, (
+        f"重生墙存活不足 min_lifetime_ms，confirming_wall 不应返回: {result}"
+    )

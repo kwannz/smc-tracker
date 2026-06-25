@@ -56,6 +56,35 @@ def test_persist():
     store.close()
 
 
+def test_no_exit_when_price_missing():
+    """缺价时上轮有持仓的 coin 不应误报 exit（沿用上轮，跳过本轮）。
+    复现 bug：prices 里没有 BTC → current 里没有 (0xA, BTC) →
+    与上轮 diff 时 new=0 → 本应被当作「缺价，无法判断」而跳过，
+    但旧代码直接把 new=0 传给 _classify → 误报 exit。
+    """
+    t = WhalePositionTracker(min_notional=1_000_000)
+    # 基线：$6M 多仓
+    t.scan({("0xA", "BTC"): 100.0}, PRICES, LABELS, now_ms=1)
+    # 第二轮：BTC 仓位数据还在，但 prices 里没有 BTC（缺价） → 不应报 exit
+    no_btc_prices: dict[str, float] = {"ETH": 3000.0}
+    out = t.scan({("0xA", "BTC"): 100.0}, no_btc_prices, LABELS, now_ms=2)
+    assert out == [], f"缺价时不应 emit exit，但得到 {out}"
+
+
+def test_prev_preserved_after_missing_price():
+    """缺价轮之后，价格恢复时仍能正确 diff（prev 沿用上轮而非归零）。"""
+    t = WhalePositionTracker(min_notional=1_000_000)
+    # 基线
+    t.scan({("0xA", "BTC"): 100.0}, PRICES, LABELS, now_ms=1)
+    # 缺价轮 → 应无事件，prev 应保持 $6M
+    no_btc_prices: dict[str, float] = {"ETH": 3000.0}
+    t.scan({("0xA", "BTC"): 100.0}, no_btc_prices, LABELS, now_ms=2)
+    # 价格恢复，仓位归零 → 现在才应该 exit
+    out = t.scan({}, PRICES, LABELS, now_ms=3)
+    assert len(out) == 1 and out[0].kind == "exit", (
+        f"价格恢复后平仓应 emit exit，但得到 {out}")
+
+
 if __name__ == "__main__":
     for name, fn in list(globals().items()):
         if name.startswith("test_") and callable(fn):

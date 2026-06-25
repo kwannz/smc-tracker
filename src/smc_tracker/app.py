@@ -401,7 +401,9 @@ class TradingSystem:
             if alert is not None:
                 self._pump_seen[coin] = now
                 ctx = fmt_analysis(coin, ta_analyze(buf, now))   # 附 TA 全景上下文
-                msg = f"[{_ts(now)}] {alert.fmt()}{self._price_tag(coin)}\n{ctx}"
+                msg = (f"[{_ts(now)}] {alert.fmt()}{self._price_tag(coin)}"
+                       + self.efficacy.label_of("暴涨")
+                       + f"\n{ctx}")
                 print(f"\n{'='*60}\n{msg}\n{'='*60}\n")
                 self._emit("pump", msg)
                 self._record_pred(coin, "暴涨", "up" if alert.kind == "pump" else "down")
@@ -1043,7 +1045,8 @@ class TradingSystem:
                         pred = self.flow_predictor.predict(coin, now, book_imb, oi_vel)
                         if pred and now - self._flow_pred_seen.get(coin, 0) >= 600_000:
                             self._flow_pred_seen[coin] = now
-                            msg = f"[{_ts(now)}] {pred.fmt()}{self._price_tag(coin)}"
+                            msg = (f"[{_ts(now)}] {pred.fmt()}{self._price_tag(coin)}"
+                                   + self.efficacy.label_of("前瞻"))
                             print(f"\n{'='*60}\n{msg}\n{'='*60}\n")
                             self._push(msg)
                             self._record_pred(coin, "前瞻", pred.direction)
@@ -1649,7 +1652,8 @@ class TradingSystem:
                         arrow = "🟢看多" if ev["direction"] == "long" else "🔴看空"
                         msg = (f"🎯 [谐波逼近] {coin} {ev['tf']} {ev['pattern']} {arrow} "
                                f"现价 {_fmt_px(px)} 进入 PRZ [{_fmt_px(ev['prz_lo'])}~{_fmt_px(ev['prz_hi'])}]"
-                               f" · 前瞻反转预警（非入场信号，待确认）")
+                               f" · 前瞻反转预警（非入场信号，待确认）"
+                               + self.efficacy.label_of("谐波-逼近"))
                         print(f"[{_hms()}] {msg}")
                         self._push_harmonic(msg)
                         # forming 反转预测在触达 PRZ 时记（诚实前瞻命中率）

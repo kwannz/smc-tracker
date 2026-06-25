@@ -70,8 +70,17 @@ class DivergenceDetector:
 
         funding_str = min(abs(funding) / self.funding_scale, 1.0)
         flow_str = math.tanh(abs(dex_flow_usd) / self.flow_scale)
-        # OI 上升放大拥挤（仅在增仓时加成）
-        oi_amp = 1.0 + (min(oi_change_pct / 0.05, 1.0) * 0.5 if oi_change_pct > 0 else 0.0)
+        # OI 因子双向：
+        #   增仓(oi>0)  → 拥挤加剧，放大背离强度，上限 1.5×
+        #   中性(oi=0)  → 无影响，1.0
+        #   减仓(oi<0)  → 去杠杆/拥挤瓦解，衰减背离强度，下限 0.7×
+        # 语义：OI 上升说明新仓在涌入、拥挤加剧；OI 下降说明平仓离场、背离信号应打折
+        if oi_change_pct > 0:
+            oi_amp = 1.0 + min(oi_change_pct / 0.05, 1.0) * 0.5   # [1.0, 1.5]
+        elif oi_change_pct < 0:
+            oi_amp = 1.0 + max(oi_change_pct / 0.05, -1.0) * 0.3  # [0.7, 1.0]
+        else:
+            oi_amp = 1.0
         score = min(funding_str * flow_str * oi_amp, 1.0)
         if score < self.threshold:
             return None
@@ -81,6 +90,8 @@ class DivergenceDetector:
         parts = [f"{crowd}(funding{funding*100:+.3f}%)", f"{smart}${dex_flow_usd:,.0f}"]
         if oi_change_pct > 0:
             parts.append(f"OI+{oi_change_pct*100:.1f}%")
+        elif oi_change_pct < 0:
+            parts.append(f"OI{oi_change_pct*100:.1f}%(去杠杆)")
         sig = DivergenceSignal(coin=coin, direction=direction, score=score,
                                funding=funding, oi_change_pct=oi_change_pct,
                                dex_flow_usd=dex_flow_usd, reason=" × ".join(parts), ts=now_ms)
