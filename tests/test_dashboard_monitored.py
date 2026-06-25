@@ -7,7 +7,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from smc_tracker.dashboard import apply_monitored_action, render_monitored_page
+from smc_tracker.dashboard_monitored import apply_monitored_action, render_monitored_page
 from smc_tracker.storage import Store
 
 

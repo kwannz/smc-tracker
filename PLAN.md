@@ -213,6 +213,11 @@ D 多空符号 · E 真实 userFills 解析/分类自洽 · F WS webData2==REST 
 > 据 codex-loop 反幻觉纪律保持开放，区别于「已实现但 backlog 写保守」的项（已核实证据后闭合）。
 
 ## 迭代日志
+- 2026-06-26 #108: **/monitored 面板迁出巨文件 → 扁平模块 dashboard_monitored.py（继续稀释 dashboard.py）**（/loop：模块化扁平）。
+  把 `apply_monitored_action`/`render_monitored_page`/2 个 handler/3 路由从 dashboard.py 迁入新扁平模块
+  `dashboard_monitored.py`(106 行)，`register(app,store)` 外置挂路由；dashboard.py 仅一行调用。
+  **dashboard.py 4190 → 4101 行**(移出 89 行，与 #106 的 dashboard_vol 同范式逐个稀释巨文件)。
+  端到端实跑验证迁移后 /api/monitored GET/POST 正常；全量 **2331 passed, 2 skipped**（零回归，纯重构）。
 - 2026-06-26 #107: **波动状态领先信号(压缩/扩张 regime)接入波动板 CLI+dashboard**（/loop：专业细节追踪实时波动）。
   ① `vol_metrics` 加 `vol_ratio`(短窗σ/长窗σ)+`regime`(压缩<0.7/扩张>1.4/常态)——开源 Bollinger squeeze 思路，
   纯 K 线零额外数据；**压缩=蓄势常先于突破**(领先信号，CLAUDE.md §二)。
