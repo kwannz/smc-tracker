@@ -7,8 +7,16 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from smc_tracker.dashboard import apply_monitored_action
+from smc_tracker.dashboard import apply_monitored_action, render_monitored_page
 from smc_tracker.storage import Store
+
+
+def test_monitored_page_self_contained():
+    """迷你页自包含：含表单 + fetch /api/monitored，无 CDN 外链。"""
+    html = render_monitored_page()
+    assert "/api/monitored" in html
+    assert "doAdd" in html and "doRm" in html
+    assert "http://" not in html and "https://" not in html  # 无外链依赖
 
 
 def _store():
