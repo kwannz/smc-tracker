@@ -2,6 +2,10 @@
 
 > 状态：已批准（用户 2026-06-26 确认设计 → "执行"）
 > 目标分支：`feat/watchlist-multi-tf`
+>
+> **命名修订（实证发现）**：`config.py::Config.load` 已有顶层 `watchlist` 键（追踪**地址**
+> `list[WatchAddress]`）。为避免冲突，本特性的**配置段/dataclass/DB 表/方法**统一用
+> `monitored_coins`（"监控清单"），不复用 `watchlist`。CLI 子命令仍叫 `watch`（地址侧无 CLI，无冲突）。
 
 ## 一、问题与目标
 
@@ -27,11 +31,11 @@
 
 ## 二、方案选择
 
-采用 **方案 A：新建专用 `watchlist_coins` 表 + `watchlist.enabled` 主开关**。
+采用 **方案 A：新建专用 `monitored_coins` 表 + `monitored_coins.enabled` 主开关**。
 
 - 新表作为「监控清单」唯一真相源，语义干净。
-- `watchlist.enabled=true` → 采集器/谐波/BB 的币集全部 = DB 清单；
-  `watchlist.enabled=false` → 完全是现状 all_perp 行为（**零回归**，新路径完全旁路）。
+- `monitored_coins.enabled=true` → 采集器/谐波/BB 的币集全部 = DB 清单；
+  `monitored_coins.enabled=false` → 完全是现状 all_perp 行为（**零回归**，新路径完全旁路）。
 - 把现有 `harmonic_collected`（discover 按钮）统一并入新表（一次性迁移 + discover 改写新表），
   避免两个重叠概念。
 
@@ -45,7 +49,7 @@
 新表，镜像 `harmonic_collected` 的方法风格：
 
 ```sql
-CREATE TABLE IF NOT EXISTS watchlist_coins (
+CREATE TABLE IF NOT EXISTS monitored_coins (
     coin     TEXT    NOT NULL PRIMARY KEY,
     symbol   TEXT    NOT NULL,
     added_ts INTEGER NOT NULL,
@@ -55,21 +59,21 @@ CREATE TABLE IF NOT EXISTS watchlist_coins (
 
 方法（均空安全、幂等、异常向上抛由调用方 warn）：
 
-- `add_watchlist(items: Iterable[tuple]) -> None`：`(coin, symbol, added_ts, note)` 幂等 upsert
+- `add_monitored_coins(items: Iterable[tuple]) -> None`：`(coin, symbol, added_ts, note)` 幂等 upsert
   （`ON CONFLICT(coin) DO UPDATE SET symbol=excluded.symbol, note=excluded.note`）。
-- `remove_watchlist(coins: Iterable[str]) -> int`：删除指定 coin，返回删除行数。
-- `get_watchlist() -> dict[str, str]`：返回 `{coin: symbol}`（供运行时对账）。
-- `list_watchlist() -> list[tuple]`：返回 `(coin, symbol, added_ts, note)` 行（按 added_ts 升序，供 CLI/dashboard 展示）。
+- `remove_monitored_coins(coins: Iterable[str]) -> int`：删除指定 coin，返回删除行数。
+- `get_monitored_coins() -> dict[str, str]`：返回 `{coin: symbol}`（供运行时对账）。
+- `list_monitored_coins() -> list[tuple]`：返回 `(coin, symbol, added_ts, note)` 行（按 added_ts 升序，供 CLI/dashboard 展示）。
 
-**一次性迁移**：`Store` 初始化建表后，若 `watchlist_coins` 为空且 `harmonic_collected` 非空，
+**一次性迁移**：`Store` 初始化建表后，若 `monitored_coins` 为空且 `harmonic_collected` 非空，
 把后者拷入前者（`note='migrated:harmonic_collected'`）。保证历史"发现搜集"的币无缝接入新清单。
 
 ### 3.2 配置（`config.py`）
 
-新增 `WatchlistCfg` dataclass + 解析：
+新增 `MonitoredCoinsCfg` dataclass + 解析：
 
 ```yaml
-watchlist:
+monitored_coins:
   enabled: true                                       # 主开关；false=现状 all_perp（零回归）
   timeframes: ["15m", "1H", "4H", "6H", "12H", "1D", "1W"]   # 多周期采集集（7 周期）
   collect_interval_sec: 300                           # 采集轮询间隔（稳态）
@@ -77,21 +81,21 @@ watchlist:
 
 ```python
 @dataclass(slots=True)
-class WatchlistCfg:
+class MonitoredCoinsCfg:
     enabled: bool = False
     timeframes: list[str] = field(
         default_factory=lambda: ["15m", "1H", "4H", "6H", "12H", "1D", "1W"])
     collect_interval_sec: float = 300.0
 ```
 
-`Config.load` 透传 `watchlist` 段（`timeframes` 列表强制 `list()`，与现有 bb/harmonic 一致）；
+`Config.load` 透传 `monitored_coins` 段（`timeframes` 列表强制 `list()`，与现有 bb/harmonic 一致）；
 对 `timeframes` 用 `GRANULARITY_MS` 校验，剔除非法周期并 warn（数据质量守卫，CLAUDE.md §三-3）。
 
 纯函数（可单测，不碰 DB）：
 
 ```python
-def resolve_watchlist_universe(
-    watchlist: dict[str, str],      # {coin: symbol}，来自 store.get_watchlist()
+def resolve_monitored_universe(
+    monitored: dict[str, str],      # {coin: symbol}，来自 store.get_monitored_coins()
     base_map: dict[str, str],       # {symbol: baseCoin}，来自 perp_base_coins()
     tickers: dict[str, dict],       # {symbol: ticker}，按成交额排序用
 ) -> dict[str, str]:
@@ -102,12 +106,12 @@ def resolve_watchlist_universe(
 
 ### 3.3 选币接线 —— 替换（`app.py`）
 
-在 `_run`（构建监控器处，约 690–905 行）按 `watchlist.enabled` 分支：
+在 `_run`（构建监控器处，约 690–905 行）按 `monitored_coins.enabled` 分支：
 
 - **enabled=true**：
-  - `vol_c2s = resolve_watchlist_universe(store.get_watchlist(), base_map, tickers_map)`
+  - `vol_c2s = resolve_monitored_universe(store.get_monitored_coins(), base_map, tickers_map)`
     （谐波/BB 共用基础集，均改为清单驱动）。
-  - 采集器 `cc_c2s = dict(vol_c2s)`；`cc_tfs = cfg.watchlist.timeframes`（7 周期），
+  - 采集器 `cc_c2s = dict(vol_c2s)`；`cc_tfs = cfg.monitored_coins.timeframes`（7 周期），
     `cc_bars = max(bb.bars, harmonic.bars)`。
   - 谐波/BB 仍各自取 `timeframes`；为命中 DB 缓存，谐波/BB 的 `timeframes` 应是采集集的子集
     （默认值对齐到 7 周期，谐波默认 30m → 6H）。非子集的 tf 由现有 live 回退兜底（不崩，仅多打 API）。
@@ -118,12 +122,12 @@ def resolve_watchlist_universe(
 
 ### 3.4 热载入（运行中无需重启）
 
-扩展两个周期任务，每轮先读 `get_watchlist()` 做**全量对账**（关键：现有 merge 只加不删，
+扩展两个周期任务，每轮先读 `get_monitored_coins()` 做**全量对账**（关键：现有 merge 只加不删，
 replace 模式必须支持删）：
 
 - `_periodic_candle_collect`：`enabled` 时每轮把 `candle_collector.coin_to_symbol`
-  对账为 `get_watchlist()`（新增加入、删除移走）；空清单时本轮跳过采集（见 3.6）。
-- `_periodic_harmonic_board`：把现有"并入 harmonic_collected"逻辑改为对账 `get_watchlist()`
+  对账为 `get_monitored_coins()`（新增加入、删除移走）；空清单时本轮跳过采集（见 3.6）。
+- `_periodic_harmonic_board`：把现有"并入 harmonic_collected"逻辑改为对账 `get_monitored_coins()`
   （`enabled` 时全量替换 `harmonic_monitor.coin_to_symbol`；删除的币移走，`top_n` 同步）。
   BB 监控器同样对账。
 
@@ -144,9 +148,9 @@ CLI 与监控进程共享同一 SQLite 文件，靠 3.4 周期对账热生效。
 
 ### 3.6 Dashboard（`dashboard.py`）
 
-- 新增 `/api/watchlist`（GET=list、POST add/rm，body `{action, coins, note}`）。
+- 新增 `/api/monitored`（GET=list、POST add/rm，body `{action, coins, note}`）。
 - 页面加一个小面板：展示当前清单 + 输入框增删（沿用现有无 CDN 单页风格）。
-- `handle_harmonic_discover`：把"发现"的币写入 **`watchlist_coins`**（替代 `add_harmonic_collected`），
+- `handle_harmonic_discover`：把"发现"的币写入 **`monitored_coins`**（替代 `add_harmonic_collected`），
   统一真相源。
 
 ### 3.7 边界处理（诚实优先，CLAUDE.md §四-3）
@@ -159,8 +163,8 @@ CLI 与监控进程共享同一 SQLite 文件，靠 3.4 周期对账热生效。
 
 ## 四、测试（合成数据，确定性；CLAUDE.md §四）
 
-- DB：`add/get/remove/list_watchlist` 幂等性、删除返回计数、迁移逻辑（harmonic_collected→watchlist）。
-- 配置：`WatchlistCfg` 默认值、`timeframes` 非法周期剔除、`resolve_watchlist_universe` 纯函数
+- DB：`add/get/remove/list_monitored_coins` 幂等性、删除返回计数、迁移逻辑（harmonic_collected→monitored_coins）。
+- 配置：`MonitoredCoinsCfg` 默认值、`timeframes` 非法周期剔除、`resolve_monitored_universe` 纯函数
   （按成交额排序、symbol 回退）。
 - 对账：`reconcile_universe(current, target)` 的 added/removed 正确（增、删、增删混合、空集）。
 - 边界：空清单守卫不崩、enabled=false 时旧路径不受影响。
@@ -168,10 +172,10 @@ CLI 与监控进程共享同一 SQLite 文件，靠 3.4 周期对账热生效。
 
 ## 五、零孤儿核对（CLAUDE.md §三-1）
 
-- `WatchlistCfg` → `config.py` 导出 + `Config` 字段 + `app.py` 消费。
-- `watchlist_coins` 表方法 → `db.py` 定义 + `app.py`/`cli.py`/`dashboard.py` 消费。
-- `resolve_watchlist_universe` / `reconcile_universe` → `app.py` 消费 + 单测覆盖。
+- `MonitoredCoinsCfg` → `config.py` 导出 + `Config` 字段 + `app.py` 消费。
+- `monitored_coins` 表方法 → `db.py` 定义 + `app.py`/`cli.py`/`dashboard.py` 消费。
+- `resolve_monitored_universe` / `reconcile_universe` → `app.py` 消费 + 单测覆盖。
 - `watch` CLI 子命令 → `cli.py` 注册可达。
-- `/api/watchlist` → dashboard 路由注册 + 前端面板调用。
+- `/api/monitored` → dashboard 路由注册 + 前端面板调用。
 
 改完用 grep 自查无孤儿。
