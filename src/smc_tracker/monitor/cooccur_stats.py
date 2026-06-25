@@ -124,9 +124,12 @@ def is_significant(
     min_lift: float,
     max_p: float,
 ) -> bool:
-    """显著 ⟺ lift >= min_lift 且 p_value <= max_p。
+    """显著 ⟺ lift >= min_lift 且 p_value <= max_p（含极显著旁路）。
 
     纯阈值判据，确定性。
     min_lift=2.0 + max_p=0.01 = 99% 置信且强度 ≥2× 随机（业界常用强关联标准）。
     """
-    return lift >= min_lift and p_value <= max_p
+    if lift >= min_lift and p_value <= max_p:
+        return True
+    # 极显著旁路：lift 未达阈但 p 极小（< 1e-9）的强协同不漏判（防庄家集团被阈值挡掉）
+    return p_value < 1e-9 and lift >= 1.5

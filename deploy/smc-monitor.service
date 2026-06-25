@@ -1,0 +1,30 @@
+# SMC 聪明钱抓庄系统 — 监控进程 systemd 单元（流式 WebSocket 实时监控）
+# 安装: sudo cp deploy/smc-monitor.service /etc/systemd/system/
+#       sudo systemctl daemon-reload && sudo systemctl enable --now smc-monitor
+# 日志: journalctl -u smc-monitor -f
+[Unit]
+Description=SMC 聪明钱抓庄监控 (Hyperliquid/Bitget 公开数据，无 API key)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=smc
+Group=smc
+WorkingDirectory=/opt/smc
+Environment=PYTHONPATH=/opt/smc/src
+Environment=TZ=UTC
+Environment=PYTHONUNBUFFERED=1
+# 统一 CLI 入口跑流式监控（等价 python -m smc_tracker.app）
+ExecStart=/opt/smc/.venv/bin/python -m smc_tracker run --config /opt/smc/config/config.yaml
+Restart=always
+RestartSec=5
+# 资源/安全收紧（纯公开数据，无需特权）
+NoNewPrivileges=true
+ProtectSystem=full
+ProtectHome=true
+# 仅 data 目录可写（SQLite + jsonl）
+ReadWritePaths=/opt/smc/data
+
+[Install]
+WantedBy=multi-user.target

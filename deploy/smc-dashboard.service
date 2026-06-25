@@ -1,0 +1,29 @@
+# SMC 聪明钱抓庄系统 — Web 仪表盘 systemd 单元（aiohttp 单页，只绑本机 127.0.0.1）
+# 安装: sudo cp deploy/smc-dashboard.service /etc/systemd/system/
+#       sudo systemctl daemon-reload && sudo systemctl enable --now smc-dashboard
+# 访问: http://127.0.0.1:8787 （外部访问走 nginx 反代，见 deploy/nginx-smc.conf）
+[Unit]
+Description=SMC 抓庄 Web 仪表盘 (/harmonic /hl2 /health)
+After=network-online.target smc-monitor.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=smc
+Group=smc
+WorkingDirectory=/opt/smc
+Environment=PYTHONPATH=/opt/smc/src
+Environment=TZ=UTC
+Environment=PYTHONUNBUFFERED=1
+# 仪表盘只绑 127.0.0.1:8787（host 默认即本机，外部走 nginx）
+ExecStart=/opt/smc/.venv/bin/python -m smc_tracker dashboard --db /opt/smc/data/smc.db --host 127.0.0.1 --port 8787
+Restart=always
+RestartSec=5
+NoNewPrivileges=true
+ProtectSystem=full
+ProtectHome=true
+# 仪表盘只读 DB，但 SQLite WAL 仍需写 -wal/-shm，故 data 给写权限
+ReadWritePaths=/opt/smc/data
+
+[Install]
+WantedBy=multi-user.target

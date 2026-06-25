@@ -1,0 +1,16 @@
+# Docker 构建排除(减小镜像 + 防泄密)
+.git
+.venv
+data/
+backups/
+*.db
+*.db-wal
+*.db-shm
+config/config.yaml
+__pycache__/
+*.pyc
+.pytest_cache/
+tests/
+docs/
+.claude/
+*.md

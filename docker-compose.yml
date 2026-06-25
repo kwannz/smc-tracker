@@ -1,0 +1,33 @@
+# SMC 容器编排 — 监控 + 仪表盘两服务,共享 data volume(SQLite 持久)
+# 用法:
+#   cp config/config.example.yaml config/config.yaml  # 填 telegram bot_token
+#   docker compose up -d --build
+#   docker compose logs -f
+#   bash deploy/healthcheck.sh   # (SMC_PORT=8787 SMC_DB=./data/smc.db)
+services:
+  monitor:
+    build: .
+    image: smc-tracker
+    container_name: smc-monitor
+    command: python -m smc_tracker.app --config config/config.yaml
+    restart: always
+    volumes:
+      - ./data:/app/data                 # SQLite 持久(两服务共享)
+      - ./config/config.yaml:/app/config/config.yaml:ro
+    environment:
+      - TZ=UTC
+
+  dashboard:
+    image: smc-tracker                   # 复用 monitor 构建的镜像
+    container_name: smc-dashboard
+    command: python -m smc_tracker dashboard --port 8787
+    restart: always
+    depends_on:
+      - monitor
+    ports:
+      - "127.0.0.1:8787:8787"            # 只绑本机,外部访问走 nginx 反代(deploy/nginx-smc.conf)
+    volumes:
+      - ./data:/app/data                 # 只读 DB 展示(与 monitor 同库)
+      - ./config/config.yaml:/app/config/config.yaml:ro
+    environment:
+      - TZ=UTC

@@ -52,7 +52,7 @@ HARMONIC_RATIOS: dict[str, dict] = {
     "Gartley": {
         "b_xa":  (0.566, 0.686),   # B 回撤 0.618 XA，±tol
         "bc_ab": (0.382, 0.886),
-        "cd_bc": (1.13, 1.618),
+        "cd_bc": (1.20, 1.618),    # CD/BC 下限 1.13→1.20（更贴合 Carney 标准 Gartley）
         "d_xa":  (0.726, 0.846),   # D 在 0.786 XA，±tol
     },
     # Bat：B=0.382~0.50 XA，D=0.886 XA（比 Gartley 回撤更浅）
