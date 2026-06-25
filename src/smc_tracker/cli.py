@@ -281,6 +281,29 @@ def _cmd_signals(args: argparse.Namespace) -> None:
         sys.exit(1)
 
 
+def _cmd_vol(args: argparse.Namespace) -> None:
+    """实时波动追踪板：监控清单币按速度+加速度领先信号排序（读 DB 已采 K 线，无网络）。"""
+    try:
+        from .storage import Store
+        from .monitor.volatility_monitor import VolatilityMonitor
+
+        store = Store(Path(args.db))
+        coins = store.get_monitored_coins()
+        if not coins:
+            print("[vol] 监控清单为空（先 `watch add BTC ETH` 添加并等采集器填 K 线）")
+            store.close()
+            return
+        tfs = [t.strip() for t in args.tf.split(",") if t.strip()]
+        mon = VolatilityMonitor(coins, tfs or ["15m"], store)
+        now = int(time.time() * 1000)
+        card = mon.render(mon.rank(now), now, top=args.top)
+        print(card or "[vol] 暂无足够 K 线数据（采集器尚未填满，稍后再试）")
+        store.close()
+    except Exception as exc:
+        print(f"[vol] 出错：{exc}", file=sys.stderr)
+        sys.exit(1)
+
+
 def _cmd_watch(args: argparse.Namespace) -> None:
     """监控币种清单增删查（写本地 SQLite，运行中监控进程周期对账热载入）。"""
     try:
@@ -769,6 +792,15 @@ def build_parser() -> argparse.ArgumentParser:
     _w_list.add_argument("--db", default=_DEFAULT_DB, metavar="PATH",
                          help=f"SQLite 数据库路径（默认 {_DEFAULT_DB}）")
     p_watch.set_defaults(handler=_cmd_watch)
+
+    # ---- vol（实时波动追踪板）----
+    p_vol = sub.add_parser("vol", help="实时波动追踪板（监控清单币按速度+加速度排序，读 DB 无网络）")
+    p_vol.add_argument("--tf", default="15m", metavar="TF",
+                       help="主周期（逗号分隔取首个，默认 15m）")
+    p_vol.add_argument("--top", type=int, default=15, metavar="N", help="最多展示 N 币（默认 15）")
+    p_vol.add_argument("--db", default=_DEFAULT_DB, metavar="PATH",
+                       help=f"SQLite 数据库路径（默认 {_DEFAULT_DB}）")
+    p_vol.set_defaults(handler=_cmd_vol)
 
     # ---- discover ----
     p_disc = sub.add_parser("discover", help="从排行榜自动发现聪明钱地址")

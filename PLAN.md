@@ -203,12 +203,28 @@ D 多空符号 · E 真实 userFills 解析/分类自洽 · F WS webData2==REST 
 - [x] **dashboard 维度完整 + 行情维度清理**（#97 闭合）：dashboard 已 **16 个 panel**（健康/准确率/交易所资金流/
       聪明钱净流向/鲸鱼信号/地址排行/庄家集团/OKX 强平·跨所·HL 挂单墙/链上转账…）覆盖全核心维度；
       并按用户#要求**移除 `行情监控板` 面板 + `renderTickerBoard` 死函数**（价/涨跌幅/费率/OI 不需要，后端数据保留）。
+- [~] **文件 800 行约束债务（#102 诚实追踪）**：用户#要求「每文件 ≤800 行」，现 5 文件超标 ——
+      `dashboard.py` 4190 / `app.py` 1956 / `db.py` 1187 / `cli.py` 896 / `onchain/exchange_flow.py` 826。
+      新增代码已严守（`volatility_monitor.py` 107 行）；巨文件拆分回归风险高、非单轮 MVP，**保持开放分轮渐进拆**
+      （优先 dashboard.py 按 render/build/handler 三层切分）。
 
 > 闭合规则：完成项改 `[x]` 并在迭代日志记 `#NN`；新发现的未闭合项追加到本列表（保持「后续功能追踪」常态化）。
 > 诚实边界：环境约束（alpha 实时验证）与公开数据固有局限（热钱包低估/未确认交易所地址）**不假闭合**，
 > 据 codex-loop 反幻觉纪律保持开放，区别于「已实现但 backlog 写保守」的项（已核实证据后闭合）。
 
 ## 迭代日志
+- 2026-06-26 #102: **监控清单驱动多周期采集 + 实时波动追踪板（/loop：专业细节追踪币种实时波动）**。
+  ① **监控清单（watchlist-multi-tf）**：新 DB 表 `monitored_coins` + 主开关 `monitored_coins.enabled`，
+  开关打开只为清单内币采集 7 周期（15m/1H/4H/**6H**/12H/1D/1W；6H 替代 Bitget 不支持的 8h），替换 all_perp；
+  CLI `watch add/rm/list` + dashboard `/monitored` 页 + 周期对账热载入（增删运行中生效）；旧 `harmonic_collected`
+  一次性迁移 + discover 改写新表统一真相源；`enabled=false` 完全旁路（零回归）。命名实证修订：撞 `Config.watchlist`
+  地址列表 → 改名 `monitored_coins`。
+  ② **实时波动追踪板**（专业细节领先信号）：新扁平模块 `monitor/volatility_monitor.py`（107 行，numpy 向量化）——
+  纯函数 `vol_metrics` 算 rv(已实现波动率σ)/atr_pct/range_pct/**velocity(1阶导)**/**accel(2阶导)**，
+  `VolatilityMonitor` 读已采 K 线按运动分排序当前在动的币；CLI `vol` 子命令（读 DB 无网络）。velocity/accel 用
+  百分比尺度无关，跨币可比。
+  ③ **800 行约束**：新代码全守（vol 107 行），5 巨文件超标记入 Backlog 分轮渐进拆（不假闭合）。
+  TDD 36 例（watchlist 27 + vol 9）；全量 **2308 passed, 2 skipped**（基线 2272，零回归）；CLI 端到端实跑验证。
 - 2026-06-22 #101: **推送按币种多空比例组织 + live 降噪（背离冷却/占位地址）**（用户#连续指令）。
   ① 观察生产 live 卡片暴露噪声 → 背离同币同向 15min 冷却（每 60s 重复刷屏）、`util.is_placeholder_addr`
   过滤占位 0x0 地址（示例配置残留）+ 服务器 config watchlist 占位项移除；
