@@ -59,13 +59,16 @@ class TestHarmonicCfgUniverseMode:
         assert isinstance(cfg.universe_mode, str)
 
     def test_other_harmonic_cfg_defaults_unchanged(self):
-        """新增 universe_mode 字段不影响其他字段的默认值（向后兼容性回归）。"""
+        """新增 universe_mode/tf_bars 字段不影响其他字段的默认值（向后兼容性回归）。
+
+        注：order/tol 在 §C 高灵敏化后更新为 2/0.07（见 spec 2026-06-25）。
+        """
         cfg = HarmonicCfg()
         assert cfg.enabled is True
         assert cfg.top_n == 12
         assert cfg.bars == 2500
-        assert cfg.order == 3
-        assert cfg.tol == 0.05
+        assert cfg.order == 2        # §C 高灵敏：3→2
+        assert cfg.tol == 0.07       # §C 高灵敏：0.05→0.07
         assert cfg.account_usd == 10_000.0
         assert cfg.risk_pct == 0.01
         assert cfg.target_rr == 2.0

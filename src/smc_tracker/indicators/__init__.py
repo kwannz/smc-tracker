@@ -23,6 +23,7 @@ from .bollinger_bands import bb_bands, analyze_tf, aggregate_coin
 from .harmonic import (find_pivots, pivots_from_structure, _alternate_immutable,
                        detect_xabcd, project_prz, analyze_candles,
                        HARMONIC_RATIOS)
+from .harmonic_state import HarmonicState
 from .atr2_signals import atr2_confirmation
 from .sfg import (
     lrsd_series, gpi_series, vap_series, pdbb_series, pivot_series,
@@ -44,6 +45,7 @@ __all__ = [
     "bb_bands", "analyze_tf", "aggregate_coin",
     "find_pivots", "pivots_from_structure", "_alternate_immutable",
     "detect_xabcd", "project_prz", "analyze_candles", "HARMONIC_RATIOS",
+    "HarmonicState",
     "atr2_confirmation",
     # SFG 10 因子 series（向量化，供 KNN feature_matrix 使用，零孤儿）
     "lrsd_series", "gpi_series", "vap_series", "pdbb_series", "pivot_series",

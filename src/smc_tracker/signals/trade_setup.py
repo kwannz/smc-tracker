@@ -30,7 +30,12 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 from ..indicators.atr2_signals import atr2_confirmation
-from ..indicators.fibonacci import fib_levels, nearest_fib
+from ..indicators.fibonacci import (
+    fib_levels,
+    golden_pocket_zone,
+    intersect_zone,
+    nearest_fib,
+)
 from .knn_validator import validate_direction
 from .orderflow_confirm import OrderflowConfirm
 from .risk import RiskPlan, compute_position_size, compute_risk
@@ -109,6 +114,11 @@ class TradeSetup:
     # 前瞻确认备注（forward_confirm.apply_forward 注入；含用了/跳过了哪些领先分量）
     # None=未施加前瞻确认（无 provider 或无数据）；completed+forming 都可被注入（解除 completed 门控）
     forward: str | None = None
+    # §4 D 斐波那契入场强化：入场区来源标识
+    # "fib_intersect"=黄金口袋∩形态区有交集（已收窄）
+    # "no_fib_confluence"=无交集，回退原区
+    # None=旧路径（向后兼容）
+    entry_src: str | None = None
 
 
 def _direction_map(harmonic_direction: str) -> str | None:
@@ -163,22 +173,44 @@ def _build_one(
     # ── 3. 进场区 & 止损基准（🟡-1 + 🟡-5 修复） ────────────────────────────
     points: dict | None = pattern.get("points")
 
+    # §4 D 斐波那契入场强化：入场区来源标识（向后兼容，默认 None）
+    entry_src: str | None = None
+
     if is_completed and points:
-        # 🟡-1: completed 进场区收窄到 D±1.5%
+        # 🟡-1: completed 进场区初始为 D±1.5%
         d_price: float = float(points["D"][1])
-        entry_lo = d_price * (1 - _COMPLETED_ENTRY_HALF_PCT)
-        entry_hi = d_price * (1 + _COMPLETED_ENTRY_HALF_PCT)
-        entry_mid = d_price  # D 就是中点
+        base_lo = d_price * (1 - _COMPLETED_ENTRY_HALF_PCT)
+        base_hi = d_price * (1 + _COMPLETED_ENTRY_HALF_PCT)
+
+        # §4 D: 入场精炼 — XA 段黄金口袋∩(D±1.5%)
+        x_price: float = float(points["X"][1])
+        a_price: float = float(points["A"][1])
+        # XA 方向：bull=up（X 低 A 高），bear=down（X 高 A 低）
+        xa_dir = "up" if direction == "long" else "down"
+        xa_high = max(x_price, a_price)
+        xa_low = min(x_price, a_price)
+        gp_lo, gp_hi = golden_pocket_zone(xa_high, xa_low, xa_dir)
+        intersect = intersect_zone(gp_lo, gp_hi, base_lo, base_hi)
+        if intersect is not None:
+            # 有交集：收窄入场区到交集（最高概率位）
+            entry_lo, entry_hi = intersect
+            # 诚实说明：汇合区仅为最优位参考，非独立确认，不宣称"加分"
+            fib_note = (
+                f"XA黄金口袋∩D±1.5%汇合({entry_lo:.4f},{entry_hi:.4f})"
+                f";非独立确认,仅收窄入场参考"
+            )
+            entry_src = "fib_intersect"
+        else:
+            # 无交集：回退原区，诚实标注
+            entry_lo, entry_hi = base_lo, base_hi
+            fib_note = f"无Fib汇合,用形态区(D±1.5%);{_fib_note_completed()}"
+            entry_src = "no_fib_confluence"
+        entry_mid = (entry_lo + entry_hi) / 2.0
 
         # 🔴-1: src_key 含 D 点价格，不同 D_idx 的同名形态不碰撞
         src_key = f"C|{pat_name}|{direction}|{d_price}"
 
-        # 🟡-2: completed fib_note = 诚实说明，不再用 nearest_fib 宣称"黄金口袋加分"
-        fib_note = _fib_note_completed()
-
         # 🟡-5: completed 止损基准用 X 点（形态失效位）
-        x_price: float = float(points["X"][1])
-
         # 风险计算（stop/target）
         if direction == "long":
             plan: RiskPlan | None = compute_risk(
@@ -210,8 +242,30 @@ def _build_one(
         # 🔴-1: forming src_key 含 prz_lo，不同 PRZ 不碰撞
         src_key = f"F|{pat_name}|{direction}|{round(prz_lo, 8)}"
 
-        # forming fib_note = PRZ 近似说明
-        fib_note = _fib_note_forming()
+        # §4 D 入场精炼（forming）：XA 黄金口袋∩PRZ
+        forming_points: dict | None = pattern.get("points")
+        if forming_points and "X" in forming_points and "A" in forming_points:
+            fp_x: float = float(forming_points["X"][1])
+            fp_a: float = float(forming_points["A"][1])
+            xa_dir_f = "up" if direction == "long" else "down"
+            xa_high_f = max(fp_x, fp_a)
+            xa_low_f = min(fp_x, fp_a)
+            gp_lo_f, gp_hi_f = golden_pocket_zone(xa_high_f, xa_low_f, xa_dir_f)
+            intersect_f = intersect_zone(gp_lo_f, gp_hi_f, entry_lo, entry_hi)
+            if intersect_f is not None:
+                entry_lo, entry_hi = intersect_f
+                entry_mid = (entry_lo + entry_hi) / 2.0
+                fib_note = (
+                    f"XA黄金口袋∩PRZ汇合({entry_lo:.4f},{entry_hi:.4f})"
+                    f";非独立确认,仅收窄入场参考"
+                )
+                entry_src = "fib_intersect"
+            else:
+                fib_note = f"无Fib汇合,用形态区;{_fib_note_forming()}"
+                entry_src = "no_fib_confluence"
+        else:
+            # forming 且无 points：回退 PRZ 近似说明
+            fib_note = _fib_note_forming()
 
         # forming 止损基于 PRZ 边界（标注，无 points）
         if direction == "long":
@@ -239,12 +293,56 @@ def _build_one(
     if plan is None:
         return None
 
-    # 第二目标（更高 R:R = 2 × target_rr）
+    # §4 D: Fib 扩展目标 — AD 段 1.272/1.618 扩展位，与 RR 目标取更保守者
+    # 尝试从 points 取 A/D
+    rr_target1 = plan.target  # 现有 RR 目标（target_rr 投射）
     risk_amt = abs(entry_mid - plan.stop)
-    if direction == "long":
-        target2 = entry_mid + 2.0 * target_rr * risk_amt
+    rr_target2 = (
+        entry_mid + 2.0 * target_rr * risk_amt
+        if direction == "long"
+        else entry_mid - 2.0 * target_rr * risk_amt
+    )
+    # 默认使用 RR 目标，fib_note 将在下面追加来源说明
+    fib_target1_src = "RR"
+    fib_target2_src = "RR"
+
+    _pts: dict | None = pattern.get("points")
+    if _pts and "A" in _pts and "D" in _pts:
+        _a_px: float = float(_pts["A"][1])
+        _d_px: float = float(_pts["D"][1])
+        _ad_rng: float = abs(_a_px - _d_px)
+        if _ad_rng > 0:
+            if direction == "long":
+                # bull：A 高 D 低，扩展在 D 下方（逆向扩展：A+AD×ext 会在 A 上方，不对）
+                # 谐波 AD 扩展：bull 完成后目标通常是 A 点上方 AD 段扩展
+                # 1.272/1.618 扩展：从 D 出发，以 AD 幅度为基础向上延伸
+                fib_t1_raw = _d_px + 1.272 * _ad_rng  # 1.272 扩展（保守目标）
+                fib_t2_raw = _d_px + 1.618 * _ad_rng  # 1.618 扩展（激进目标）
+                # 取更保守者（值更小的，接近入场点）
+                target1 = min(rr_target1, fib_t1_raw)
+                target2 = min(rr_target2, fib_t2_raw)
+                fib_target1_src = "Fib1.272" if fib_t1_raw < rr_target1 else "RR"
+                fib_target2_src = "Fib1.618" if fib_t2_raw < rr_target2 else "RR"
+            else:
+                # bear：A 低 D 高，扩展在 D 下方（从 D 向下延伸）
+                fib_t1_raw = _d_px - 1.272 * _ad_rng
+                fib_t2_raw = _d_px - 1.618 * _ad_rng
+                # short 方向取更保守者（值更大的，接近入场点）
+                target1 = max(rr_target1, fib_t1_raw)
+                target2 = max(rr_target2, fib_t2_raw)
+                fib_target1_src = "Fib1.272" if fib_t1_raw > rr_target1 else "RR"
+                fib_target2_src = "Fib1.618" if fib_t2_raw > rr_target2 else "RR"
+        else:
+            # AD 幅度为零，退化到 RR 目标
+            target1 = rr_target1
+            target2 = rr_target2
     else:
-        target2 = entry_mid - 2.0 * target_rr * risk_amt
+        # 无 points（forming 且缺 A/D），直接用 RR 目标
+        target1 = rr_target1
+        target2 = rr_target2
+
+    # 追加 Fib 目标来源到 fib_note
+    fib_note = f"{fib_note};T1={fib_target1_src},T2={fib_target2_src}"
 
     # ── 4. 仓位计算 ──────────────────────────────────────────────────────────
     pos = compute_position_size(
@@ -314,8 +412,8 @@ def _build_one(
         entry_lo=entry_lo,
         entry_hi=entry_hi,
         stop=plan.stop,
-        target1=plan.target,
-        target2=target2,
+        target1=target1,   # §4 D: Fib 扩展 or RR，取更保守者
+        target2=target2,   # §4 D: Fib 扩展 or RR，取更保守者
         rr=plan.rr,
         fib_note=fib_note,
         knn_supports=knn_supports,
@@ -328,6 +426,7 @@ def _build_one(
         atr_stop=atr_stop_val,
         atr2_bias=atr2_bias_val,
         atr2_confirm=atr2_confirm_val,
+        entry_src=entry_src,  # §4 D: 入场区来源标识
     )
 
 

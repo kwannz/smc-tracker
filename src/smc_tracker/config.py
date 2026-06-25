@@ -271,12 +271,19 @@ class HarmonicCfg:
     """Bitget 永续多周期谐波形态（Harmonic Patterns）分析配置。
 
     enabled=True 时周期推送卡片；interval_sec 控制推送频率（默认 15 分钟）。
-    timeframes 覆盖 6 个主流周期（用户#：多周期 6tf，与布林带一致）；bars 每周期 K 线根数；
-    order 枢轴邻域大小；tol 比率容差（默认 5%）；top_n 最多监控币种数。
+    timeframes 覆盖 7 个主流周期；bars 为全局默认 K 线根数；
+    order 枢轴邻域大小（2=高灵敏，含更多早期形态）；
+    tol 比率容差（7%=宽容，含弱比率形态，误检率略升）；top_n 最多监控币种数。
 
     universe_mode:
       "top_n"    → 按 24h 成交额降序取前 top_n 个（默认，向后兼容）
       "all_perp" → 全部 Bitget USDT 永续合约按成交额降序（真实全市场覆盖）
+
+    per-tf 自适应 bars（tf_bars）：
+      空 dict（默认）→ 全周期统一用 bars（向后兼容）。
+      指定 tf → 该 tf 用对应值，其余用 bars（小周期 K 线密，宜多取；大周期 K 线稀，少取即够）。
+      建议值参考 DEFAULT_TF_BARS（可整体覆盖或只覆盖部分 tf）。
+      调用方用 `cfg.bars_for_tf(tf)` 取实际值，统一入口、向后兼容。
     """
     enabled: bool = True
     interval_sec: float = 900.0
@@ -286,13 +293,19 @@ class HarmonicCfg:
     timeframes: list[str] = field(
         default_factory=lambda: ["15m", "30m", "1H", "4H", "12H", "1D", "1W"]
     )
-    bars: int = 2500                     # 用户#：每周期保留 2500 bar（历史+实时，不强制；大周期取可得）
-    order: int = 3
-    tol: float = 0.05
+    bars: int = 2500                     # 全局默认 K 线根数（tf_bars 未覆盖的 tf 用此值）
+    # §C 高灵敏模式：order 3→2（更早枢轴，含更多早期形态），tol 0.05→0.07（宽容比率）。
+    # ⚡注意：误检率上升，止损必执行。置信封顶不变（completed≤0.90/forming≤0.85）。
+    order: int = 2
+    tol: float = 0.07
     top_n: int = 12
     # universe_mode: "top_n"(默认，向后兼容) | "all_perp"(全部 USDT 永续，高 vol 优先)
     # all_perp 模式首次 refresh 会回填全量 K 线（一次性冷启动 ~10min），之后用 DB 缓存
     universe_mode: str = "top_n"
+    # per-tf 自适应 K 线根数覆盖：{tf: bars}，空 dict=全周期用 bars（向后兼容）。
+    # 小周期 K 线密集，宜多取以覆盖足够历史（如 15m→3000）；大周期 K 线稀少，少取即够（如 1W→300）。
+    # 调用方统一用 bars_for_tf(tf) 取值，严禁直接裸读 tf_bars。
+    tf_bars: dict[str, int] = field(default_factory=dict)
     account_usd: float = 10_000.0        # 仓位计算用账户名义资金（USD）
     risk_pct: float = 0.01               # 单笔风险比例（1%）
     target_rr: float = 2.0               # 目标盈亏比
@@ -310,6 +323,28 @@ class HarmonicCfg:
     #              tail_shards=1 时长尾每轮全量 refresh（等价无分层）。默认 8。
     core_n: int = 60
     tail_shards: int = 8
+
+    def bars_for_tf(self, tf: str) -> int:
+        """返回指定周期的 K 线根数。
+
+        优先取 tf_bars[tf]（per-tf 覆盖），未配置则回退全局 bars。
+        向后兼容：tf_bars 为空 dict 时等价于旧行为（全周期统一 bars）。
+        """
+        return self.tf_bars.get(tf, self.bars)
+
+
+# 推荐的 per-tf 自适应 bars 参考值（可在 YAML harmonic.tf_bars 中整体或部分覆盖）。
+# 设计原则：小周期 K 线密集 → 多取覆盖历史；大周期 K 线稀少 → 少取即够枢轴识别。
+# 此为建议参考值，非硬编码默认；实际 HarmonicCfg.tf_bars 默认为空 dict（全用 bars）。
+HARMONIC_DEFAULT_TF_BARS: dict[str, int] = {
+    "15m": 3000,   # 15m：密集，3000 根 ≈ 31 天历史
+    "30m": 2500,   # 30m：沿用全局默认
+    "1H":  2000,   # 1H：2000 根 ≈ 83 天
+    "4H":  1000,   # 4H：1000 根 ≈ 167 天
+    "12H": 500,    # 12H：500 根 ≈ 250 天
+    "1D":  365,    # 1D：约 1 年
+    "1W":  200,    # 1W：约 4 年，K 线稀，200 根绰绰有余
+}
 
 
 @dataclass(slots=True)
@@ -344,6 +379,13 @@ class Config:
         harm_raw: dict[str, Any] = dict(raw.get("harmonic") or {})
         if "timeframes" in harm_raw and not isinstance(harm_raw["timeframes"], list):
             harm_raw["timeframes"] = list(harm_raw["timeframes"])
+        # HarmonicCfg.tf_bars 是 dict[str, int]：确保值为 int（YAML 可能传 str）
+        if "tf_bars" in harm_raw:
+            raw_tf_bars = harm_raw["tf_bars"]
+            if isinstance(raw_tf_bars, dict):
+                harm_raw["tf_bars"] = {str(k): int(v) for k, v in raw_tf_bars.items() if v is not None}
+            else:
+                harm_raw["tf_bars"] = {}  # 异常格式回退空 dict
         # UniverseCfg.include/exclude 是 list，需正确透传
         univ_raw: dict[str, Any] = dict(raw.get("universe") or {})
         if "include" in univ_raw and not isinstance(univ_raw["include"], list):

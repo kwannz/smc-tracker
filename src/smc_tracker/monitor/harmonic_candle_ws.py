@@ -31,6 +31,7 @@ from ..bitget.ws_client import BitgetSub, BitgetWSClient
 from ..indicators.harmonic import analyze_candles
 from ..models import Candle
 from ..util import to_float as _f
+from .candle_ingest import ingest_ws_closed_bar  # S3/A2：统一 WS 收盘 bar 落库路径
 
 log = logging.getLogger("harmonic_candle_ws")
 
@@ -221,14 +222,38 @@ class HarmonicCandleWS:
         key = (coin, tf)
         async with self._sema:
             try:
-                # 1. 增量写 DB（to_thread 避免 SQLite 阻塞 event loop）
+                # 1. 增量写 DB：统一走 ingest_ws_closed_bar（A2：消除双写不一致）
+                # ingest_ws_closed_bar 内部调用 _clean_candles + store.upsert_candles，
+                # 与 REST 回填路径完全一致，不再直接调 upsert_candles。
                 monitor = self._monitor
                 if monitor is not None and monitor.store is not None:
-                    row = (coin, tf, candle.open_time_ms, candle.o, candle.h, candle.l, candle.c, candle.v)
-                    await asyncio.to_thread(monitor.store.upsert_candles, [row])
-                    log.debug("谐波 WS 落库 %s/%s ts=%d c=%s", coin, tf, candle.open_time_ms, candle.c)
+                    ok = await asyncio.to_thread(
+                        ingest_ws_closed_bar, candle, monitor.store
+                    )
+                    if ok:
+                        log.debug(
+                            "谐波 WS 落库 %s/%s ts=%d c=%s",
+                            coin, tf, candle.open_time_ms, candle.c,
+                        )
+                    else:
+                        log.debug(
+                            "谐波 WS 脏数据已过滤，跳过落库 %s/%s ts=%d",
+                            coin, tf, candle.open_time_ms,
+                        )
 
-                # 2. 从 DB 读取该 (coin, tf) 最新 K 线序列，执行增量谐波分析
+                # 2. A3：若 monitor 有对应 HarmonicState，增量 update（提供实时增量结果）。
+                # update() 返回快照与全量 analyze_candles 一致（由 HarmonicMonitor._fetch_tf 守卫）；
+                # 此处调用后的 snapshot 只用于辅助日志，实际 result 仍来自步骤 3（DB 读取 + analyze）。
+                _hs = None
+                if monitor is not None and hasattr(monitor, "_states"):
+                    _hs = monitor._states.get((coin, tf))
+                    if _hs is not None:
+                        try:
+                            _hs.update(candle)  # 增量喂入，不读其返回值（result 来自下方全量路径）
+                        except Exception:  # noqa: BLE001
+                            log.warning("谐波 WS HarmonicState.update 失败 %s/%s", coin, tf)
+
+                # 3. 从 DB 读取该 (coin, tf) 最新 K 线序列，执行增量谐波分析
                 result: dict | None = None
                 if monitor is not None and monitor.store is not None:
                     candles = await asyncio.to_thread(

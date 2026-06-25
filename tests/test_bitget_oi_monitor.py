@@ -425,6 +425,96 @@ def test_board_rows_filters_zero_price():
     s.close()
 
 
+# ================================================================
+# 【Bug修复验证】_on_oi_surge 回调签名一致性测试
+#
+# 修复：app.py._on_oi_surge(self, symbol, prev, cur) → (self, evt: dict)
+# 匹配 BitgetOIMonitor.SurgeCallback = Callable[[dict], Any] 协议（单 dict 参数）。
+# 旧签名导致每次 OI 异动均抛 TypeError，OI 异动输出静默死亡。
+# ================================================================
+
+def test_on_surge_callback_receives_single_dict():
+    """验证 on_surge 回调接收单个 dict（非 symbol+prev+cur 三参数）。
+
+    此测试直接断言 Monitor 协议：on_surge=lambda e: ... 收到的是单个 dict，
+    包含 symbol / prev_oi / oi_size / change 字段。
+    这正是 app.py._on_oi_surge(self, evt: dict) 需要处理的格式。
+    """
+    ws = _FakeWS()
+    s = _store()
+    received_evts: list = []
+
+    # 模拟修复后的回调签名：单 dict 参数
+    def fixed_handler(evt: dict) -> None:
+        received_evts.append(evt)
+
+    m = BitgetOIMonitor(
+        ["BTCUSDT"], {"BTCUSDT": "BTC"}, ws, s,
+        surge_pct=0.05, on_surge=fixed_handler,
+    )
+
+    # 基准 OI
+    m._on_ticker({"instId": "BTCUSDT"}, [_ticker("BTCUSDT", 1000, 50000.0, 0.0001, 1)], 0)
+    # 涨 10% 触发 surge
+    m._on_ticker({"instId": "BTCUSDT"}, [_ticker("BTCUSDT", 1100, 50000.0, 0.0001, 2)], 0)
+
+    assert len(received_evts) == 1, f"应触发 1 次 surge，实际 {len(received_evts)}"
+    evt = received_evts[0]
+
+    # 断言 dict 包含所需字段（修复后的 _on_oi_surge 依赖这些字段）
+    assert "symbol" in evt, f"evt 应含 symbol 字段: {evt.keys()}"
+    assert "prev_oi" in evt, f"evt 应含 prev_oi 字段: {evt.keys()}"
+    assert "oi_size" in evt, f"evt 应含 oi_size 字段: {evt.keys()}"
+    assert "change" in evt, f"evt 应含 change 字段: {evt.keys()}"
+
+    # 断言字段值正确（供 _on_oi_surge 内部提取）
+    assert evt["symbol"] == "BTCUSDT"
+    assert abs(evt["prev_oi"] - 1000.0) < 1e-9, f"prev_oi 期望 1000，实际 {evt['prev_oi']}"
+    assert abs(evt["oi_size"] - 1100.0) < 1e-9, f"oi_size 期望 1100，实际 {evt['oi_size']}"
+    assert abs(evt["change"] - 0.10) < 1e-9, f"change 期望 0.10，实际 {evt['change']}"
+
+    s.close()
+
+
+def test_on_surge_fixed_handler_extracts_fields_correctly():
+    """验证修复后的 _on_oi_surge 逻辑（dict 字段提取）可正确运行。
+
+    模拟 app.py._on_oi_surge(evt) 的逻辑：
+      symbol = evt.get('symbol', '')
+      prev = evt.get('prev_oi', 0.0)
+      cur = evt.get('oi_size', 0.0)
+      pct = (cur - prev) / prev * 100 if prev else 0
+    断言：对已知 surge evt，pct 计算正确，不抛异常。
+    """
+    ws = _FakeWS()
+    s = _store()
+    results: list[tuple] = []
+
+    def fixed_on_oi_surge(evt: dict) -> None:
+        """仿 app.py 修复后的签名与逻辑。"""
+        symbol = evt.get("symbol", "")
+        prev = evt.get("prev_oi", 0.0)
+        cur = evt.get("oi_size", 0.0)
+        pct = (cur - prev) / prev * 100 if prev else 0
+        results.append((symbol, prev, cur, pct))
+
+    m = BitgetOIMonitor(
+        ["ETHUSDT"], {"ETHUSDT": "ETH"}, ws, s,
+        surge_pct=0.05, on_surge=fixed_on_oi_surge,
+    )
+    m._on_ticker({"instId": "ETHUSDT"}, [_ticker("ETHUSDT", 2000, 3000.0, 0.0, 10)], 0)
+    m._on_ticker({"instId": "ETHUSDT"}, [_ticker("ETHUSDT", 2300, 3000.0, 0.0, 20)], 0)
+
+    assert len(results) == 1
+    symbol, prev, cur, pct = results[0]
+    assert symbol == "ETHUSDT"
+    assert abs(prev - 2000.0) < 1e-9
+    assert abs(cur - 2300.0) < 1e-9
+    assert abs(pct - 15.0) < 1e-6, f"期望 pct=15%，实际 {pct}"
+
+    s.close()
+
+
 if __name__ == "__main__":
     for name, fn in list(globals().items()):
         if name.startswith("test_") and callable(fn):

@@ -24,6 +24,7 @@ from typing import Any
 from ..asset_class import asset_badge as _asset_badge
 from ..bitget.rest import BitgetREST
 from ..indicators.harmonic import analyze_candles
+from ..indicators.harmonic_state import HarmonicState  # A3：增量状态机
 from ..signals.forward_confirm import apply_forward as _apply_forward
 from ..signals.orderflow_confirm import confirm_setup as _confirm_setup
 from ..signals.trade_setup import TradeSetup, build_setups
@@ -69,6 +70,8 @@ class HarmonicMonitor:
         "account_usd", "risk_pct", "target_rr", "ob_provider", "store",
         "forward_provider",
         "_core_n", "_tail_shards", "_round",   # 分层调度状态（A2）
+        "_states",    # A3: dict[(coin, tf) -> HarmonicState] 增量状态机
+        "_state_n",   # A3: dict[(coin, tf) -> int] 已喂入 HarmonicState 的 K 线数
     )
 
     def __init__(
@@ -111,6 +114,10 @@ class HarmonicMonitor:
         self._core_n: int = max(0, core_n)
         self._tail_shards: int = max(1, tail_shards)
         self._round: int = 0  # 每次 refresh 后递增，用于长尾分片轮次选择
+        # A3：增量谐波状态机（(coin, tf) → HarmonicState），仅在 store 模式下用；
+        # _state_n 记录各 (coin, tf) 已喂入 bars 数，用于增量追加逻辑。
+        self._states: dict[tuple[str, str], HarmonicState] = {}
+        self._state_n: dict[tuple[str, str], int] = {}  # (coin, tf) -> 已喂入 bar 数
 
     async def refresh(self, now_ms: int) -> list[dict]:
         """并发拉取所有币种 × 周期 K 线，分析谐波形态，返回有形态的行。
@@ -180,6 +187,46 @@ class HarmonicMonitor:
                                 for k in candles
                             ])
                     result = analyze_candles(candles, order=self.order, tol=self.tol)
+
+                    # A3：增量 HarmonicState 维护（S6/S7）
+                    # 每轮 refresh 增量喂入自上次以来的新 bar（仅 store 模式下有效，
+                    # live 模式下 candles 每次全量拉取，无法确定"新"bar，跳过增量）。
+                    # 正确性优先：若 snap != full，回退全量重算并 log.warning，绝不静默漂移。
+                    if self.store is not None and candles:
+                        state_key = (coin, tf)
+                        hs = self._states.get(state_key)
+                        n_prev = self._state_n.get(state_key, 0)
+                        n_curr = len(candles)
+
+                        if hs is None or n_prev > n_curr:
+                            # 首次或 candle 数减少（DB limit 变化/重启）→ 重建，全量喂入
+                            hs = HarmonicState(order=self.order, tol=self.tol)
+                            for c in candles:
+                                hs.update(c)
+                            self._states[state_key] = hs
+                            self._state_n[state_key] = n_curr
+                        elif n_curr > n_prev:
+                            # 增量：只喂入新增的 bar（candles 升序，后 n_curr-n_prev 根为新）
+                            for c in candles[n_prev:]:
+                                hs.update(c)
+                            self._state_n[state_key] = n_curr
+                        # 若 n_curr == n_prev：无新 bar，state 已是最新，不需喂入
+
+                        # 正确性守卫：增量快照须与全量完全相等，否则回退全量 + warn
+                        snap = hs.snapshot()
+                        if snap != result:
+                            log.warning(
+                                "谐波 A3 增量 != 全量，%s/%s 回退全量重算并重置 HarmonicState",
+                                coin, tf,
+                            )
+                            # 重置并重建（以全量 analyze_candles 为权威）
+                            hs = HarmonicState(order=self.order, tol=self.tol)
+                            for c in candles:
+                                hs.update(c)
+                            self._states[state_key] = hs
+                            self._state_n[state_key] = n_curr
+                            # result 维持全量 analyze_candles 结果（已计算，直接用）
+
                     if result is not None:
                         # 构建所有 setup，按 src_key 精确索引（🔴-1: 消除同名形态碰撞）
                         # build_setups 返回 completed 优先、置信降序列表

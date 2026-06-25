@@ -304,20 +304,38 @@ _HTML_TEMPLATE = """<!DOCTYPE html>
   --bg:#0d1117;--card:#161b22;--border:#30363d;--text:#c9d1d9;
   --muted:#8b949e;--green:#3fb950;--red:#f85149;--blue:#58a6ff;
   --yellow:#e3b341;--purple:#bc8cff;--orange:#ffa657;
+  --card-shadow:0 1px 4px rgba(0,0,0,.35);
+  --accent-border:rgba(88,166,255,.28);--accent-bg:rgba(88,166,255,.06);
 }}
 *{{box-sizing:border-box;margin:0;padding:0}}
-body{{background:var(--bg);color:var(--text);font-family:"SF Mono",ui-monospace,monospace;font-size:13px;line-height:1.5}}
-header{{padding:16px 24px;border-bottom:1px solid var(--border);display:flex;align-items:baseline;gap:16px}}
-h1{{font-size:20px;color:var(--blue)}}
+body{{background:var(--bg);color:var(--text);
+  font-family:'Inter',system-ui,-apple-system,sans-serif;
+  font-size:13px;line-height:1.5}}
+.mono{{font-family:"SF Mono",ui-monospace,monospace;
+  font-variant-numeric:tabular-nums}}
+header{{padding:14px 24px;border-bottom:1px solid var(--border);
+  display:flex;align-items:center;gap:16px;flex-wrap:wrap}}
+h1{{font-size:19px;color:var(--blue);font-weight:700}}
 #meta{{color:var(--muted);font-size:12px}}
+.hdr-nav{{display:flex;gap:6px;margin-left:auto}}
+.hdr-nav a{{font-size:11.5px;color:var(--muted);text-decoration:none;
+  border:1px solid var(--border);border-radius:5px;padding:3px 10px;
+  transition:color .15s,border-color .15s}}
+.hdr-nav a:hover{{color:var(--blue);border-color:var(--blue)}}
 main{{display:grid;grid-template-columns:repeat(auto-fill,minmax(480px,1fr));gap:16px;padding:16px}}
-.card{{background:var(--card);border:1px solid var(--border);border-radius:8px;overflow:hidden}}
-.card-title{{padding:10px 14px;border-bottom:1px solid var(--border);font-weight:700;color:var(--blue);font-size:13px}}
+.card{{background:var(--card);border:1px solid var(--border);border-radius:8px;overflow:hidden;
+  box-shadow:var(--card-shadow);
+  transition:box-shadow .15s,border-color .15s}}
+.card:hover{{box-shadow:0 2px 8px rgba(0,0,0,.45)}}
+.card.accent{{border-color:var(--accent-border)}}
+.card.accent .card-title{{background:var(--accent-bg)}}
+.card-title{{padding:10px 14px;border-bottom:1px solid var(--border);
+  font-weight:700;color:var(--blue);font-size:13px}}
 .card-body{{padding:12px 14px;overflow-x:auto}}
 table{{width:100%;border-collapse:collapse;font-size:12px}}
 th{{color:var(--muted);font-weight:600;text-align:left;padding:4px 6px;border-bottom:1px solid var(--border)}}
 td{{padding:3px 6px;vertical-align:top;white-space:nowrap}}
-tr:hover td{{background:rgba(255,255,255,.03)}}
+tr:hover td{{background:rgba(255,255,255,.06)}}
 .long{{color:var(--green)}} .short{{color:var(--red)}}
 .bullish{{color:var(--green)}} .bearish{{color:var(--red)}}
 .pos{{color:var(--green)}} .neg{{color:var(--red)}}
@@ -325,21 +343,32 @@ tr:hover td{{background:rgba(255,255,255,.03)}}
 .tag{{display:inline-block;padding:1px 5px;border-radius:4px;font-size:11px;font-weight:600}}
 .tag-long{{background:#1a3a2a;color:var(--green)}}
 .tag-short{{background:#3a1a1a;color:var(--red)}}
-.addr{{font-family:monospace;font-size:11px;color:var(--purple)}}
+.addr{{font-family:"SF Mono",ui-monospace,monospace;font-size:11px;color:var(--purple)}}
 .coin{{color:var(--orange);font-weight:600}}
 .score{{color:var(--yellow)}}
 #refresh-bar{{font-size:11px;color:var(--muted);padding:4px 24px;border-top:1px solid var(--border)}}
+@keyframes flashin{{0%{{background:rgba(88,166,255,.12)}}100%{{background:transparent}}}}
 </style>
 </head>
 <body>
 <header>
   <h1>🐋 SMC 抓庄监控</h1>
   <span id="meta">加载中…</span>
+  <nav class="hdr-nav">
+    <a href="/hl2">HL 系统</a>
+    <a href="/harmonic2">谐波系统</a>
+  </nav>
 </header>
 <main id="main"><!-- 由 JS renderAll() 填充 --></main>
 <div id="refresh-bar">自动刷新 · 5 秒</div>
 <script>
 const S = __INITIAL_STATE__;
+
+// ---- CSS 色彩 token（单一来源，SVG 拼接复用）----
+const CV = {{
+  green:'#3fb950', red:'#f85149', blue:'#58a6ff',
+  muted:'#8b949e', border:'#30363d',
+}};
 
 // ---------- 工具函数 ----------
 function fmtTime(ms){{
@@ -414,19 +443,19 @@ function svgBars(items, getLabel, getVal, opts){{
        +`xmlns="http://www.w3.org/2000/svg" style="display:block">`;
   // 中线（0 轴）
   s+=`<line x1="${{mid}}" y1="${{padT}}" x2="${{mid}}" y2="${{h-padB}}" `
-    +`stroke="#30363d" stroke-width="1"/>`;
+    +`stroke="${{CV.border}}" stroke-width="1"/>`;
   items.forEach((it,i)=>{{
     const v=parseFloat(getVal(it))||0;
     const y=padT+i*rowH;
     const cy=y+rowH/2;
     const len=Math.abs(v)/maxAbs*half;
-    const color=v>=0?'#3fb950':'#f85149';   // 正绿/负红（与 --pos/--red 一致）
+    const color=v>=0?CV.green:CV.red;   // 正绿/负红
     // 条形：正值从中线向右，负值从中线向左
     const bx=v>=0?mid:(mid-len);
     s+=`<rect x="${{bx}}" y="${{y+4}}" width="${{Math.max(len,0.5)}}" height="${{rowH-8}}" `
       +`fill="${{color}}" rx="2"/>`;
     // 左侧标签
-    s+=`<text x="4" y="${{cy+4}}" fill="#8b949e" font-size="11">`
+    s+=`<text x="4" y="${{cy+4}}" fill="${{CV.muted}}" font-size="11">`
       +`${{svgEsc(getLabel(it))}}</text>`;
     // 右侧数值（按符号着色）
     s+=`<text x="${{width-4}}" y="${{cy+4}}" fill="${{color}}" font-size="11" `
@@ -448,7 +477,7 @@ function svgSpark(points, opts){{
   const span=(hi-lo)||1;                 // 防除零（全平时 span=1）
   const n=points.length;
   const dx=(width-2*pad)/(n-1);
-  const color=opts.color||'#58a6ff';
+  const color=opts.color||CV.blue;
   let pts='';
   points.forEach((p,i)=>{{
     const v=parseFloat(p)||0;
@@ -866,26 +895,27 @@ function renderAll(state){{
   document.getElementById('meta').textContent=
     `生成于 ${{m.generated||'--'}}  ·  近 ${{m.window_min||60}} 分钟`;
 
+  // accent=true → 蓝边高亮（核心卡片：鲸鱼信号/净流向/系统健康）
   const sections=[
-    ['🩺 系统健康','health',renderHealth],
-    ['📊 预测准确率(诚实回顾)','accuracy',renderAccuracy],
-    ['🏦 交易所资金流(24h)','exchange_flows',renderExchangeFlows],
-    ['🏦 钱包持仓画像','wallet_portfolio',renderWalletPortfolio],
-    ['共振信号 ⚡','signals',renderSignals],
-    ['背离信号 🔀','divergence',renderDivergence],
-    ['聪明钱净流向 🐋','whale_flows',renderWhaleFlows],
-    ['鲸鱼信号 🚨','whale_signals',renderWhaleSignals],
-    ['聪明钱地址排行 🏆','top_addresses',renderTopAddresses],
-    ['庄家集团 🕸️','clusters',renderClusters],
-    ['Bitget OI 动向 📊','oi_surges',renderOiSurges],
-    ['链上大额转账 ⛓️','onchain',renderOnchain],
-    ['OKX 强平级联 💥','okx_liquidations',renderOkxLiquidations],
-    ['OKX 跨所信号 🌐','okx_signals',renderOkxSignals],
-    ['HL 挂单墙 🧱','okx_walls',renderHlWalls],
+    ['🩺 系统健康','health',renderHealth,true],
+    ['📊 预测准确率(诚实回顾)','accuracy',renderAccuracy,false],
+    ['🏦 交易所资金流(24h)','exchange_flows',renderExchangeFlows,false],
+    ['🏦 钱包持仓画像','wallet_portfolio',renderWalletPortfolio,false],
+    ['共振信号 ⚡','signals',renderSignals,false],
+    ['背离信号 🔀','divergence',renderDivergence,false],
+    ['聪明钱净流向 🐋','whale_flows',renderWhaleFlows,true],
+    ['鲸鱼信号 🚨','whale_signals',renderWhaleSignals,true],
+    ['聪明钱地址排行 🏆','top_addresses',renderTopAddresses,false],
+    ['庄家集团 🕸️','clusters',renderClusters,false],
+    ['Bitget OI 动向 📊','oi_surges',renderOiSurges,false],
+    ['链上大额转账 ⛓️','onchain',renderOnchain,false],
+    ['OKX 强平级联 💥','okx_liquidations',renderOkxLiquidations,false],
+    ['OKX 跨所信号 🌐','okx_signals',renderOkxSignals,false],
+    ['HL 挂单墙 🧱','okx_walls',renderHlWalls,false],
   ];
 
-  document.getElementById('main').innerHTML=sections.map(([title,key,fn])=>
-    `<div class="card">
+  document.getElementById('main').innerHTML=sections.map(([title,key,fn,accent])=>
+    `<div class="card${{accent?' accent':''}}">
       <div class="card-title">${{title}}</div>
       <div class="card-body">${{fn(state[key]||[])}}</div>
     </div>`
@@ -897,7 +927,15 @@ renderAll(S);
 async function refresh(){{
   try{{
     const r=await fetch('/api/state');
-    if(r.ok)renderAll(await r.json());
+    if(r.ok){{
+      renderAll(await r.json());
+      // 数据更新时对全部 .card-body 触发 flashin 动画（视觉反馈）
+      document.querySelectorAll('.card-body').forEach(el=>{{
+        el.style.animation='none';
+        el.offsetHeight;
+        el.style.animation='flashin .6s ease-out';
+      }});
+    }}
   }}catch(e){{console.warn('refresh err',e)}}
 }}
 setInterval(refresh,5000);
@@ -1820,13 +1858,14 @@ header{{height:54px;padding:0 16px;border-bottom:1px solid var(--line);
 #kpi-strip{{background:var(--panel);border-bottom:1px solid var(--line);
   padding:6px 16px;display:grid;
   grid-template-columns:repeat(6,1fr);gap:0;flex-shrink:0}}
-.kpi-cell{{display:flex;flex-direction:column;gap:1px;padding:4px 10px 4px 0;
+.kpi-cell{{display:flex;flex-direction:column;gap:1px;padding:4px 8px 4px 0;
   border-right:1px solid var(--line2)}}
 .kpi-cell:last-child{{border-right:none}}
 .kpi-label{{font-size:9.5px;color:var(--t3);font-weight:600;text-transform:uppercase;
   letter-spacing:.4px}}
-.kpi-val{{font-size:16px;font-weight:700;color:var(--t1);
-  font-family:'IBM Plex Mono',monospace;font-variant-numeric:tabular-nums}}
+.kpi-val{{font-size:15px;font-weight:700;color:var(--t1);
+  font-family:'IBM Plex Mono',monospace;font-variant-numeric:tabular-nums;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}}
 .kpi-val.blue{{color:var(--blue)}}
 .kpi-val.long{{color:var(--long)}}
 .kpi-val.short{{color:var(--short)}}
@@ -1834,9 +1873,13 @@ header{{height:54px;padding:0 16px;border-bottom:1px solid var(--line);
 /* ---- 三栏主体布局（262px / 1fr / 372px）---- */
 .layout{{display:grid;grid-template-columns:262px minmax(0,1fr) 372px;
   flex:1;overflow:hidden}}
-@media(max-width:1100px){{
+@media(max-width:960px){{
   .layout{{grid-template-columns:1fr;overflow:auto}}
   #left,#right-side{{width:auto;border:none}}
+}}
+@media(max-width:1100px) and (min-width:961px){{
+  .layout{{grid-template-columns:220px minmax(0,1fr) 320px}}
+  #kpi-strip{{grid-template-columns:repeat(3,1fr)}}
 }}
 
 /* ---- 左面板：币种列表 ---- */
@@ -1938,7 +1981,7 @@ header{{height:54px;padding:0 16px;border-bottom:1px solid var(--line);
 
 /* ---- 右侧栏（372px）---- */
 #right-side{{border-left:1px solid var(--line);background:var(--panel);
-  overflow-y:auto;padding:12px;display:flex;flex-direction:column;gap:10px}}
+  overflow-y:auto;padding:12px;display:flex;flex-direction:column;gap:12px}}
 #right-empty{{color:var(--t2);padding:40px;text-align:center;font-size:13px}}
 
 /* ---- 通用卡片 ---- */
@@ -1948,7 +1991,7 @@ header{{height:54px;padding:0 16px;border-bottom:1px solid var(--line);
   font-weight:700;color:var(--blue);font-size:12.5px;
   display:flex;align-items:center;gap:8px}}
 .card-body{{padding:10px 12px;overflow-x:auto}}
-.card.accent{{border-color:#b6d4fd}}
+.card.accent{{border-color:#b6d4fd;border-top:3px solid var(--blue)}}
 .card.accent .card-title{{background:var(--bluebg);color:var(--blue2)}}
 table{{width:100%;border-collapse:collapse;font-size:11px}}
 th{{color:var(--t3);font-weight:600;text-align:left;padding:3px 5px;
@@ -2019,7 +2062,20 @@ details[open].explainer summary::before{{content:"▼ ";font-size:10px;color:var
   <span class="hdr-live"><span class="hdr-live-dot"></span>LIVE</span>
   <span id="hdr-clock">--:--:--</span>
   <span id="meta">加载中…</span>
+  <!-- §3 C 高灵敏诚实标注：order=2 / tol=7%，误检率上升，止损必执行 -->
+  <span id="sensitivity-badge" style="font-size:10.5px;padding:2px 8px;border-radius:5px;
+    background:#fff8c5;color:#7c4a00;border:1px solid #d4a72c;font-weight:600;flex-shrink:0"
+    title="系统以 order=2 / tol=7% 运行，比默认更灵敏——含更多早期形态，同时误检率上升">
+    ⚡高灵敏模式(order=2/tol=7%)
+  </span>
 </header>
+<!-- §3 C 高灵敏诚实对冲条（页头下方固定警示）-->
+<div id="sensitivity-alert" style="background:#fffbeb;border-bottom:1px solid #fde68a;
+  padding:5px 16px;font-size:11px;color:#78350f;display:flex;align-items:center;gap:6px;
+  flex-shrink:0">
+  <span style="font-weight:700">⚡高灵敏模式 (order=2 / tol=7%)</span>
+  <span>含更多早期形态，误检率上升，止损必执行 — 请结合订单流/成交量确认再考虑介入</span>
+</div>
 
 <!-- ======== KPI strip（6 列）======== -->
 <div id="kpi-strip">
@@ -2102,6 +2158,14 @@ details[open].explainer summary::before{{content:"▼ ";font-size:10px;color:var
 <script>
 // 首屏注入左列表（array，非 object）
 const S = __INITIAL_STATE__;
+
+// ---- 设计 token（SVG 拼接单一来源，与 :root CSS 变量值保持一致）----
+const T = {{
+  long:'#16a34a', short:'#e23744',
+  blue:'#2563eb', violet:'#a855f7',
+  amber:'#e6a23c', t3:'#9aa7bd',
+  line:'#e4eaf3',
+}};
 
 // ---- 状态 ----
 let _listData = S;       // 当前左列表原始数据
@@ -2290,7 +2354,11 @@ function selectCoin(coin, tf){{
   }});
 }}
 
-// ---- SVG 蜡烛图（含 XABCD + PRZ + S/R 叠加，新设计 token 配色）----
+// ---- SVG 蜡烛图（含 XABCD + PRZ + 黄金口袋 + S/R 叠加，新设计 token 配色）----
+// §5 E 形态绘制：
+//   completed  → X-A-B-C-D 五段实线（bull=绿/bear=红）+ 枢轴标签(名+价) + PRZ 阴影带
+//               + 黄金口袋∩PRZ 入场高亮（amber）+ Fib 目标线
+//   forming    → X-A-B-C 实线 + C→预期D 虚线 + PRZ 投射阴影（虚线/半透明，区分未完成）
 function renderSvgCandles(candles, setups, sr, tf, W, H){{
   if(!candles||!candles.length)
     return'<div style="color:var(--t2);padding:20px">暂无K线数据（该周期未采集）</div>';
@@ -2319,6 +2387,28 @@ function renderSvgCandles(candles, setups, sr, tf, W, H){{
 
   function py(price){{return padT+(hi-price)/span*(H-padT-padB);}}
   function px(i){{return padL+i*(cw+gap)+cw/2;}}
+  // 黄金口袋区间（0.618–0.786 Fibonacci 回测区）
+  // bull：高点 hi_p 回测到 lo_p 的 0.618~0.786 之间 = [hi_p-(hi_p-lo_p)*0.786, hi_p-(hi_p-lo_p)*0.618]
+  // bear：低点 lo_p 反弹到 hi_p 的 0.618~0.786 之间 = [lo_p+(hi_p-lo_p)*0.618, lo_p+(hi_p-lo_p)*0.786]
+  function goldenPocket(x_px, a_px, direction){{
+    if(x_px==null||a_px==null)return null;
+    const xp=parseFloat(x_px), ap=parseFloat(a_px);
+    const rng=Math.abs(ap-xp);
+    if(rng<=0)return null;
+    let gLo, gHi;
+    if(direction==='long'){{
+      // bull: XA 段下行（A < X），黄金口袋在 A 附近上方
+      const hi_p=Math.max(xp,ap), lo_p=Math.min(xp,ap);
+      gLo=hi_p-(hi_p-lo_p)*0.786;
+      gHi=hi_p-(hi_p-lo_p)*0.618;
+    }}else{{
+      // bear: XA 段上行（A > X），黄金口袋在 A 附近下方
+      const hi_p=Math.max(xp,ap), lo_p=Math.min(xp,ap);
+      gLo=lo_p+(hi_p-lo_p)*0.618;
+      gHi=lo_p+(hi_p-lo_p)*0.786;
+    }}
+    return [Math.min(gLo,gHi), Math.max(gLo,gHi)];
+  }}
 
   let svg=`<svg viewBox="0 0 ${{W}} ${{H}}" width="100%" height="${{H}}" `+
     `preserveAspectRatio="none" xmlns="http://www.w3.org/2000/svg" style="display:block">`;
@@ -2328,7 +2418,7 @@ function renderSvgCandles(candles, setups, sr, tf, W, H){{
     const price=lo+(span*gi/4);
     const y=py(price);
     svg+=`<line x1="${{padL}}" y1="${{y.toFixed(1)}}" x2="${{W-padR}}" y2="${{y.toFixed(1)}}" `+
-      `stroke="#e4eaf3" stroke-width="1"/>`;
+      `stroke="${{T.line}}" stroke-width="1"/>`;
   }}
 
   // S/R 线（该 tf 布林带上/下轨）
@@ -2336,39 +2426,98 @@ function renderSvgCandles(candles, setups, sr, tf, W, H){{
     if(r.upper!=null){{
       const y=py(r.upper);
       svg+=`<line x1="${{padL}}" y1="${{y.toFixed(1)}}" x2="${{W-padR}}" y2="${{y.toFixed(1)}}" `+
-        `stroke="#e23744" stroke-width="1" stroke-dasharray="4,3" opacity="0.7"/>`;
+        `stroke="${{T.short}}" stroke-width="1" stroke-dasharray="4,3" opacity="0.7"/>`;
     }}
     if(r.lower!=null){{
       const y=py(r.lower);
       svg+=`<line x1="${{padL}}" y1="${{y.toFixed(1)}}" x2="${{W-padR}}" y2="${{y.toFixed(1)}}" `+
-        `stroke="#16a34a" stroke-width="1" stroke-dasharray="4,3" opacity="0.7"/>`;
+        `stroke="${{T.long}}" stroke-width="1" stroke-dasharray="4,3" opacity="0.7"/>`;
     }}
   }});
 
-  // Setup 水平虚线（进场区/止损/目标 1/目标 2）
+  // Setup 绘制（completed/forming 区分）
   setups.forEach(su=>{{
-    const lines=[
-      [su.entry_lo,'#2563eb',1.5,'6,3'],
-      [su.stop,su.direction==='long'?'#e23744':'#16a34a',1,'4,3'],
-      [su.target1,'#e6a23c',1,'4,3'],
-      [su.target2,'#a855f7',1,'4,3'],
-    ];
-    lines.forEach(([v,c,w,da])=>{{
-      if(v==null)return;
-      const y=py(parseFloat(v));
-      svg+=`<line x1="${{padL}}" y1="${{y.toFixed(1)}}" x2="${{W-padR}}" `+
-        `y2="${{y.toFixed(1)}}" stroke="${{c}}" stroke-width="${{w}}" `+
-        `stroke-dasharray="${{da}}" opacity="0.88"/>`;
-    }});
-    // PRZ 区带（蓝色半透明）
+    const isBull=su.direction==='long';
+    const patColor=isBull?T.long:T.short;   // bull=绿/bear=红（§5 E 规范）
+    const isCompleted=su.kind==='completed';
+    const isForming=su.kind==='forming';
+
+    // ---- PRZ 区带（completed=实线蓝框；forming=虚线/半透明）----
     if(su.prz_lo!=null&&su.prz_hi!=null){{
       const y1=py(Math.max(su.prz_lo,su.prz_hi));
       const y2=py(Math.min(su.prz_lo,su.prz_hi));
-      svg+=`<rect x="${{padL}}" y="${{y1.toFixed(1)}}" width="${{W-padL-padR}}" `+
-        `height="${{Math.max(1,(y2-y1)).toFixed(1)}}" `+
-        `fill="rgba(37,99,235,0.13)" stroke="rgba(37,99,235,0.45)" stroke-width="1"/>`;
-      svg+=`<text x="${{padL+4}}" y="${{(y1+11).toFixed(1)}}" font-size="9" `+
-        `font-weight="700" fill="#2563eb" opacity="0.85">PRZ</text>`;
+      const przH=Math.max(1,(y2-y1));
+      if(isCompleted){{
+        // completed: 实线蓝框 + 不透明阴影带
+        svg+=`<rect x="${{padL}}" y="${{y1.toFixed(1)}}" width="${{W-padL-padR}}" `+
+          `height="${{przH.toFixed(1)}}" `+
+          `fill="rgba(37,99,235,0.13)" stroke="rgba(37,99,235,0.55)" stroke-width="1.2"/>`;
+        svg+=`<text x="${{padL+4}}" y="${{(y1+11).toFixed(1)}}" font-size="9" `+
+          `font-weight="700" fill="${{T.blue}}" opacity="0.9">PRZ</text>`;
+      }}else if(isForming){{
+        // forming: 虚线框 + 半透明阴影（区分"未完成"）
+        svg+=`<rect x="${{padL}}" y="${{y1.toFixed(1)}}" width="${{W-padL-padR}}" `+
+          `height="${{przH.toFixed(1)}}" `+
+          `fill="rgba(37,99,235,0.06)" stroke="rgba(37,99,235,0.38)" stroke-width="1" `+
+          `stroke-dasharray="5,3"/>`;
+        svg+=`<text x="${{padL+4}}" y="${{(y1+11).toFixed(1)}}" font-size="9" `+
+          `font-weight="700" fill="${{T.blue}}" opacity="0.6">PRZ(预期)</text>`;
+      }}
+    }}
+
+    // ---- 黄金口袋∩PRZ 入场高亮（仅 completed，amber 色）----
+    if(isCompleted&&su.prz_lo!=null&&su.prz_hi!=null){{
+      const gp=goldenPocket(su.x_px,su.a_px,su.direction);
+      if(gp){{
+        const [gpLo,gpHi]=gp;
+        const przLo=Math.min(parseFloat(su.prz_lo),parseFloat(su.prz_hi));
+        const przHi=Math.max(parseFloat(su.prz_lo),parseFloat(su.prz_hi));
+        const overLo=Math.max(gpLo,przLo), overHi=Math.min(gpHi,przHi);
+        if(overLo<=overHi){{
+          // 有交集：黄金口袋∩PRZ 高亮（最高概率区，amber 暖色）
+          const oy1=py(overHi), oy2=py(overLo);
+          svg+=`<rect x="${{padL}}" y="${{oy1.toFixed(1)}}" width="${{W-padL-padR}}" `+
+            `height="${{Math.max(1,(oy2-oy1)).toFixed(1)}}" `+
+            `fill="rgba(230,162,60,0.22)" stroke="rgba(230,162,60,0.7)" stroke-width="1.2"/>`;
+          svg+=`<text x="${{(W-padR-4).toFixed(1)}}" y="${{(oy1+11).toFixed(1)}}" font-size="9" `+
+            `font-weight="700" fill="${{T.amber}}" text-anchor="end" opacity="0.9">黄金口袋</text>`;
+        }}else{{
+          // 无交集：仅显示黄金口袋（单独区带，无 PRZ 汇合）
+          const gy1=py(gpHi), gy2=py(gpLo);
+          if(gy2>gy1){{
+            svg+=`<rect x="${{padL}}" y="${{gy1.toFixed(1)}}" width="${{W-padL-padR}}" `+
+              `height="${{Math.max(1,(gy2-gy1)).toFixed(1)}}" `+
+              `fill="rgba(230,162,60,0.1)" stroke="rgba(230,162,60,0.4)" stroke-width="1" `+
+              `stroke-dasharray="3,2"/>`;
+          }}
+        }}
+      }}
+    }}
+
+    // ---- Fib 目标线（completed：target1=amber 实线/target2=violet 实线）----
+    if(isCompleted){{
+      const lines=[
+        [su.entry_lo,T.blue,1.5,'6,3'],
+        [su.stop,isBull?T.short:T.long,1,'4,3'],
+        [su.target1,T.amber,1.5,''],       // target1=amber 实线
+        [su.target2,T.violet,1.5,''],      // target2=violet 实线
+      ];
+      lines.forEach(([v,c,w,da])=>{{
+        if(v==null)return;
+        const y=py(parseFloat(v));
+        const daStr=da?`stroke-dasharray="${{da}}" `:'';
+        svg+=`<line x1="${{padL}}" y1="${{y.toFixed(1)}}" x2="${{W-padR}}" `+
+          `y2="${{y.toFixed(1)}}" stroke="${{c}}" stroke-width="${{w}}" `+
+          `${{daStr}}opacity="0.88"/>`;
+      }});
+    }}else if(isForming){{
+      // forming 只显示 stop 线（无 entry/target，D 未到）
+      if(su.stop!=null){{
+        const y=py(parseFloat(su.stop));
+        svg+=`<line x1="${{padL}}" y1="${{y.toFixed(1)}}" x2="${{W-padR}}" `+
+          `y2="${{y.toFixed(1)}}" stroke="${{isBull?T.short:T.long}}" stroke-width="1" `+
+          `stroke-dasharray="4,3" opacity="0.65"/>`;
+      }}
     }}
   }});
 
@@ -2378,7 +2527,7 @@ function renderSvgCandles(candles, setups, sr, tf, W, H){{
     const x=padL+i*(cw+gap);
     const cy=py(cl), oy=py(o);
     const top=Math.min(cy,oy), bh=Math.max(1,Math.abs(cy-oy));
-    const color=cl>=o?'#16a34a':'#e23744';// 设计 token: long/short
+    const color=cl>=o?T.long:T.short;
     const mx=x+cw/2;
     // 影线
     svg+=`<line x1="${{mx.toFixed(1)}}" y1="${{py(h).toFixed(1)}}" `+
@@ -2388,24 +2537,76 @@ function renderSvgCandles(candles, setups, sr, tf, W, H){{
       `height="${{bh.toFixed(1)}}" fill="${{color}}" rx="1"/>`;
   }});
 
-  // XABCD polyline（紫色，设计稿 --violet）+ 点 + 标注
+  // XABCD 形态连线（§5 E 规范：bull=绿/bear=红，completed 实线，forming C→D 虚线）
   setups.forEach(su=>{{
-    const pts=[
+    const isBull=su.direction==='long';
+    const isCompleted=su.kind==='completed';
+    const isForming=su.kind==='forming';
+    const patColor=isBull?T.long:T.short;
+
+    // 全部可用枢轴点（含 D 条件过滤）
+    const allPts=[
       [su.x_idx,su.x_px,'X'],[su.a_idx,su.a_px,'A'],
       [su.b_idx,su.b_px,'B'],[su.c_idx,su.c_px,'C'],[su.d_idx,su.d_px,'D'],
     ].filter(([idx,val])=>idx!=null&&val!=null);
-    if(pts.length>1){{
-      const poly=pts.map(([idx,val])=>
+
+    if(isCompleted&&allPts.length>1){{
+      // completed: X-A-B-C-D 五段实线（bull=绿/bear=红）
+      const poly=allPts.map(([idx,val])=>
         `${{px(idx).toFixed(1)}},${{py(val).toFixed(1)}}`).join(' ');
-      svg+=`<polyline points="${{poly}}" fill="none" stroke="#a855f7" `+
-        `stroke-width="1.8" stroke-dasharray="3,2" opacity="0.9"/>`;
+      svg+=`<polyline points="${{poly}}" fill="none" stroke="${{patColor}}" `+
+        `stroke-width="2.0" opacity="0.92"/>`;
+    }}else if(isForming){{
+      // forming: X-A-B-C 实线（C→D 部分处理如下）
+      const xabcPts=allPts.filter(([,, lbl])=>lbl!=='D');
+      if(xabcPts.length>1){{
+        const poly=xabcPts.map(([idx,val])=>
+          `${{px(idx).toFixed(1)}},${{py(val).toFixed(1)}}`).join(' ');
+        svg+=`<polyline points="${{poly}}" fill="none" stroke="${{patColor}}" `+
+          `stroke-width="1.8" opacity="0.85"/>`;
+      }}
+      // C→预期D 虚线（若有 PRZ 中值作为预期 D 位）
+      const cPt=allPts.find(([,,lbl])=>lbl==='C');
+      if(cPt&&su.prz_lo!=null&&su.prz_hi!=null){{
+        const dProjPx=(parseFloat(su.prz_lo)+parseFloat(su.prz_hi))/2;
+        // 投射 x 位置：C 点之后若干根（参考：candles 长度的 10%，最少 5 根）
+        const projOffset=Math.max(5,Math.floor(n*0.1));
+        const dProjIdx=Math.min(cPt[0]+projOffset, n-1);
+        const cx2=px(cPt[0]), dx2=px(dProjIdx);
+        const cy3=py(cPt[1]), dy3=py(dProjPx);
+        svg+=`<line x1="${{cx2.toFixed(1)}}" y1="${{cy3.toFixed(1)}}" `+
+          `x2="${{dx2.toFixed(1)}}" y2="${{dy3.toFixed(1)}}" `+
+          `stroke="${{patColor}}" stroke-width="1.5" stroke-dasharray="6,4" opacity="0.65"/>`;
+        // 预期 D 端点标记（空心圆）
+        svg+=`<circle cx="${{dx2.toFixed(1)}}" cy="${{dy3.toFixed(1)}}" `+
+          `r="4" fill="none" stroke="${{patColor}}" stroke-width="1.5" opacity="0.65"/>`;
+        svg+=`<text x="${{(dx2+5).toFixed(1)}}" y="${{(dy3-5).toFixed(1)}}" `+
+          `fill="${{patColor}}" font-size="10" font-weight="700" opacity="0.65">D?</text>`;
+      }}
     }}
-    pts.forEach(([idx,val,lbl])=>{{
+
+    // 枢轴点标注（实心圆 + 名称 + 价格标签）
+    const drawPts=isCompleted?allPts:allPts.filter(([,,lbl])=>lbl!=='D');
+    drawPts.forEach(([idx,val,lbl])=>{{
       const cx=px(idx), cy2=py(val);
+      // 实心圆（bull=绿/bear=红）
       svg+=`<circle cx="${{cx.toFixed(1)}}" cy="${{cy2.toFixed(1)}}" `+
-        `r="4.5" fill="#fff" stroke="#a855f7" stroke-width="2"/>`;
-      svg+=`<text x="${{(cx+5).toFixed(1)}}" y="${{(cy2-5).toFixed(1)}}" `+
-        `fill="#a855f7" font-size="11" font-weight="700">${{lbl}}</text>`;
+        `r="4.5" fill="${{patColor}}" stroke="#fff" stroke-width="1.5" opacity="0.92"/>`;
+      // 标签背景底色（提高可读性）
+      const lblPrice=parseFloat(val);
+      const priceTxt=lblPrice>100?lblPrice.toFixed(1):lblPrice.toFixed(4);
+      const fullLbl=lbl+' '+priceTxt;
+      // 标签位置：奇数点（A/C）标上方，偶数点（X/B/D）标下方，避重叠
+      const above=['X','B','D'].indexOf(lbl)>=0;
+      const txY=above?(cy2+14):(cy2-7);
+      svg+=`<text x="${{cx.toFixed(1)}}" y="${{txY.toFixed(1)}}" `+
+        `fill="${{patColor}}" font-size="10" font-weight="700" text-anchor="middle" `+
+        `opacity="0.92">${{lbl}}</text>`;
+      // 价格小字标注（单独一行，更小字体，muted 颜色）
+      const priceY=above?(cy2+24):(cy2-18);
+      svg+=`<text x="${{cx.toFixed(1)}}" y="${{priceY.toFixed(1)}}" `+
+        `fill="${{T.t3}}" font-size="8.5" font-family="IBM Plex Mono,monospace" text-anchor="middle" `+
+        `opacity="0.85">${{priceTxt}}</text>`;
     }});
   }});
 
@@ -2414,7 +2615,7 @@ function renderSvgCandles(candles, setups, sr, tf, W, H){{
     const price=lo+(span*i/5);
     const y=py(price);
     svg+=`<text x="${{(padL-4).toFixed(1)}}" y="${{(y+4).toFixed(1)}}" `+
-      `fill="#9aa7bd" font-size="9.5" font-family="IBM Plex Mono,monospace" `+
+      `fill="${{T.t3}}" font-size="9.5" font-family="IBM Plex Mono,monospace" `+
       `text-anchor="end">${{price>100?price.toFixed(0):price.toFixed(4)}}</text>`;
   }}
 
@@ -2591,9 +2792,11 @@ function renderMainArea(d){{
        <div class="chart-legend">
          <span class="chart-title">谐波形态 · 斐波那契 · SMC 结构</span>
          <div class="legend-items">
-           <span class="legend-item"><span class="legend-swatch-line"></span>XABCD</span>
+           <span class="legend-item"><span class="legend-swatch-line" style="border-color:var(--long)"></span>completed(实线)</span>
+           <span class="legend-item"><span class="legend-swatch-line" style="border-color:var(--short)"></span>bear</span>
            <span class="legend-item"><span class="legend-swatch-prz"></span>PRZ 反转区</span>
-           <span class="legend-item"><span class="legend-swatch-ote"></span>OTE 黄金口袋</span>
+           <span class="legend-item"><span class="legend-swatch-ote"></span>黄金口袋</span>
+           <span style="font-size:9.5px;color:#7c4a00;background:#fff8c5;padding:1px 5px;border-radius:3px;border:1px solid #d4a72c">⚡高灵敏</span>
          </div>
        </div>
        <div id="chart-host">${{svgHtml}}</div>
@@ -2615,7 +2818,14 @@ function renderRightSide(d){{
   document.getElementById('right-side').innerHTML=
     // Setup 明细卡（accent 蓝边，含全字段）
     `<div class="card accent">
-       <div class="card-title">Setup 明细（含 KNN 详情 · PRZ 接近度 · 诚实标注）</div>
+       <div class="card-title">
+         Setup 明细（含 KNN 详情 · PRZ 接近度 · 诚实标注）
+         <span style="font-size:9.5px;padding:1px 6px;border-radius:4px;
+           background:#fff8c5;color:#7c4a00;border:1px solid #d4a72c;font-weight:600;
+           margin-left:6px;white-space:nowrap">
+           ⚡高灵敏(order=2/tol=7%)：含更多早期形态，误检率上升，止损必执行
+         </span>
+       </div>
        <div class="card-body">${{renderSetupDetail(d.setups||[])}}</div>
      </div>`+
     // 多周期 PRZ 共振（前瞻强化信号）
@@ -2859,13 +3069,14 @@ header{{height:54px;padding:0 16px;border-bottom:1px solid var(--line);
 #kpi-strip{{background:var(--panel);border-bottom:1px solid var(--line);
   padding:6px 16px;display:grid;
   grid-template-columns:repeat(6,1fr);gap:0;flex-shrink:0}}
-.kpi-cell{{display:flex;flex-direction:column;gap:1px;padding:4px 10px 4px 0;
+.kpi-cell{{display:flex;flex-direction:column;gap:1px;padding:4px 8px 4px 0;
   border-right:1px solid var(--line2)}}
 .kpi-cell:last-child{{border-right:none}}
 .kpi-label{{font-size:9.5px;color:var(--t3);font-weight:600;text-transform:uppercase;
   letter-spacing:.4px}}
-.kpi-val{{font-size:16px;font-weight:700;color:var(--t1);
-  font-family:'IBM Plex Mono',monospace;font-variant-numeric:tabular-nums}}
+.kpi-val{{font-size:15px;font-weight:700;color:var(--t1);
+  font-family:'IBM Plex Mono',monospace;font-variant-numeric:tabular-nums;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}}
 .kpi-val.blue{{color:var(--blue)}}
 .kpi-val.long{{color:var(--long)}}
 .kpi-val.short{{color:var(--short)}}
@@ -2873,19 +3084,35 @@ header{{height:54px;padding:0 16px;border-bottom:1px solid var(--line);
 /* ---- 三栏主体（262px / 1fr / 372px）---- */
 .hl-layout{{display:grid;grid-template-columns:262px minmax(0,1fr) 372px;
   flex:1;overflow:hidden}}
-@media(max-width:1100px){{
+@media(max-width:960px){{
   .hl-layout{{grid-template-columns:1fr;overflow:auto}}
   #hl-left,#hl-right{{width:auto;border:none}}
+}}
+@media(max-width:1100px) and (min-width:961px){{
+  .hl-layout{{grid-template-columns:220px minmax(0,1fr) 320px}}
+  #kpi-strip{{grid-template-columns:repeat(3,1fr)}}
 }}
 
 /* ---- 左面板 ---- */
 #hl-left{{border-right:1px solid var(--line);background:var(--panel);
   display:flex;flex-direction:column;overflow:hidden}}
-#hl-left-header{{padding:8px 10px 6px;border-bottom:1px solid var(--line2);
+#hl-left-header{{padding:8px 10px 6px;border-bottom:1px solid var(--line);
   display:flex;align-items:center;justify-content:space-between;
   background:var(--panel)}}
 .left-title{{font-size:12.5px;font-weight:700}}
 .left-sub{{font-size:10.5px;color:var(--t3)}}
+#hl-search-bar{{padding:5px 8px;border-bottom:1px solid var(--line2)}}
+#hl-coin-search{{width:100%;font-size:11px;padding:4px 7px;border:1px solid var(--line);
+  border-radius:6px;background:var(--bg);color:var(--t1);outline:none}}
+#hl-coin-search:focus{{border-color:var(--blue);background:var(--panel)}}
+#hl-flow-filters{{padding:5px 8px;border-bottom:1px solid var(--line2);
+  display:flex;gap:3px}}
+.hl-filter-btn{{font-size:10.5px;padding:2px 8px;border-radius:5px;
+  border:1px solid var(--line);background:transparent;
+  color:var(--t2);cursor:pointer;font-weight:600}}
+.hl-filter-btn:hover{{border-color:var(--blue);color:var(--blue)}}
+.hl-filter-btn.active{{border-color:var(--blue);color:var(--blue);
+  background:var(--bluebg)}}
 #hl-coin-list{{overflow-y:auto;flex:1}}
 .hl-coin-row{{padding:9px 12px 9px 10px;cursor:pointer;
   border-left:3px solid transparent;border-bottom:1px solid var(--line2);
@@ -3019,7 +3246,19 @@ header{{height:54px;padding:0 16px;border-bottom:1px solid var(--line);
   <div id="hl-left">
     <div id="hl-left-header">
       <span class="left-title">监控币种</span>
-      <span class="left-sub">净主动流向 · 共识</span>
+      <span class="left-sub" id="hl-left-count">净主动流向</span>
+    </div>
+    <div id="hl-search-bar">
+      <input id="hl-coin-search" type="text" placeholder="搜索币种…"
+             oninput="hlOnSearch(this.value)">
+    </div>
+    <div id="hl-flow-filters">
+      <button class="hl-filter-btn active" data-f="all"
+              onclick="hlSetFilter('all')">全部</button>
+      <button class="hl-filter-btn" data-f="buy"
+              onclick="hlSetFilter('buy')">净买</button>
+      <button class="hl-filter-btn" data-f="sell"
+              onclick="hlSetFilter('sell')">净卖</button>
     </div>
     <div id="hl-coin-list"><!-- JS 渲染 --></div>
   </div>
@@ -3035,12 +3274,12 @@ header{{height:54px;padding:0 16px;border-bottom:1px solid var(--line);
       <div class="hl-card-body">
         <svg id="flow-svg" viewBox="0 0 800 150" style="width:100%;display:block">
           <line x1="6" y1="75" x2="794" y2="75" stroke="#e4eaf3" stroke-width="1"/>
-          <text x="10" y="16" font-size="10.5" fill="#9aa7bd">主动买入 ↑</text>
-          <text x="10" y="146" font-size="10.5" fill="#9aa7bd">主动卖出 ↓</text>
+          <text x="10" y="16" font-size="10.5" fill="#9aa7bd" font-family="IBM Plex Sans,system-ui,sans-serif">主动买入 ↑</text>
+          <text x="10" y="146" font-size="10.5" fill="#9aa7bd" font-family="IBM Plex Sans,system-ui,sans-serif">主动卖出 ↓</text>
           <g id="flow-bars"></g>
           <path id="flow-cum-path" fill="none" stroke="#2563eb" stroke-width="1.6"/>
           <text id="flow-cum-label" x="792" y="16" text-anchor="end"
-                font-size="10.5" font-family="IBM Plex Mono" fill="#2563eb"></text>
+                font-size="10.5" font-family="IBM Plex Mono,monospace" fill="#2563eb"></text>
         </svg>
       </div>
     </div>
@@ -3106,6 +3345,9 @@ header{{height:54px;padding:0 16px;border-bottom:1px solid var(--line);
 const S = __INITIAL_STATE__;
 let _state = S;
 let _curFeed = 'events';
+let _selectedCoin = '';  // 当前选中币（刷新后保持高亮）
+let _hlSearchQ = '';     // 左面板搜索关键词
+let _hlFilter = 'all';   // 左面板过滤：all/buy/sell
 
 // ---- 工具函数（零伪造，确定性）----
 function fmtUsd(v){{
@@ -3170,6 +3412,19 @@ function renderKpi(s){{
     '生成: '+(s.meta&&s.meta.generated?s.meta.generated:'—');
 }}
 
+// ---- 左面板搜索/过滤 ----
+function hlOnSearch(q){{
+  _hlSearchQ=q.trim().toLowerCase();
+  renderCoinList(_state);
+}}
+function hlSetFilter(f){{
+  _hlFilter=f;
+  document.querySelectorAll('.hl-filter-btn').forEach(b=>{{
+    b.classList.toggle('active',b.dataset.f===f);
+  }});
+  renderCoinList(_state);
+}}
+
 // ---- 左面板：币种列表（whale_flows + oi_surges 交叉）----
 function renderCoinList(s){{
   const wf=s.whale_flows||[];
@@ -3180,8 +3435,16 @@ function renderCoinList(s){{
     const sym=(r.symbol||'').replace(/USDT.*$/,'').replace(/PERP.*$/,'');
     oiMap[sym]={{funding:r.funding,oi_size:r.oi_size}};
   }});
+  // 过滤：搜索 + buy/sell 过滤
+  let filtered=[...wf];
+  if(_hlSearchQ)filtered=filtered.filter(r=>(r.coin||'').toLowerCase().includes(_hlSearchQ));
+  if(_hlFilter==='buy')filtered=filtered.filter(r=>(parseFloat(r.net)||0)>0);
+  else if(_hlFilter==='sell')filtered=filtered.filter(r=>(parseFloat(r.net)||0)<0);
+  // 更新计数
+  const countEl=document.getElementById('hl-left-count');
+  if(countEl)countEl.textContent=filtered.length+'币';
   // 按 abs(net) 降序
-  const sorted=[...wf].sort((a,b)=>
+  const sorted=filtered.sort((a,b)=>
     Math.abs(b.net||0)-Math.abs(a.net||0));
   const el=document.getElementById('hl-coin-list');
   if(!sorted.length){{
@@ -3200,7 +3463,8 @@ function renderCoinList(s){{
     const fundingVal=info.funding!=null
       ?(parseFloat(info.funding)*100).toFixed(4)+'%':'—';
     const oiStr=fmtUsd(info.oi_size!=null?info.oi_size:null);
-    return '<div class="hl-coin-row" onclick="selectCoin(\\''+esc(r.coin)+'\\')">'
+    const sel=r.coin===_selectedCoin?' selected':'';
+    return '<div class="hl-coin-row'+sel+'" onclick="selectCoin(\\''+esc(r.coin)+'\\')">'
       +'<div class="hl-coin-row-top">'
       +'<span class="hl-coin-name">'+esc(r.coin)+'</span>'
       +'<span class="hl-coin-price mono" style="color:'+barColor+'">'
@@ -3225,6 +3489,8 @@ function renderCoinList(s){{
 }}
 
 // ---- 中栏：净主动流向 SVG bars（whale_flows 数据，确定性）----
+// SVG token（与 :root CSS 变量值保持一致）
+const HL_T = {{long:'#16a34a', short:'#e23744', blue:'#2563eb', t3:'#9aa7bd', line:'#e4eaf3'}};
 function renderFlowSvg(s){{
   const wf=s.whale_flows||[];
   if(!wf.length)return;
@@ -3245,7 +3511,7 @@ function renderFlowSvg(s){{
     const bh=Math.max(2,Math.round(Math.abs(norm)*(H/2-8)));
     const x=6+gap+(bw+gap)*i;
     const y=net>=0?mid-bh:mid;
-    const col=net>=0?'#16a34a':'#e23744';
+    const col=net>=0?HL_T.long:HL_T.short;
     barsSvg+='<rect x="'+x+'" y="'+y+'" width="'+bw+'" height="'+bh
       +'" rx="1.5" fill="'+col+'" opacity="0.85"/>';
     const cumNorm=cumNet/maxAbs/n*0.4;
@@ -3509,10 +3775,8 @@ function renderOnchain(s){{
 }}
 
 function selectCoin(coin){{
-  document.querySelectorAll('.hl-coin-row').forEach(el=>{{
-    const nameEl=el.querySelector('.hl-coin-name');
-    el.classList.toggle('selected',nameEl&&nameEl.textContent===coin);
-  }});
+  _selectedCoin=coin;
+  renderCoinList(_state);
 }}
 
 // ---- 主渲染 ----

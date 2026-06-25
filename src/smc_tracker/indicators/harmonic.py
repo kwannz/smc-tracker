@@ -521,28 +521,62 @@ def project_prz(
     return results
 
 
+def _merge_completed_by_d(
+    raw_lists: list[list[dict]],
+) -> dict[int, dict]:
+    """共享 merge helper：把多组 completed 结果（来自 detect_xabcd + detect_all_ext）
+    按 D_idx 去重，同 D_idx 保留最高 confidence 候选。
+
+    Args:
+        raw_lists: 每组已是同一来源内去重后的 completed 列表（detect_xabcd 或 detect_ext）。
+
+    Returns:
+        {D_idx: best_candidate_dict}（再由调用方过滤 + 排序）。
+    """
+    best_by_d: dict[int, dict] = {}
+    for group in raw_lists:
+        for item in group:
+            d_idx = item["points"]["D"][0]
+            existing = best_by_d.get(d_idx)
+            if existing is None or item["confidence"] > existing["confidence"]:
+                best_by_d[d_idx] = item
+    return best_by_d
+
+
 def analyze_candles(
     candles: list[Any],
-    order: int = 3,
-    tol: float = 0.05,
+    order: int = 2,
+    tol: float = 0.07,
 ) -> dict:
     """综合分析：找枢轴 → 完整形态 + 成形中（前瞻）。
+
+    包含经典 4 种 XA-anchored 形态（Gartley/Bat/Butterfly/Crab）以及扩展形态
+    （Cypher/Shark/ABCD）——通过 harmonic_ext 并入，共享同 D_idx 去重逻辑。
 
     - completed 只取 D 在最近枢轴的（可操作性过滤，排除远古形态）。
     - completed/forming 各按 confidence 降序。
 
+    ⚡ 高灵敏模式（order=2 / tol=7%）：含更多早期形态，误检率上升，止损必执行。
+
     Args:
         candles: K 线列表（需 .h/.l/.c 属性）
-        order:   枢轴邻域
-        tol:     比率容差
+        order:   枢轴邻域（默认 2，高灵敏）
+        tol:     比率容差（默认 0.07 = 7%）
 
     Returns:
         {
-            "completed": [... detect_xabcd 结果 ...],
-            "forming":   [... project_prz 最新 XABC 结果 ...],
+            "completed": [... detect_xabcd + ext 合并结果 ...],
+            "forming":   [... project_prz + ext 前瞻合并结果 ...],
             "price":     float,   # 最后一根 close
         }
     """
+    # 局部导入避免循环（harmonic_ext 依赖本模块 _ratio/_within）
+    from .harmonic_ext import (  # noqa: PLC0415
+        detect_all_ext,
+        project_cypher_prz,
+        project_shark_prz,
+    )
+
     price = float(candles[-1].c) if candles else 0.0
     empty = {"completed": [], "forming": [], "price": price}
 
@@ -551,7 +585,10 @@ def analyze_candles(
     if len(pivots) < 5:
         return empty
 
-    completed_raw = detect_xabcd(pivots, tol=tol)
+    # --- completed：经典 + 扩展并入（同 D_idx 去重保留最高 confidence）---
+    completed_classic = detect_xabcd(pivots, tol=tol)
+    completed_ext = detect_all_ext(pivots, tol=tol)
+    best_by_d = _merge_completed_by_d([completed_classic, completed_ext])
 
     # 只保留 D 在最近若干枢轴内的完整形态（可操作性过滤）
     # D_idx 在最后 max(8, 后 60% 枢轴) 内
@@ -560,7 +597,7 @@ def analyze_candles(
     recent_d_idxs = {p[0] for p in pivots[recent_cutoff:]}
     # 完整形态须 D 接近现价才算可操作「入场触发」（远古形态 D 距现价过远 → 过滤，诚实）
     completed = [
-        r for r in completed_raw
+        r for r in best_by_d.values()
         if r["points"]["D"][0] in recent_d_idxs
         and price > 0
         and abs(r["points"]["D"][1] - price) / price <= _COMPLETED_MAX_DIST
@@ -569,7 +606,10 @@ def analyze_candles(
     # 按 confidence 降序
     completed.sort(key=lambda r: r["confidence"], reverse=True)
 
-    # 前瞻：用最后 4 个枢轴（XABC）预测 D
+    # --- forming：经典前瞻 + 扩展前瞻（Cypher/Shark）并入（按 confidence 合并排序）---
+    # 注：ABCD 前瞻不在此路径（其 4 点方向逻辑与 XABC 上下文不兼容，避免误报）。
+    # Cypher/Shark 前瞻含自身几何约束门槛（C>A / B<X），与 order_ok 门槛互补，
+    # 不满足自身约束时自动返回 []（内部守卫），不需额外 order_ok 过滤。
     if len(pivots) >= 4:
         last4 = pivots[-4:]
         X_px = last4[0][1]
@@ -583,7 +623,21 @@ def analyze_candles(
             order_ok = (X_px < B_px < C_px < A_px)
         else:
             order_ok = (X_px > B_px > C_px > A_px)
-        forming = project_prz(X_px, A_px, B_px, C_px, direction=direction, tol=tol) if order_ok else []
+        forming_classic = (
+            project_prz(X_px, A_px, B_px, C_px, direction=direction, tol=tol)
+            if order_ok else []
+        )
+        # 扩展前瞻：Cypher/Shark（各含自身几何约束，结构不满足自动返回 []）
+        forming_ext = (
+            project_cypher_prz(X_px, A_px, B_px, C_px, direction, tol=tol)
+            + project_shark_prz(X_px, A_px, B_px, C_px, direction, tol=tol)
+        )
+        # 合并：按 confidence 降序（forming 无 D_idx，不做 D_idx 去重）
+        forming = sorted(
+            forming_classic + forming_ext,
+            key=lambda r: r["confidence"],
+            reverse=True,
+        )
     else:
         forming = []
 

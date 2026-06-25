@@ -843,10 +843,15 @@ class Store:
             rows_list,
         )
 
-    def get_candles(self, coin: str, tf: str, limit: int = 1000) -> list:
-        """读取最近 limit 根 K 线，升序返回 list[Candle]。
+    def get_candles(self, coin: str, tf: str, limit: int = 1000,
+                    since_ms: int | None = None) -> list:
+        """读取 K 线，升序返回 list[Candle]。
 
-        DB 以 DESC 取最新 limit 根，Python 侧再升序排列，确保调用方拿到正确时间顺序。
+        两种模式（只增参数，旧调用零改动）：
+        - since_ms=None（默认）：取最近 limit 根，升序；与原行为完全一致。
+        - since_ms=<整数>：返回 open_ms > since_ms 的所有 K 线（严格大于），
+          不受 limit 截断，升序——用于增量游标场景（candle_ingest/HarmonicState 喂新 bar）。
+
         tf 不在 GRANULARITY_MS 中时 close_time_ms 偏移量为 0（兜底，不抛）。
         空结果返回 []。
         """
@@ -854,15 +859,27 @@ class Store:
         from ..bitget.rest import GRANULARITY_MS
 
         gran_ms = GRANULARITY_MS.get(tf, 0)
-        raw = self.conn.execute(
-            "SELECT open_ms,o,h,l,c,v FROM bitget_candles "
-            "WHERE coin=? AND tf=? ORDER BY open_ms DESC LIMIT ?",
-            (coin, tf, limit),
-        ).fetchall()
-        if not raw:
-            return []
-        # 升序排列（DB 取最新 N 根后反转）
-        raw_asc = list(reversed(raw))
+
+        if since_ms is None:
+            # 原行为：DESC 取最新 limit 根，再反转升序
+            raw = self.conn.execute(
+                "SELECT open_ms,o,h,l,c,v FROM bitget_candles "
+                "WHERE coin=? AND tf=? ORDER BY open_ms DESC LIMIT ?",
+                (coin, tf, limit),
+            ).fetchall()
+            if not raw:
+                return []
+            raw_asc = list(reversed(raw))
+        else:
+            # 游标模式：open_ms 严格大于 since_ms，全量返回不截断
+            raw_asc = self.conn.execute(
+                "SELECT open_ms,o,h,l,c,v FROM bitget_candles "
+                "WHERE coin=? AND tf=? AND open_ms>? ORDER BY open_ms ASC",
+                (coin, tf, since_ms),
+            ).fetchall()
+            if not raw_asc:
+                return []
+
         return [
             Candle(
                 coin=coin,
@@ -879,6 +896,26 @@ class Store:
             for row in raw_asc
         ]
 
+    def candles_for_draw(self, coin: str, tf: str, limit: int = 300
+                         ) -> list[tuple[int, float, float, float, float]]:
+        """读取最近 limit 根 K 线用于 SVG 绘制，升序返回轻量元组列表。
+
+        返回：list of (open_ms, o, h, l, c)，按 open_ms 升序。
+        与 get_candles 相同的数据窗口（最近 limit 根），但不构造 Candle 对象，
+        避免 models/bitget 模块依赖，供 dashboard SVG 渲染直接消费（只读，零副作用）。
+
+        coin 或 tf 无数据时返回 []，不抛。
+        """
+        raw = self.conn.execute(
+            "SELECT open_ms,o,h,l,c FROM bitget_candles "
+            "WHERE coin=? AND tf=? ORDER BY open_ms DESC LIMIT ?",
+            (coin, tf, limit),
+        ).fetchall()
+        if not raw:
+            return []
+        # DB 取最新 N 根后反转成升序
+        return list(reversed(raw))
+
     def count_candles(self, coin: str, tf: str) -> int:
         """返回指定 coin/tf 的 K 线行数。"""
         row = self.conn.execute(
@@ -886,6 +923,19 @@ class Store:
             (coin, tf),
         ).fetchone()
         return row[0] if row else 0
+
+    def latest_candle_ms(self, coin: str, tf: str) -> int | None:
+        """返回指定 coin/tf 最新 K 线的 open_ms；无数据时返回 None。
+
+        供 candle_ingest.detect_and_fill_gap 判断是否需要回填。
+        利用 ix_bitget_candles_coin_tf_ms 索引（O(log N) 查询）。
+        """
+        row = self.conn.execute(
+            "SELECT MAX(open_ms) FROM bitget_candles WHERE coin=? AND tf=?",
+            (coin, tf),
+        ).fetchone()
+        # fetchone 永不返回 None（COUNT/MAX 始终有行），但 MAX 在空表时值为 NULL
+        return row[0] if row and row[0] is not None else None
 
     # ---- 聪明钱地址画像 ----
     def upsert_address_profile(self, p: dict[str, Any]) -> None:

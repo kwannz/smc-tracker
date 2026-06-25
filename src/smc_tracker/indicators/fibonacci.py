@@ -52,3 +52,43 @@ def nearest_fib(price: float, high: float, low: float, direction: str = "up"
         return None
     name = min(lv, key=lambda k: abs(lv[k] - price))
     return name, lv[name]
+
+
+def golden_pocket_zone(
+    high: float, low: float, direction: str = "up"
+) -> tuple[float, float]:
+    """返回 0.618–0.786 黄金口袋区间 (lo, hi)。
+
+    direction='up'（上涨段 low→high）：回撤区在 high 下方，
+      golden_lo = high - 0.786 * rng, golden_hi = high - 0.618 * rng。
+    direction='down'（下跌段 high→low）：反向，
+      golden_lo = low + 0.618 * rng, golden_hi = low + 0.786 * rng。
+
+    复用 fib_levels 确保与 in_golden_pocket/nearest_fib 数值一致。
+    当 high==low（零振幅）时返回 (high, high)（退化情形，调用方应过滤）。
+    """
+    lv = fib_levels(high, low, direction)
+    if not lv:
+        # 零振幅退化：返回点区间
+        return (high, high)
+    lo = min(lv["golden_lo"], lv["golden_hi"])
+    hi = max(lv["golden_lo"], lv["golden_hi"])
+    return (lo, hi)
+
+
+def intersect_zone(
+    a_lo: float, a_hi: float, b_lo: float, b_hi: float
+) -> tuple[float, float] | None:
+    """计算两个区间 [a_lo, a_hi] 与 [b_lo, b_hi] 的交集。
+
+    有交集返回 (lo, hi)；无交集返回 None。
+    入参不要求 lo ≤ hi（内部自动 sort），兼容颠倒传入。
+    """
+    # 内部排序，兼容颠倒传入
+    a_lo, a_hi = min(a_lo, a_hi), max(a_lo, a_hi)
+    b_lo, b_hi = min(b_lo, b_hi), max(b_lo, b_hi)
+    lo = max(a_lo, b_lo)
+    hi = min(a_hi, b_hi)
+    if lo > hi:
+        return None
+    return (lo, hi)

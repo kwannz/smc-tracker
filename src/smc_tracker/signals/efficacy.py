@@ -8,8 +8,14 @@
 设计原则：纯函数 wilson_interval 可单测；SignalEfficacy 完全依赖 predictions 表，
 不修改 PredictionReview，只读数据。权重仅作推送标注与打分参考，不抑制信号。
 
-v2 改进：改用市场中性（横截面去均值）命中率驱动 Wilson 加权，而非被趋势 beta 污染的
-原始 correct 字段。复用 review.market_neutral_stats，不重写横截面逻辑。
+命中率来源：直接使用 predictions 表 correct 字段（与 accuracy_report() 保持一致）。
+|realized_ret| > _RET_OUTLIER(10.0=1000%) 行同 review.py 一致过滤（单位错配/陈旧价）。
+
+注：v2 曾尝试 market_neutral_stats 横截面去均值，但该函数要求同 bucket 内有多个不同
+coin 的预测才能做横截面。refresh() 内按 kind 分组后，同一 kind 在同一 1h bucket 可能
+包含 7 条不同 TF 的 MTF 记录，bucket_mean = 这 7 条的均值，不是真正的市场 beta。
+在牛市单调上涨场景下，仅 4h/12h/1d 超过均值 → hit_rate≈3/7=42.9% → 错贴 contrarian。
+改回直接读 correct 字段，语义正确、与 accuracy_report() 一致，诚实反映系统准确率。
 """
 from __future__ import annotations
 
@@ -17,8 +23,10 @@ import math
 from dataclasses import dataclass
 from typing import Any
 
-from ..review import market_neutral_stats
 from ..util import to_float
+
+# 离群值阈值，与 review.py._RET_OUTLIER 保持一致（|ret|>10=1000% 为单位错配/陈旧价）
+_RET_OUTLIER = 10.0
 
 
 def wilson_interval(hits: int, n: int, z: float = 1.96) -> tuple[float, float]:
@@ -46,9 +54,9 @@ def wilson_interval(hits: int, n: int, z: float = 1.96) -> tuple[float, float]:
 class KindEfficacy:
     """单个 kind 的信号有效性评估结果。"""
     kind: str           # 信号种类：'跟庄'/'共识'/'背离'/'超级'
-    n: int              # 已评估样本数
-    hits: int           # 市场中性命中数（横截面去均值后）
-    hit_rate: float     # 市场中性命中率 hits/n（0~1），剔除趋势 beta 的纯 alpha
+    n: int              # 已评估样本数（离群值已过滤）
+    hits: int           # 命中数（predictions.correct=1，与 accuracy_report() 一致）
+    hit_rate: float     # 命中率 hits/n（0~1）
     lower: float        # Wilson 95% CI 下界
     upper: float        # Wilson 95% CI 上界
     weight: float       # 自适应权重（0.3~1.5）
@@ -72,36 +80,39 @@ class SignalEfficacy:
         self._table: dict[str, KindEfficacy] = {}
 
     def refresh(self, now_ms: int, lookback_ms: int = 604_800_000) -> dict[str, KindEfficacy]:
-        """从 predictions 表刷新各 kind 的市场中性有效性评估。
+        """从 predictions 表刷新各 kind 的命中率有效性评估。
 
-        仅读取 evaluated=1 且 ts >= now_ms - lookback_ms 且 realized_ret IS NOT NULL 的行
-        （默认近 7 天）。按 kind 分组后调用 market_neutral_stats 做横截面去均值，
-        用市场中性命中数/样本数驱动 Wilson score 加权，剔除趋势 beta 污染。
+        仅读取 evaluated=1 且 ts >= now_ms - lookback_ms 且 correct IS NOT NULL 的行
+        （默认近 7 天）。按 kind 聚合 correct 字段（1=命中，0=未命中），
+        用 Wilson score 95% CI 评估统计显著性，据此自适应加权。
+
+        |realized_ret| > _RET_OUTLIER 的行同 accuracy_report() 一致过滤（单位错配/陈旧价）。
         更新 self._table 并返回。任何 DB 异常由调用方处理（不吞异常）。
         """
         since = now_ms - lookback_ms
         rows = self.store.conn.execute(
-            "SELECT kind, ts, direction, realized_ret FROM predictions"
-            " WHERE evaluated=1 AND realized_ret IS NOT NULL AND ts>=?",
+            "SELECT kind, correct, realized_ret FROM predictions"
+            " WHERE evaluated=1 AND correct IS NOT NULL AND ts>=?",
             (since,),
         ).fetchall()
 
-        # 按 kind 分组，每组构造 market_neutral_stats 所需 records
-        # records 格式：[(ts_ms, direction, realized_ret), ...]
-        by_kind: dict[str, list[tuple[int, str, float]]] = {}
-        for kind, ts, direction, realized_ret in rows:
-            rec = (int(to_float(ts, 0.0)), direction or "long", to_float(realized_ret, 0.0))
+        # 按 kind 聚合 correct 字段，过滤离群值（与 accuracy_report() 保持一致）
+        by_kind: dict[str, dict[str, int]] = {}
+        for kind, correct, realized_ret in rows:
+            # 离群值过滤：|ret|>10(=1000%) 几乎必为单位错配/陈旧价
+            if abs(to_float(realized_ret, 0.0)) > _RET_OUTLIER:
+                continue
             if kind not in by_kind:
-                by_kind[kind] = []
-            by_kind[kind].append(rec)
+                by_kind[kind] = {"hits": 0, "n": 0}
+            by_kind[kind]["n"] += 1
+            if correct == 1:
+                by_kind[kind]["hits"] += 1
 
         table: dict[str, KindEfficacy] = {}
-        for kind, kind_records in by_kind.items():
-            # 复用 review.market_neutral_stats 做横截面去均值，得纯 alpha 命中率
-            mn = market_neutral_stats(kind_records)
-            n = mn["n"]
-            hits = mn["hits"]
-            hit_rate = to_float(mn["hit_rate"])
+        for kind, agg in by_kind.items():
+            n = agg["n"]
+            hits = agg["hits"]
+            hit_rate = hits / n if n > 0 else 0.0
             lower, upper = wilson_interval(hits, n)
 
             if n < self.min_sample:
@@ -110,20 +121,20 @@ class SignalEfficacy:
                 contrarian = False
                 note = f"样本不足{n}<{self.min_sample},中性"
             elif lower > 0.5:
-                # Wilson CI 下界 > 0.5 → 市场中性统计显著优于随机 → 加权
+                # Wilson CI 下界 > 0.5 → 统计显著优于随机 → 加权
                 weight = min(1.5, 1.0 + (lower - 0.5) * 2)
                 contrarian = False
-                note = f"市场中性命中{hit_rate:.0%}(n={n}),加权"
+                note = f"命中{hit_rate:.0%}(n={n}),加权"
             elif upper < 0.5:
-                # Wilson CI 上界 < 0.5 → 市场中性统计显著反指 → 降权 + 标注
+                # Wilson CI 上界 < 0.5 → 统计显著反指 → 降权 + 标注
                 weight = max(0.3, 1.0 - (0.5 - upper) * 2)
                 contrarian = True
-                note = f"⚠️市场中性反指{hit_rate:.0%}(n={n}),降权"
+                note = f"⚠️反指{hit_rate:.0%}(n={n}),降权"
             else:
                 # 区间跨越 0.5：统计上无法区分是否优于随机 → 中性
                 weight = 1.0
                 contrarian = False
-                note = f"市场中性命中{hit_rate:.0%}(n={n}),区间含50%,中性"
+                note = f"命中{hit_rate:.0%}(n={n}),区间含50%,中性"
 
             table[kind] = KindEfficacy(
                 kind=kind,
@@ -148,17 +159,17 @@ class SignalEfficacy:
     def label_of(self, kind: str) -> str:
         """返回简短标注供推送追加；无记录时返回空串（不影响原消息）。
 
-        使用市场中性命中率（剔除趋势 beta 的纯 alpha），诚实标注来源。
+        命中率基于 predictions.correct 字段，与 accuracy_report() 语义一致。
         示例：
-          '[中性共识命中72%(n=72)]'
-          '[⚠️中性跟庄反指29%(n=14)]'
+          '[共识命中72%(n=72)]'
+          '[⚠️跟庄反指29%(n=14)]'
         """
         e = self._table.get(kind)
         if e is None or e.n == 0:
             return ""
         if e.contrarian:
-            return f"[⚠️中性{kind}反指{e.hit_rate:.0%}(n={e.n})]"
-        return f"[中性{kind}命中{e.hit_rate:.0%}(n={e.n})]"
+            return f"[⚠️{kind}反指{e.hit_rate:.0%}(n={e.n})]"
+        return f"[{kind}命中{e.hit_rate:.0%}(n={e.n})]"
 
     def is_contrarian(self, kind: str) -> bool:
         """该 kind 是否统计显著反指。未知时返回 False（保守）。"""
@@ -166,9 +177,9 @@ class SignalEfficacy:
         return e.contrarian if e is not None else False
 
     def fmt(self) -> str:
-        """多行摘要：各 kind 市场中性命中率/区间/权重/标注，供周期推送/控制台。
+        """多行摘要：各 kind 命中率/区间/权重/标注，供周期推送/控制台。
 
-        hit_rate 为剔除趋势 beta 的纯 alpha 市场中性命中率。
+        hit_rate 基于 predictions.correct 字段（与 accuracy_report() 一致）。
         若 _table 为空返回 '(无已评估预测数据)'。
         """
         if not self._table:
@@ -178,7 +189,7 @@ class SignalEfficacy:
             ci = f"[{e.lower:.2f},{e.upper:.2f}]"
             arrow = "⚠️反指" if e.contrarian else ("↑加权" if e.weight > 1.0 else "→中性")
             lines.append(
-                f"  {kind}: {e.hits}/{e.n} 中性命中 ({e.hit_rate:.0%}) "
+                f"  {kind}: {e.hits}/{e.n} 命中 ({e.hit_rate:.0%}) "
                 f"CI{ci} 权重×{e.weight:.2f} {arrow} | {e.note}"
             )
         return "\n".join(lines)

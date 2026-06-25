@@ -30,6 +30,7 @@ from .llm import build_analyst
 from .memecoins import normalize
 from .monitor import (AddressMonitor, BitgetOIMonitor, EventType, HLOrderbookMonitor,
                       MemeTradeMonitor, SmartMoneyEvent)
+from .monitor.candle_ingest import detect_and_fill_gap as _detect_and_fill_gap  # A2：统一缺口检测接线
 from .monitor.whale_discovery import discover_smart_money, fetch_leaderboard_rows
 from .monitor.address_correlation import AddressCorrelation
 from .monitor.whale_momentum import WhaleMomentum, pnl_rows_from
@@ -586,7 +587,16 @@ class TradingSystem:
             if v > 0:
                 self._mids[coin] = v
 
-    def _on_oi_surge(self, symbol: str, prev: float, cur: float) -> None:
+    def _on_oi_surge(self, evt: dict) -> None:
+        """OI 异动回调，匹配 BitgetOIMonitor.SurgeCallback 协议（单 dict 参数）。
+
+        evt keys: symbol, prev_oi, oi_size, change (比率), ts, coin
+        修复：原先签名 (symbol, prev, cur) 与协议不符，导致每次 OI 异动都抛
+        TypeError，回调体从未执行，OI 异动控制台输出静默死亡。
+        """
+        symbol = evt.get("symbol", "")
+        prev = evt.get("prev_oi", 0.0)
+        cur = evt.get("oi_size", 0.0)
         pct = (cur - prev) / prev * 100 if prev else 0
         print(f"[{_hms()}] 📊 [OI异动] {symbol} {prev:,.0f}→{cur:,.0f} ({pct:+.2f}%)")
 
@@ -1550,6 +1560,37 @@ class TradingSystem:
                         self.harmonic_monitor.top_n = len(self.harmonic_monitor.coin_to_symbol)
                 except Exception:  # noqa: BLE001
                     pass
+                # A2：每轮 refresh 前检测并回填 K 线缺口（冷启动/周期补缺）
+                # detect_and_fill_gap 检测 DB 最新 bar 到当前已收盘 bar 的缺口，
+                # 缺口 >= 1 → backfill；无缺口 → 静默返回 0（不重复拉）。
+                # 仅在 store 模式下有效（live 模式 store=None 时跳过）。
+                _hmon = self.harmonic_monitor
+                if _hmon.store is not None:
+                    try:
+                        async with BitgetREST() as _bg_gap:
+                            _gap_sema = asyncio.Semaphore(4)  # 限流，避免批量补缺撞限速
+
+                            async def _fill_one(coin: str, symbol: str, tf: str) -> None:
+                                async with _gap_sema:
+                                    try:
+                                        await _detect_and_fill_gap(
+                                            _bg_gap, coin, symbol, tf, _hmon.store
+                                        )
+                                    except Exception as _gf_exc:  # noqa: BLE001
+                                        log.debug(
+                                            "谐波缺口检测失败 %s/%s: %s", coin, tf, _gf_exc
+                                        )
+
+                            _gap_tasks = [
+                                _fill_one(coin, sym, tf)
+                                for coin, sym in _hmon.coin_to_symbol.items()
+                                for tf in _hmon.timeframes
+                            ]
+                            if _gap_tasks:
+                                await asyncio.gather(*_gap_tasks)
+                    except Exception as _gap_exc:  # noqa: BLE001
+                        log.warning("谐波 detect_and_fill_gap 批量失败: %s", _gap_exc)
+
                 rows = await self.harmonic_monitor.refresh(now)
                 card = self.harmonic_monitor.render(rows, now)
                 if card:
