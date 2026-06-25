@@ -213,6 +213,11 @@ D 多空符号 · E 真实 userFills 解析/分类自洽 · F WS webData2==REST 
 > 据 codex-loop 反幻觉纪律保持开放，区别于「已实现但 backlog 写保守」的项（已核实证据后闭合）。
 
 ## 迭代日志
+- 2026-06-26 #112: **市场级波动态势聚合(market_regime)——第三层信号坍缩**（/loop；本地 main 不推送）。
+  `market_regime(rows)` 纯函数把逐币×周期矩阵聚合成市场广度：统计各 regime(压缩/扩张/常态)与 PD(折价/溢价/均衡)
+  占比 → 主导态势 label(如"蓄势(压缩) 12/21 · 普遍折价(偏超卖) 18/21")；接入 CLI 板头 + dashboard /api/volatility
+  market + 页面态势行。真实数据实证：自动产出"常态 13/21 · 普遍折价 18/21"(全市场偏超卖)。
+  信号三粒度：币×周期(矩阵)→币(动向摘要#110)→市场(态势#112)。模块 220 行(守 800)。TDD 2 例；全量 **2359 passed**。
 - 2026-06-26 #111: **Opus 规划/Sonnet 执行 一次性完成 3 功能 + Opus 复核**（用户#：opus 规划 md→sonnet 执行）。
   Opus 写计划 md(`docs/superpowers/plans/2026-06-26-vol-breakout-nav-signals.md`，文件归属保证并行零冲突)→
   workflow 派 **Sonnet** 执行：Build 并行 T1/T2/T3 + Integrate 串行 T4：

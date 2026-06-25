@@ -16,7 +16,7 @@ from typing import Any
 import aiohttp.web
 
 from .config import CANONICAL_TIMEFRAMES
-from .monitor.volatility_monitor import VolatilityMonitor, volatility_highlights
+from .monitor.volatility_monitor import VolatilityMonitor, volatility_highlights, market_regime
 
 
 def pick_coins(store: Any) -> dict[str, str]:
@@ -40,7 +40,8 @@ def volatility_state(
     """构建波动面板 JSON 态：{tfs, coins:[{coin,score,by_tf:{tf:metrics}}]}。纯逻辑可测。"""
     mon = VolatilityMonitor(coins, timeframes, store)
     rows = mon.rank(now_ms)[:top]
-    return {"tfs": list(timeframes), "coins": rows, "highlights": volatility_highlights(rows)}
+    return {"tfs": list(timeframes), "coins": rows,
+            "market": market_regime(rows), "highlights": volatility_highlights(rows)}
 
 
 def render_volatility_page() -> str:
@@ -78,7 +79,8 @@ function cell(m){
 async function load(){
  var r=await fetch('/api/volatility'); var j=await r.json();
  var tfs=j.tfs||[], coins=j.coins||[];
- document.getElementById('hl').innerHTML=hlbar(j.highlights);
+ var mkt=(j.market&&j.market.label)?'📊 市场态势: '+j.market.label+'<br>':'';
+ document.getElementById('hl').innerHTML=mkt+hlbar(j.highlights);
  if(!coins.length){document.getElementById('box').textContent='暂无数据（监控清单为空或采集器未填 K 线）';return;}
  var h='<table><thead><tr><th>币</th><th>分</th>';
  tfs.forEach(function(t){h+='<th>'+t+'</th>';}); h+='</tr></thead><tbody>';

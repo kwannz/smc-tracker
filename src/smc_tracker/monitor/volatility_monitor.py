@@ -112,6 +112,30 @@ def volatility_highlights(rows: list[dict], *, max_each: int = 5) -> dict:
     return {"squeeze": sq[:max_each], "expansion": ex[:max_each], "extreme_pd": epd[:max_each]}
 
 
+def market_regime(rows: list[dict]) -> dict:
+    """聚合全监控集逐周期 regime/PD → 市场级波动态势（市场广度/regime）。纯函数。
+
+    返回 {n, regime:{压缩,扩张,常态}, pd:{折价,溢价,均衡}, label}。
+    label：主导 regime + 主导 PD（如"蓄势(压缩) 12/21 · 普遍折价(偏超卖) 15/21"）；n=0 时 label=""。
+    """
+    rc = {"压缩": 0, "扩张": 0, "常态": 0}
+    pc = {"折价": 0, "溢价": 0, "均衡": 0}
+    n = 0
+    for r in rows:
+        for _tf, m in r.get("by_tf", {}).items():
+            n += 1
+            rc[m.get("regime", "常态")] = rc.get(m.get("regime", "常态"), 0) + 1
+            pc[m.get("pd_zone", "均衡")] = pc.get(m.get("pd_zone", "均衡"), 0) + 1
+    if n == 0:
+        return {"n": 0, "regime": rc, "pd": pc, "label": ""}
+    reg_dom = max(rc, key=lambda k: rc[k])
+    pd_dom = max(pc, key=lambda k: pc[k])
+    reg_lbl = {"压缩": "蓄势(压缩)", "扩张": "放量(扩张)", "常态": "常态"}[reg_dom]
+    pd_lbl = {"折价": "普遍折价(偏超卖)", "溢价": "普遍溢价(偏超买)", "均衡": "均衡"}[pd_dom]
+    label = f"{reg_lbl} {rc[reg_dom]}/{n} · {pd_lbl} {pc[pd_dom]}/{n}"
+    return {"n": n, "regime": rc, "pd": pc, "label": label}
+
+
 class VolatilityMonitor:
     """逐周期读已采 K 线算波动+PD 指标，按运动分排序出当前在动的监控清单币。"""
 
@@ -163,6 +187,10 @@ class VolatilityMonitor:
         from ..util import fmt_ts  # noqa: PLC0415
         ts = fmt_ts(now_ms) if now_ms else ""
         lines = [f"🌀 实时波动追踪板 [{ts}] · 每周期指标(速度+加速度+区间+PD溢价折价) Top {top}"]
+        # 市场级态势：把矩阵聚合成全市场波动广度
+        mr = market_regime(rows)
+        if mr["label"]:
+            lines.append(f"📊 市场态势: {mr['label']}")
         # 动向摘要：把矩阵综合成可操作情报
         hl = volatility_highlights(rows)
         if hl["squeeze"]:

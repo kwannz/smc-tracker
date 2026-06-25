@@ -10,7 +10,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from smc_tracker.monitor.volatility_monitor import (
-    vol_metrics, pdarray, VolatilityMonitor, volatility_highlights,
+    vol_metrics, pdarray, VolatilityMonitor, volatility_highlights, market_regime,
 )
 
 
@@ -176,3 +176,25 @@ def test_volatility_highlights_synthesizes_matrix():
 def test_volatility_highlights_empty():
     h = volatility_highlights([])
     assert h == {"squeeze": [], "expansion": [], "extreme_pd": []}
+
+
+def test_market_regime_dominant():
+    """市场态势聚合：主导 regime/PD + 计数。"""
+    rows = [
+        {"coin": "A", "by_tf": {
+            "15m": {"regime": "压缩", "pd_zone": "折价"},
+            "1H": {"regime": "压缩", "pd_zone": "折价"}}},
+        {"coin": "B", "by_tf": {
+            "15m": {"regime": "压缩", "pd_zone": "折价"},
+            "1H": {"regime": "扩张", "pd_zone": "溢价"}}},
+    ]
+    mr = market_regime(rows)
+    assert mr["n"] == 4
+    assert mr["regime"]["压缩"] == 3 and mr["regime"]["扩张"] == 1
+    assert mr["pd"]["折价"] == 3
+    assert "蓄势" in mr["label"] and "折价" in mr["label"]
+
+
+def test_market_regime_empty():
+    mr = market_regime([])
+    assert mr["n"] == 0 and mr["label"] == ""
