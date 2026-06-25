@@ -1,9 +1,10 @@
-"""实时波动追踪（专业细节）：监控清单币 → 已采集多周期 K 线 → 波动/速度/加速度排序。
+"""实时波动追踪（专业细节·逐周期）：监控清单币 → 已采集多周期 K 线 → 每周期独立指标。
 
-设计（CLAUDE.md：领先信号 + 低延迟 + 模块化扁平 + 极简）：
-  - vol_metrics：纯 numpy 向量化函数，从单周期 OHLC 算专业波动指标，确定性可测。
-  - VolatilityMonitor：读 store.get_candles（复用已采集 K 线，不重拉），按"运动分"排序出当前在动的币。
-  - 领先信号优先：velocity(1 阶导)+accel(2 阶导) 先于价格，是项目珍视的前瞻量（CLAUDE.md §二）。
+设计（CLAUDE.md：领先信号 + 低延迟 + 模块化扁平 + 极简；用户#：不做共振，每周期各显指标 + PDArray）：
+  - vol_metrics：纯 numpy 向量化，单周期 OHLC → rv/atr/range/velocity(1阶导)/accel(2阶导)。
+  - pdarray：ICT 溢价/折价数组（Premium/Discount Array）——价在 dealing range 的位置（开源 ICT 标准）。
+  - VolatilityMonitor：读 store.get_candles（复用已采 K 线，不重拉），**逐周期**算指标并展示，按运动分排序。
+  - velocity/accel/pd_pct 均尺度无关（百分比/区间占比），跨币跨周期可比。
 """
 from __future__ import annotations
 
@@ -11,16 +12,17 @@ from typing import Any
 
 import numpy as np
 
-# 指标窗口（根）：rv/atr 用近 _RV_WIN 根，速度用近 _VEL_WIN 根
+# 指标窗口（根）：rv/atr 用近 _RV_WIN 根，速度用近 _VEL_WIN 根，PD dealing range 用近 _PD_WIN 根
 _RV_WIN = 20
 _VEL_WIN = 5
+_PD_WIN = 60
 # 运动分权重：加速度领先量加权最高，其次速度，波动率辅助
 _W_VEL, _W_ACCEL, _W_RV = 1.0, 1.5, 0.5
 
 
 def vol_metrics(o: Any, h: Any, l: Any, c: Any, *,
                 rv_win: int = _RV_WIN, vel_win: int = _VEL_WIN) -> dict:
-    """从单周期 OHLC 算波动专业指标（numpy 向量化）。数据 <3 根返回 {}。
+    """单周期 OHLC → 波动专业指标（numpy 向量化）。数据 <3 根返回 {}。
 
     返回：rv(已实现波动率=对数收益σ,%)、atr_pct(真实波幅均值/价,%)、
          range_pct(当前 bar 区间,%)、velocity(近窗%变化=1 阶导)、accel(速度差=2 阶导)。
@@ -47,6 +49,24 @@ def vol_metrics(o: Any, h: Any, l: Any, c: Any, *,
             "velocity": velocity, "accel": accel}
 
 
+def pdarray(h: Any, l: Any, c: Any, *, win: int = _PD_WIN, band: float = 0.03) -> dict:
+    """ICT 溢价/折价数组（PD Array）：当前价在 dealing range（近 win 根高低）的位置。
+
+    返回：pd_pct∈[0,1]（0=折价极值，1=溢价极值）、pd_zone(溢价/折价/均衡)、
+         eq(均衡=区间中点)、rng_hi、rng_lo。区间为 0 时归为均衡。
+    """
+    hh = np.asarray(h, float)[-win:]
+    ll = np.asarray(l, float)[-win:]
+    price = float(np.asarray(c, float)[-1])
+    hi, lo = float(np.max(hh)), float(np.min(ll))
+    rng = hi - lo
+    if rng <= 0:
+        return {"pd_pct": 0.5, "pd_zone": "均衡", "eq": hi, "rng_hi": hi, "rng_lo": lo}
+    pd = (price - lo) / rng
+    zone = "溢价" if pd > 0.5 + band else ("折价" if pd < 0.5 - band else "均衡")
+    return {"pd_pct": pd, "pd_zone": zone, "eq": (hi + lo) / 2.0, "rng_hi": hi, "rng_lo": lo}
+
+
 def move_score(m: dict) -> float:
     """运动分：|速度|·_W_VEL + |加速度|·_W_ACCEL + 波动率·_W_RV（加速度领先量加权最高）。"""
     return (_W_VEL * abs(m.get("velocity", 0.0))
@@ -55,53 +75,64 @@ def move_score(m: dict) -> float:
 
 
 class VolatilityMonitor:
-    """读已采集多周期 K 线，按运动分排序出当前在动的监控清单币。"""
+    """逐周期读已采 K 线算波动+PD 指标，按运动分排序出当前在动的监控清单币。"""
 
-    __slots__ = ("coin_to_symbol", "timeframes", "store", "bars", "primary_tf")
+    __slots__ = ("coin_to_symbol", "timeframes", "store", "bars")
 
     def __init__(self, coin_to_symbol: dict[str, str], timeframes: list[str],
                  store: Any, bars: int = 120) -> None:
         self.coin_to_symbol = coin_to_symbol
-        self.timeframes = list(timeframes)
+        self.timeframes = list(timeframes) or ["15m"]
         self.store = store
         self.bars = bars
-        self.primary_tf = self.timeframes[0] if self.timeframes else "15m"
 
-    def _metrics(self, coin: str, tf: str) -> dict | None:
-        """读 store 单 coin/tf K 线 → vol_metrics；不足或异常返回 None。"""
+    def _tf_metrics(self, coin: str, tf: str) -> dict | None:
+        """单 coin/tf：vol_metrics + pdarray 合并；不足或异常返回 None。"""
         try:
             cs = self.store.get_candles(coin, tf, self.bars) if self.store else []
-        except Exception:  # noqa: BLE001 — 单币失败不影响整体
+        except Exception:  # noqa: BLE001 — 单组合失败不影响整体
             return None
         if len(cs) < 3:
             return None
-        m = vol_metrics([x.o for x in cs], [x.h for x in cs],
-                        [x.l for x in cs], [x.c for x in cs])
-        return m or None
+        o = [x.o for x in cs]; h = [x.h for x in cs]
+        l = [x.l for x in cs]; c = [x.c for x in cs]
+        m = vol_metrics(o, h, l, c)
+        if not m:
+            return None
+        m.update(pdarray(h, l, c))
+        return m
 
     def rank(self, now_ms: int) -> list[dict]:
-        """对每个监控币算 primary_tf 运动指标 + 运动分，按分降序返回行。"""
+        """每币逐周期算指标 → {coin, score(各周期运动分取最大), by_tf}，按 score 降序。"""
         rows: list[dict] = []
         for coin in self.coin_to_symbol:
-            m = self._metrics(coin, self.primary_tf)
-            if not m:
+            by_tf = {tf: m for tf in self.timeframes
+                     if (m := self._tf_metrics(coin, tf)) is not None}
+            if not by_tf:
                 continue
-            rows.append({"coin": coin, "tf": self.primary_tf,
-                         "score": move_score(m), **m})
+            rows.append({"coin": coin,
+                         "score": max(move_score(m) for m in by_tf.values()),
+                         "by_tf": by_tf})
         rows.sort(key=lambda r: r["score"], reverse=True)
         return rows
 
-    def render(self, rows: list[dict], now_ms: int, top: int = 15) -> str:
-        """渲染波动监控板卡片（专业细节：速度/加速度/σ/ATR%）。空行返回 ""。"""
+    def render(self, rows: list[dict], now_ms: int, top: int = 8) -> str:
+        """逐周期渲染波动追踪板（每周期一行：速度/加速度/σ/ATR/PD 溢价折价）。空返回 ""。"""
         if not rows:
             return ""
-        lines = [f"🌀 实时波动追踪板 [{self.primary_tf}] · 速度+加速度领先信号（Top {top}）"]
+        lines = [f"🌀 实时波动追踪板 · 每周期指标(速度+加速度+PD溢价折价) Top {top}"]
         for r in rows[:top]:
-            v, a = r["velocity"], r["accel"]
-            vdir = "🟢↑" if v >= 0 else "🔴↓"
-            adir = "加速" if a * v > 0 else ("减速" if a * v < 0 else "—")
-            lines.append(
-                f"{r['coin']:<10} {vdir}{abs(v):.2f}%  a{a:+.2f}({adir})"
-                f"  σ{r['rv']:.2f}%  ATR{r['atr_pct']:.2f}%"
-            )
+            lines.append(f"━ {r['coin']:<8} 运动分 {r['score']:.1f}")
+            for tf in self.timeframes:
+                m = r["by_tf"].get(tf)
+                if not m:
+                    continue
+                v, a = m["velocity"], m["accel"]
+                vdir = "🟢↑" if v >= 0 else "🔴↓"
+                adir = "加速" if a * v > 0 else ("减速" if a * v < 0 else "—")
+                lines.append(
+                    f"  {tf:<4} {vdir}{abs(v):.2f}% a{a:+.2f}{adir}"
+                    f" σ{m['rv']:.2f}% ATR{m['atr_pct']:.2f}%"
+                    f" PD{m['pd_pct'] * 100:.0f}%{m['pd_zone']}"
+                )
         return "\n".join(lines)

@@ -103,6 +103,7 @@ class MonitoredCoinsCfg:
     timeframes: list[str] = field(
         default_factory=lambda: ["15m", "1H", "4H", "6H", "12H", "1D", "1W"])
     collect_interval_sec: float = 300.0
+    vol_board_sec: float = 0.0   # 实时波动追踪板推送间隔(秒)；0=关闭(opt-in，零新增噪声)
 
 
 def resolve_monitored_universe(

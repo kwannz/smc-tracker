@@ -1692,6 +1692,31 @@ class TradingSystem:
                 log.warning("谐波形态周期推送失败: %s", exc)
             await asyncio.sleep(self.cfg.harmonic.interval_sec)
 
+    async def _periodic_volatility_board(self) -> None:
+        """周期推送实时波动追踪板（监控清单币逐周期 速度/加速度/σ/ATR/PD 溢价折价）。
+
+        opt-in：仅 monitored_coins.enabled 且 vol_board_sec>0 时启用（默认关，零新增噪声）。
+        每轮重读 get_monitored_coins() → 自动热载入；读 DB 已采 K 线（无网络），失败只 warn。
+        """
+        mc = self.cfg.monitored_coins
+        if not mc.enabled or mc.vol_board_sec <= 0:
+            return
+        from .monitor.volatility_monitor import VolatilityMonitor  # noqa: PLC0415
+        await asyncio.sleep(120.0)   # 等采集器填 DB
+        while not self._stopping:
+            try:
+                coins = self.store.get_monitored_coins()
+                if coins:
+                    mon = VolatilityMonitor(coins, list(mc.timeframes), self.store)
+                    now = int(time.time() * 1000)
+                    card = mon.render(mon.rank(now), now)
+                    if card:
+                        print(card)
+                        self._push_harmonic(card)   # 独立 TA 通道
+            except Exception as exc:  # noqa: BLE001
+                log.warning("波动追踪板推送失败: %s", exc)
+            await asyncio.sleep(mc.vol_board_sec)
+
     async def _periodic_prz_approach(self, every: float = 15.0) -> None:
         """forming PRZ 实时逼近：两轮谐波重算之间，用 Bitget trade 流的实时价检查现价是否
         进入已投影 forming PRZ → 秒级 🎯逼近告警 + 记 review（"谐波-逼近"，QA H1：forming 在
@@ -1891,6 +1916,7 @@ class TradingSystem:
             _sv(lambda: self._periodic_config_reload(), "periodic_config_reload"),
             _sv(lambda: self._periodic_bb_board(), "periodic_bb_board"),
             _sv(lambda: self._periodic_harmonic_board(), "periodic_harmonic_board"),
+            _sv(lambda: self._periodic_volatility_board(), "periodic_volatility_board"),
             _sv(lambda: self._periodic_prz_approach(), "periodic_prz_approach"),
             _sv(lambda: self._periodic_candle_collect(), "periodic_candle_collect"),
             _sv(lambda: self._periodic_whale_pnl(), "periodic_whale_pnl"),

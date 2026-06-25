@@ -159,3 +159,5 @@ monitored_coins:
   enabled: false
   timeframes: ["15m", "1H", "4H", "6H", "12H", "1D", "1W"]   # 6H 替代 Bitget 不支持的 8h
   collect_interval_sec: 300
+  vol_board_sec: 0      # 实时波动追踪板推送间隔(秒)；0=关闭(opt-in)。逐周期 速度/加速度/σ/ATR/PD 溢价折价。
+                        # CLI 离线查看：`-m smc_tracker vol`

@@ -18,6 +18,7 @@ def test_cfg_defaults():
     assert c.enabled is False
     assert c.timeframes == ["15m", "1H", "4H", "6H", "12H", "1D", "1W"]
     assert c.collect_interval_sec == 300.0
+    assert c.vol_board_sec == 0.0
 
 
 def test_resolve_orders_by_volume():

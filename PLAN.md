@@ -213,6 +213,15 @@ D 多空符号 · E 真实 userFills 解析/分类自洽 · F WS webData2==REST 
 > 据 codex-loop 反幻觉纪律保持开放，区别于「已实现但 backlog 写保守」的项（已核实证据后闭合）。
 
 ## 迭代日志
+- 2026-06-26 #103: **波动板逐周期化 + PDArray(ICT 溢价/折价) + 实时推送接入**（用户#：不要共振，每周期各显指标 + 加 PDArray）。
+  ① **逐周期展示**（去共振）：`VolatilityMonitor.rank` 改为每币**逐周期**算指标 → `by_tf`，`render` 每周期一行
+  （速度/加速度/σ/ATR/PD），不做跨周期合并；运动分=各周期 move_score 取最大（surface 任意周期在动的币）。
+  ② **PDArray 指标**（ICT Premium/Discount Array，按开源 ICT 标准）：`pdarray(h,l,c)` 算 dealing range
+  （近 60 根高低）内当前价位置 `pd_pct∈[0,1]` + 区(溢价/折价/均衡，EQ=50%±3%) + eq/rng_hi/rng_lo；尺度无关逐周期可比。
+  ③ **实时推送接入**：`_periodic_volatility_board`（opt-in：`monitored_coins.vol_board_sec>0`，默认 0 关，零新增噪声）
+  每轮重读清单热载入 → 推 🌀 板到 TA 通道；gather 已注册。CLI `vol --tf a,b,c` 逐周期离线查看。
+  实证：BTC 加速上行→PD100%溢价、ETH 缓跌→PD2%折价（端到端实跑）。模块 138 行(守 800)。
+  TDD 14 例（vol 12 + app 2）；全量 **2313 passed, 2 skipped**（零回归）。
 - 2026-06-26 #102: **监控清单驱动多周期采集 + 实时波动追踪板（/loop：专业细节追踪币种实时波动）**。
   ① **监控清单（watchlist-multi-tf）**：新 DB 表 `monitored_coins` + 主开关 `monitored_coins.enabled`，
   开关打开只为清单内币采集 7 周期（15m/1H/4H/**6H**/12H/1D/1W；6H 替代 Bitget 不支持的 8h），替换 all_perp；
