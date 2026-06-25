@@ -213,6 +213,11 @@ D 多空符号 · E 真实 userFills 解析/分类自洽 · F WS webData2==REST 
 > 据 codex-loop 反幻觉纪律保持开放，区别于「已实现但 backlog 写保守」的项（已核实证据后闭合）。
 
 ## 迭代日志
+- 2026-06-26 #109: **真实数据全链路实证（CLAUDE.md §四-2，非投资建议）+ 固化验证脚本**（/loop：全栈实时波动）。
+  真实 Bitget 数据跑通整条「监控清单 → 真实多周期采集 → 波动/regime/PD 板」：watch add BTC/ETH/SOL →
+  `BitgetCandleCollector` 真实采集 **4029 根** K 线(3 币 × 7 canonical 周期，全覆盖) → `VolatilityMonitor`
+  逐周期输出**连贯专业**(三币 1W 皆 PD 折价 2-4% 逼近周线底、1W 速度 -21~-25% 周线下行、15m 普遍[压缩]整理；
+  σ 随周期增大正确)。固化 `scripts/verify_vol_chain.py`(复用复现，沿用仓库 verify_* 范式)。全量 **2331 passed**。
 - 2026-06-26 #108: **/monitored 面板迁出巨文件 → 扁平模块 dashboard_monitored.py（继续稀释 dashboard.py）**（/loop：模块化扁平）。
   把 `apply_monitored_action`/`render_monitored_page`/2 个 handler/3 路由从 dashboard.py 迁入新扁平模块
   `dashboard_monitored.py`(106 行)，`register(app,store)` 外置挂路由；dashboard.py 仅一行调用。
