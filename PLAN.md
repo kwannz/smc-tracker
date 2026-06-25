@@ -213,6 +213,11 @@ D 多空符号 · E 真实 userFills 解析/分类自洽 · F WS webData2==REST 
 > 据 codex-loop 反幻觉纪律保持开放，区别于「已实现但 backlog 写保守」的项（已核实证据后闭合）。
 
 ## 迭代日志
+- 2026-06-26 #116: **db.py SCHEMA DDL 外置成 schema.sql(1218→880，SQL 与代码分离)**（Sonnet 执行/Opus 复核）。
+  同"数据外置"范式：339 行内联建表 DDL 外置成 `storage/schema.sql`(338)，db.py 改 `read_text` 加载；
+  pyproject package-data 加 `"smc_tracker.storage" = ["*.sql"]`(wheel 打包带上)。Opus 复核：复跑 2359 passed、
+  建库 OK(26 表)、写读正常、round-trip 逐字一致。**db.py 880**(仍超 80 行——剩余纯 Store 类方法，达 ≤800 需拆类、
+  风险较高，诚实保留)。≤800 违规文件：app.py 2010 / db.py 880 / cli.py 928 / exchange_flow.py 826(dashboard 层已全达标)。
 - 2026-06-26 #115: **dashboard.py 谐波数据层迁出 → 全 dashboard 层 ≤800 达标(4190→552)**（Sonnet 执行/Opus 复核）。
   抽共享 helper `_safe_rows`/`_row_to_dict` → 新叶子 `dashboard_common.py`(20 行)破循环；谐波数据层(build_harmonic_state/
   list/coin_detail + 4 helpers + _HARMONIC_KEYS ~354 行)迁入 dashboard_harmonic.py(→394)。dashboard.py **915→552**。

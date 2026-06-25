@@ -21,10 +21,12 @@ build-backend = "setuptools.build_meta"
 [tool.setuptools.packages.find]
 where = ["src"]
 
-# 打包含 dashboard 外置 HTML 模板（dashboard_harmonic 等运行时 read_text 加载），
-# 否则 wheel/sdist 安装后模板缺失致 import 失败（源码运行 PYTHONPATH=src 不受影响）。
+# 打包含运行时 read_text 加载的非 .py 数据文件（dashboard 外置 HTML 模板 +
+# storage 外置 SQL schema），否则 wheel/sdist 安装后缺文件致 import 失败
+# （源码运行 PYTHONPATH=src 不受影响）。
 [tool.setuptools.package-data]
 smc_tracker = ["templates/*.html"]
+"smc_tracker.storage" = ["*.sql"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
