@@ -92,6 +92,69 @@ def resolve_universe(
 
 
 @dataclass(slots=True)
+class MonitoredCoinsCfg:
+    """监控币种清单配置（watchlist-multi-tf）。
+
+    enabled=True：采集器/谐波/BB 选币改为 DB 清单驱动（替换 all_perp/top_n）。
+    enabled=False（默认）：完全旁路，现有行为不变（零回归）。
+    timeframes：清单币的多周期采集集（默认 7 周期；6H 替代 Bitget 不支持的 8h）。
+    """
+    enabled: bool = False
+    timeframes: list[str] = field(
+        default_factory=lambda: ["15m", "1H", "4H", "6H", "12H", "1D", "1W"])
+    collect_interval_sec: float = 300.0
+
+
+def resolve_monitored_universe(
+    monitored: dict[str, str],
+    base_map: dict[str, str],
+    tickers: dict[str, dict],
+) -> dict[str, str]:
+    """把 DB 监控清单解析为 {coin: symbol}，按 24h 成交额降序。
+
+    纯函数（确定性、无副作用、可测）：
+      - symbol 优先用清单存的；为空时回退 base_map 反查（{symbol:base} 反向），再缺则 coin+'USDT'。
+      - 成交额取 tickers[symbol].quoteVolume（缺失=0）。
+    """
+    if not monitored:
+        return {}
+    # base_map 是 {symbol: base}，反查 {base: symbol} 供 symbol 兜底
+    base_to_sym: dict[str, str] = {}
+    for sym, base in base_map.items():
+        if base and base not in base_to_sym:
+            base_to_sym[base] = sym
+
+    enriched: list[tuple[str, str, float]] = []
+    for coin, sym in monitored.items():
+        symbol = sym or base_to_sym.get(coin) or f"{coin}USDT"
+        vol = _safe_vol((tickers.get(symbol) or {}).get("quoteVolume"))
+        enriched.append((coin, symbol, vol))
+    enriched.sort(key=lambda t: t[2], reverse=True)
+
+    out: dict[str, str] = {}
+    for coin, symbol, _ in enriched:
+        if coin not in out:
+            out[coin] = symbol
+    return out
+
+
+def reconcile_universe(
+    current: dict[str, str],
+    target: dict[str, str],
+) -> tuple[dict[str, str], set[str]]:
+    """对账当前币集与目标币集，返回 (added, removed)。
+
+    供运行时热载入用（增删都反映；现有 merge 只加不删，replace 模式必须支持删）：
+      - added：target 中 current 缺失或 symbol 不同的 {coin: symbol}（需加入/更新）。
+      - removed：current 中 target 不再包含的 {coin}（需移走）。
+    纯函数，不修改入参。
+    """
+    added = {c: s for c, s in target.items() if current.get(c) != s}
+    removed = {c for c in current if c not in target}
+    return added, removed
+
+
+@dataclass(slots=True)
 class WatchAddress:
     address: str
     label: str = ""
@@ -364,6 +427,7 @@ class Config:
     bollinger: BollingerCfg = field(default_factory=BollingerCfg)
     harmonic: HarmonicCfg = field(default_factory=HarmonicCfg)
     universe: UniverseCfg = field(default_factory=UniverseCfg)
+    monitored_coins: MonitoredCoinsCfg = field(default_factory=MonitoredCoinsCfg)
     smart_score: SmartScoreCfg = field(default_factory=SmartScoreCfg)
     correlation: CorrelationCfg = field(default_factory=CorrelationCfg)
 
@@ -392,6 +456,12 @@ class Config:
             univ_raw["include"] = list(univ_raw["include"])
         if "exclude" in univ_raw and not isinstance(univ_raw["exclude"], list):
             univ_raw["exclude"] = list(univ_raw["exclude"])
+        # MonitoredCoinsCfg：timeframes 强制 list + 用 GRANULARITY_MS 剔非法周期（数据质量守卫）
+        mc_raw: dict[str, Any] = dict(raw.get("monitored_coins") or {})
+        if "timeframes" in mc_raw:
+            from .bitget.rest import GRANULARITY_MS  # noqa: PLC0415
+            tfs = list(mc_raw["timeframes"]) if mc_raw["timeframes"] else []
+            mc_raw["timeframes"] = [t for t in tfs if t in GRANULARITY_MS]
         return cls(
             hyperliquid=HyperliquidCfg(**(raw.get("hyperliquid") or {})),
             markets=list(raw.get("markets") or ["BTC", "ETH"]),
@@ -408,6 +478,7 @@ class Config:
             bollinger=BollingerCfg(**bb_raw),
             harmonic=HarmonicCfg(**harm_raw),
             universe=UniverseCfg(**univ_raw),
+            monitored_coins=MonitoredCoinsCfg(**mc_raw),
             smart_score=SmartScoreCfg(**(raw.get("smart_score") or {})),
             correlation=CorrelationCfg(**(raw.get("correlation") or {})),
         )
