@@ -741,7 +741,7 @@ class TradingSystem:
                     log.warning("选币 tickers 拉取失败（不影响主流程）: %s", exc)
 
             # ---- 布林带监控器 ----
-            if self.cfg.bollinger.enabled and vol_c2s:
+            if self.cfg.bollinger.enabled and (vol_c2s or self.cfg.monitored_coins.enabled):
                 from .monitor.bitget_bb_monitor import BitgetBBMonitor  # noqa: PLC0415
                 bb_n = self.cfg.bollinger.top_n
                 # resolve_universe 已按成交额排序；bb_n 控制监控窗口上限（universe 可能含更多币）
@@ -758,7 +758,7 @@ class TradingSystem:
                 log.info("BB 监控器已建，top_%d 币: %s", bb_n, list(bb_c2s.keys())[:6])
 
             # ---- 谐波形态监控器（同一成交额序选币，与 BB 口径一致）----
-            if self.cfg.harmonic.enabled and vol_c2s:
+            if self.cfg.harmonic.enabled and (vol_c2s or self.cfg.monitored_coins.enabled):
                 from .monitor.harmonic_monitor import HarmonicMonitor  # noqa: PLC0415
                 from .monitor.harmonic_forward import HarmonicForwardSignals  # noqa: PLC0415
                 from .monitor.bitget_trade_monitor import BitgetTradeMonitor  # noqa: PLC0415
@@ -785,13 +785,15 @@ class TradingSystem:
                 else:
                     # top_n 模式（默认，向后兼容）：按成交额取前 harm_n 个
                     harm_c2s = dict(list(vol_c2s.items())[:harm_n])
-                # 并入用户「发现搜集」的币（dashboard 按钮 → harmonic_collected）→ 持续监控
-                # 监控清单模式下清单已是唯一真相源（discover 也写 monitored_coins），不再并入旧表
+                # 并入用户「发现搜集」的币 → 持续监控。enabled 时清单已是唯一真相源(上面 harm_c2s=vol_c2s)；
+                # 默认模式并入 monitored_coins(discover 现写此表) + harmonic_collected(旧迁移残留)，
+                # 修 discover 真相源错位回归(写 monitored_coins 但默认只读 harmonic_collected)。
                 if not self.cfg.monitored_coins.enabled:
                     try:
                         harm_c2s.update(self.store.get_harmonic_collected())
+                        harm_c2s.update(self.store.get_monitored_coins())
                     except Exception as exc:  # noqa: BLE001
-                        log.warning("读取 harmonic_collected 失败: %s", exc)
+                        log.warning("读取 collected/monitored 失败: %s", exc)
                 # 逐笔 taker 监控：订阅 Bitget trade channel → 资金流加速度 flow_score（补 R2 最后数据源）
                 harm_s2c = {sym: coin for coin, sym in harm_c2s.items()}
                 self.harmonic_trade = BitgetTradeMonitor(harm_s2c, self.bg_ws)
@@ -918,7 +920,7 @@ class TradingSystem:
 
             # ---- Bitget K线采集器：周期拉永续 K 线落 DB，供 BB/谐波多周期计算共用（减 API 重复拉）----
             # 采集器用 vol_c2s 全集（resolve_universe 输出），轮转覆盖；BB/谐波各取其 top_n
-            if vol_c2s and (self.cfg.bollinger.enabled or self.cfg.harmonic.enabled):
+            if (vol_c2s or self.cfg.monitored_coins.enabled) and (self.cfg.bollinger.enabled or self.cfg.harmonic.enabled):
                 from .monitor.candle_collector import BitgetCandleCollector  # noqa: PLC0415
                 # 采集币集 = resolve_universe 输出（已含 BB + 谐波所需的所有币）
                 # all_perp 模式下，harm_c2s 含全部永续合约，合并保证采集器覆盖谐波所有需要的币
@@ -932,10 +934,14 @@ class TradingSystem:
                 cc_tfs = list(dict.fromkeys(
                     list(self.cfg.bollinger.timeframes) + list(self.cfg.harmonic.timeframes)))
                 cc_bars = max(self.cfg.bollinger.bars, self.cfg.harmonic.bars)
-                # 监控清单模式：采集集=清单(vol_c2s)，周期=配置的 7 周期集（覆盖 all_perp 合并逻辑）
+                # 监控清单模式：采集集=清单(vol_c2s)；周期取并集(monitored 含用户 6H ∪ bollinger ∪ harmonic 含 30m)，
+                # 避免谐波 30m 落空走 live 回退读陈旧数据（修周期错配 P2-1）
                 if self.cfg.monitored_coins.enabled:
                     cc_c2s = dict(vol_c2s)
-                    cc_tfs = list(self.cfg.monitored_coins.timeframes) or cc_tfs
+                    cc_tfs = list(dict.fromkeys(
+                        list(self.cfg.monitored_coins.timeframes)
+                        + list(self.cfg.bollinger.timeframes)
+                        + list(self.cfg.harmonic.timeframes))) or cc_tfs
                 self.candle_collector = BitgetCandleCollector(
                     cc_c2s, cc_tfs, cc_bars, self.store)
                 log.info("K线采集器已建，%d 币 × %d 周期 → DB（轮转模式）", len(cc_c2s), len(cc_tfs))
@@ -1621,7 +1627,9 @@ class TradingSystem:
                     if self.cfg.monitored_coins.enabled:
                         _apply_reconcile(self.harmonic_monitor, self.store.get_monitored_coins())
                     else:
-                        coll = self.store.get_harmonic_collected()
+                        # 默认模式：加性并入 harmonic_collected + monitored_coins(discover 现写后者)
+                        coll = dict(self.store.get_harmonic_collected())
+                        coll.update(self.store.get_monitored_coins())
                         if coll and any(c not in self.harmonic_monitor.coin_to_symbol for c in coll):
                             self.harmonic_monitor.coin_to_symbol.update(coll)
                             self.harmonic_monitor.top_n = len(self.harmonic_monitor.coin_to_symbol)

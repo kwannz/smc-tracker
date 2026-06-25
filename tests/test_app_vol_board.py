@@ -18,10 +18,17 @@ def _fake(enabled: bool, sec: float):
     return types.SimpleNamespace(cfg=types.SimpleNamespace(monitored_coins=mc))
 
 
+def _run_fast(coro):
+    """opt-out 应立即返回；用 wait_for 让回归(误进 sleep 120s 循环)快速失败而非长挂。"""
+    async def _g():
+        await asyncio.wait_for(coro, timeout=0.5)
+    asyncio.run(_g())
+
+
 def test_optout_returns_immediately():
     """enabled=False 或 vol_board_sec<=0 → 立即返回（不进 while 循环）。"""
-    asyncio.run(TradingSystem._periodic_volatility_board(_fake(False, 0.0)))
-    asyncio.run(TradingSystem._periodic_volatility_board(_fake(True, 0.0)))  # 间隔 0 也关
+    _run_fast(TradingSystem._periodic_volatility_board(_fake(False, 0.0)))
+    _run_fast(TradingSystem._periodic_volatility_board(_fake(True, 0.0)))  # 间隔 0 也关
 
 
 def test_method_is_coroutine_and_registered():

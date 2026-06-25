@@ -1206,7 +1206,7 @@ async def serve(db_path: str, host: str = "127.0.0.1", port: int = 8787) -> None
     async def handle_harmonic_discover(request: aiohttp.web.Request) -> aiohttp.web.Response:
         """GET/POST /api/harmonic/discover — 「发现搜集」按钮：扫描更广 Bitget 宇宙
         （按成交额排序、排除已监控/已收集），快扫有谐波形态的币 → 立即落库展示 +
-        加入 harmonic_collected（监控进程并入谐波宇宙持续监控）。返回发现的币。"""
+        加入 monitored_coins（监控进程两种模式都并入谐波宇宙持续监控）。返回发现的币。"""
         import time as _t  # noqa: PLC0415
         from .bitget.rest import BitgetREST  # noqa: PLC0415
         from .monitor.harmonic_monitor import HarmonicMonitor  # noqa: PLC0415

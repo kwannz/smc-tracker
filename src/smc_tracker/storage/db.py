@@ -402,10 +402,12 @@ class Store:
             "d_idx": "INTEGER",
             "d_px":  "REAL",
         })
-        # 一次性迁移：旧 harmonic_collected → monitored_coins（仅当后者空且前者非空）
+        # 一次性迁移：旧 harmonic_collected → monitored_coins。
+        # user_version bit0 作「迁移已完成」持久哨兵：仅在**实际迁移了数据后**置位，
+        # 防用户 `watch rm` 清空清单后旧币随每次开库复活（P2-2）。
         try:
-            row = self.conn.execute("SELECT COUNT(*) FROM monitored_coins").fetchone()
-            if row and row[0] == 0:
+            uv = self.conn.execute("PRAGMA user_version").fetchone()[0]
+            if not (uv & 0x1):
                 legacy = self.conn.execute(
                     "SELECT coin, symbol, added_ts FROM harmonic_collected"
                 ).fetchall()
@@ -413,6 +415,7 @@ class Store:
                     self.add_monitored_coins(
                         [(c, s, ts, "migrated:harmonic_collected") for c, s, ts in legacy]
                     )
+                    self.conn.execute(f"PRAGMA user_version = {uv | 0x1}")
         except Exception:  # noqa: BLE001 — 迁移失败不阻塞启动
             pass
 

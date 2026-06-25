@@ -96,7 +96,8 @@ class MonitoredCoinsCfg:
     """监控币种清单配置（watchlist-multi-tf）。
 
     enabled=True：采集器/谐波/BB 选币改为 DB 清单驱动（替换 all_perp/top_n）。
-    enabled=False（默认）：完全旁路，现有行为不变（零回归）。
+    enabled=False（默认）：选币基集走 all_perp/top_n（行为不变）；discover/迁移币经
+        monitored_coins 加性并入谐波宇宙持续监控（与改前一致，零回归）。
     timeframes：清单币的多周期采集集（默认 7 周期；6H 替代 Bitget 不支持的 8h）。
     """
     enabled: bool = False

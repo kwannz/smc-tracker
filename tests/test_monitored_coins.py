@@ -66,3 +66,18 @@ def test_migration_from_harmonic_collected():
     assert s2.get_monitored_coins() == {"DOGE": "DOGEUSDT"}
     rows = s2.list_monitored_coins()
     assert rows[0][3] == "migrated:harmonic_collected"
+
+
+def test_migration_not_retriggered_after_clear():
+    """P2-2：迁移后用户清空清单 → 重开库不复活旧币（user_version 哨兵）。"""
+    d = tempfile.mkdtemp()
+    p = Path(d) / "t.db"
+    s = Store(p)
+    s.add_harmonic_collected([("DOGE", "DOGEUSDT", 5)])
+    s.close()
+    s2 = Store(p)                       # 迁移：DOGE 进 monitored_coins + 置哨兵
+    assert s2.get_monitored_coins() == {"DOGE": "DOGEUSDT"}
+    s2.remove_monitored_coins(["DOGE"])  # 用户清空（合法操作）
+    s2.close()
+    s3 = Store(p)                       # 重开：哨兵已置 → 不再迁移
+    assert s3.get_monitored_coins() == {}  # DOGE 未复活

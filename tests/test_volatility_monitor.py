@@ -25,27 +25,27 @@ def _ohlc(closes):
 # ---- vol_metrics 纯函数 ----
 
 def test_flat_prices_near_zero_vol():
-    o, h, l, c = _ohlc([100.0] * 30)
-    m = vol_metrics(o, h, l, c)
+    _o, h, l, c = _ohlc([100.0] * 30)
+    m = vol_metrics(h, l, c)
     assert abs(m["rv"]) < 1e-6
     assert abs(m["velocity"]) < 1e-6
     assert abs(m["accel"]) < 1e-6
 
 
 def test_uptrend_positive_velocity():
-    o, h, l, c = _ohlc([100.0 + i for i in range(30)])
-    m = vol_metrics(o, h, l, c)
+    _o, h, l, c = _ohlc([100.0 + i for i in range(30)])
+    m = vol_metrics(h, l, c)
     assert m["velocity"] > 0
 
 
 def test_acceleration_positive_on_convex_up():
-    o, h, l, c = _ohlc([100.0 + i * i * 0.1 for i in range(30)])
-    m = vol_metrics(o, h, l, c)
+    _o, h, l, c = _ohlc([100.0 + i * i * 0.1 for i in range(30)])
+    m = vol_metrics(h, l, c)
     assert m["accel"] > 0
 
 
 def test_too_few_bars_returns_empty():
-    assert vol_metrics([1.0], [1.0], [1.0], [1.0]) == {}
+    assert vol_metrics([1.0], [1.0], [1.0]) == {}
 
 
 # ---- pdarray 纯函数（ICT 溢价/折价）----
@@ -72,6 +72,18 @@ def test_pdarray_discount_near_low():
 def test_pdarray_equilibrium_zero_range():
     pd = pdarray([5.0] * 10, [5.0] * 10, [5.0] * 10)
     assert pd["pd_zone"] == "均衡"
+
+
+def test_pdarray_band_boundary_non_degenerate():
+    """P2-4：非退化区间内钉住 0.5±band 分区（band=0.03）。"""
+    h = [110.0] * 30          # 区间高 110
+    l = [100.0] * 30          # 区间低 100 → EQ=105
+    # 末价 105 → pd=0.5 → 均衡（rng>0，走 band 分类而非退化 early-return）
+    assert pdarray(h, l, [100.0] * 29 + [105.0])["pd_zone"] == "均衡"
+    # 末价 106 → pd=0.6 > 0.53 → 溢价
+    assert pdarray(h, l, [100.0] * 29 + [106.0])["pd_zone"] == "溢价"
+    # 末价 104 → pd=0.4 < 0.47 → 折价
+    assert pdarray(h, l, [100.0] * 29 + [104.0])["pd_zone"] == "折价"
 
 
 # ---- VolatilityMonitor（逐周期）----

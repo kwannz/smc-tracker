@@ -4,7 +4,9 @@
   - vol_metrics：纯 numpy 向量化，单周期 OHLC → rv/atr/range/velocity(1阶导)/accel(2阶导)。
   - pdarray：ICT 溢价/折价数组（Premium/Discount Array）——价在 dealing range 的位置（开源 ICT 标准）。
   - VolatilityMonitor：读 store.get_candles（复用已采 K 线，不重拉），**逐周期**算指标并展示，按运动分排序。
-  - velocity/accel/pd_pct 均尺度无关（百分比/区间占比），跨币跨周期可比。
+  - 可比性诚实标注：velocity/accel/rv 用固定 _VEL_WIN/_RV_WIN 根，**同周期内跨币可比**；但 5 根在 15m 与
+    1W 时间跨度差 1~2 个数量级，**跨周期幅度不可直接比较**（rv∝√t、accel 随 bar 时长增大）。
+    pd_pct 是区间占比 [0,1]，跨周期可比。score=max(各周期) 偏向最长周期，仅作"是否在动"的粗排，非精确强度。
 """
 from __future__ import annotations
 
@@ -20,9 +22,9 @@ _PD_WIN = 60
 _W_VEL, _W_ACCEL, _W_RV = 1.0, 1.5, 0.5
 
 
-def vol_metrics(o: Any, h: Any, l: Any, c: Any, *,
+def vol_metrics(h: Any, l: Any, c: Any, *,
                 rv_win: int = _RV_WIN, vel_win: int = _VEL_WIN) -> dict:
-    """单周期 OHLC → 波动专业指标（numpy 向量化）。数据 <3 根返回 {}。
+    """单周期 HLC → 波动专业指标（numpy 向量化）。数据 <3 根返回 {}。（open 不参与，故不收）
 
     返回：rv(已实现波动率=对数收益σ,%)、atr_pct(真实波幅均值/价,%)、
          range_pct(当前 bar 区间,%)、velocity(近窗%变化=1 阶导)、accel(速度差=2 阶导)。
@@ -52,8 +54,8 @@ def vol_metrics(o: Any, h: Any, l: Any, c: Any, *,
 def pdarray(h: Any, l: Any, c: Any, *, win: int = _PD_WIN, band: float = 0.03) -> dict:
     """ICT 溢价/折价数组（PD Array）：当前价在 dealing range（近 win 根高低）的位置。
 
-    返回：pd_pct∈[0,1]（0=折价极值，1=溢价极值）、pd_zone(溢价/折价/均衡)、
-         eq(均衡=区间中点)、rng_hi、rng_lo。区间为 0 时归为均衡。
+    返回：pd_pct∈[0,1]（0=折价极值，0.5=均衡 EQ，1=溢价极值）、pd_zone(溢价/折价/均衡，EQ±band)。
+    区间为 0 时归为均衡。
     """
     hh = np.asarray(h, float)[-win:]
     ll = np.asarray(l, float)[-win:]
@@ -61,10 +63,10 @@ def pdarray(h: Any, l: Any, c: Any, *, win: int = _PD_WIN, band: float = 0.03) -
     hi, lo = float(np.max(hh)), float(np.min(ll))
     rng = hi - lo
     if rng <= 0:
-        return {"pd_pct": 0.5, "pd_zone": "均衡", "eq": hi, "rng_hi": hi, "rng_lo": lo}
+        return {"pd_pct": 0.5, "pd_zone": "均衡"}
     pd = (price - lo) / rng
     zone = "溢价" if pd > 0.5 + band else ("折价" if pd < 0.5 - band else "均衡")
-    return {"pd_pct": pd, "pd_zone": zone, "eq": (hi + lo) / 2.0, "rng_hi": hi, "rng_lo": lo}
+    return {"pd_pct": pd, "pd_zone": zone}
 
 
 def move_score(m: dict) -> float:
@@ -94,16 +96,18 @@ class VolatilityMonitor:
             return None
         if len(cs) < 3:
             return None
-        o = [x.o for x in cs]; h = [x.h for x in cs]
-        l = [x.l for x in cs]; c = [x.c for x in cs]
-        m = vol_metrics(o, h, l, c)
+        h = [x.h for x in cs]; l = [x.l for x in cs]; c = [x.c for x in cs]
+        m = vol_metrics(h, l, c)
         if not m:
             return None
         m.update(pdarray(h, l, c))
         return m
 
-    def rank(self, now_ms: int) -> list[dict]:
-        """每币逐周期算指标 → {coin, score(各周期运动分取最大), by_tf}，按 score 降序。"""
+    def rank(self, now_ms: int = 0) -> list[dict]:
+        """每币逐周期算指标 → {coin, score(各周期运动分取最大), by_tf}，按 score 降序。
+
+        now_ms 预留（与兄弟监控板 bb/harmonic 统一签名；当前排序不依赖时间）。
+        """
         rows: list[dict] = []
         for coin in self.coin_to_symbol:
             by_tf = {tf: m for tf in self.timeframes
@@ -116,11 +120,13 @@ class VolatilityMonitor:
         rows.sort(key=lambda r: r["score"], reverse=True)
         return rows
 
-    def render(self, rows: list[dict], now_ms: int, top: int = 8) -> str:
-        """逐周期渲染波动追踪板（每周期一行：速度/加速度/σ/ATR/PD 溢价折价）。空返回 ""。"""
+    def render(self, rows: list[dict], now_ms: int = 0, top: int = 8) -> str:
+        """逐周期渲染波动追踪板（每周期一行：速度/加速度/σ/ATR/区间/PD 溢价折价）。空返回 ""。"""
         if not rows:
             return ""
-        lines = [f"🌀 实时波动追踪板 · 每周期指标(速度+加速度+PD溢价折价) Top {top}"]
+        from ..util import fmt_ts  # noqa: PLC0415
+        ts = fmt_ts(now_ms) if now_ms else ""
+        lines = [f"🌀 实时波动追踪板 [{ts}] · 每周期指标(速度+加速度+区间+PD溢价折价) Top {top}"]
         for r in rows[:top]:
             lines.append(f"━ {r['coin']:<8} 运动分 {r['score']:.1f}")
             for tf in self.timeframes:
@@ -132,7 +138,7 @@ class VolatilityMonitor:
                 adir = "加速" if a * v > 0 else ("减速" if a * v < 0 else "—")
                 lines.append(
                     f"  {tf:<4} {vdir}{abs(v):.2f}% a{a:+.2f}{adir}"
-                    f" σ{m['rv']:.2f}% ATR{m['atr_pct']:.2f}%"
+                    f" σ{m['rv']:.2f}% ATR{m['atr_pct']:.2f}% 幅{m['range_pct']:.2f}%"
                     f" PD{m['pd_pct'] * 100:.0f}%{m['pd_zone']}"
                 )
         return "\n".join(lines)
