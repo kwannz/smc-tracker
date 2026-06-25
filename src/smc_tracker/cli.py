@@ -264,6 +264,23 @@ def _cmd_report(args: argparse.Namespace) -> None:
         sys.exit(1)
 
 
+def _cmd_signals(args: argparse.Namespace) -> None:
+    """打印 build_all_signals_report：11 张信号表按类型分组汇总（从本地 SQLite 聚合，无网络）。"""
+    try:
+        from .notify import build_all_signals_report
+        from .storage import Store
+
+        store = Store(Path(args.db))
+        now = int(time.time() * 1000)
+        since = now - int(args.hours * 3_600_000)
+        report = build_all_signals_report(store, since, now)
+        store.close()
+        print(report)
+    except Exception as exc:
+        print(f"[signals] 出错：{exc}", file=sys.stderr)
+        sys.exit(1)
+
+
 def _cmd_address(args: argparse.Namespace) -> None:
     """完整追踪单个 Hyperliquid 地址：画像 + 实时持仓 + 协同/对手方 + 轨迹 + PnL。"""
     try:
@@ -685,6 +702,17 @@ def build_parser() -> argparse.ArgumentParser:
     p_report.add_argument("--db", default=_DEFAULT_DB, metavar="PATH",
                           help=f"SQLite 数据库路径（默认 {_DEFAULT_DB}）")
     p_report.set_defaults(handler=_cmd_report)
+
+    # ---- signals ----
+    p_signals = sub.add_parser(
+        "signals",
+        help="打印近 N 小时全信号汇总（11 张信号表按类型分组，含证据摘要，无网络）",
+    )
+    p_signals.add_argument("--hours", type=float, default=24.0, metavar="H",
+                           help="回看窗口小时数（默认 24）")
+    p_signals.add_argument("--db", default=_DEFAULT_DB, metavar="PATH",
+                           help=f"SQLite 数据库路径（默认 {_DEFAULT_DB}）")
+    p_signals.set_defaults(handler=_cmd_signals)
 
     # ---- address ----
     p_addr = sub.add_parser("address", help="完整追踪单个地址(画像+持仓+协同+对手方+轨迹)")

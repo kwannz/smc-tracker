@@ -3,7 +3,7 @@ from .webhook import WebhookNotifier
 from .telegram import TelegramNotifier
 from .feishu import FeishuNotifier
 from .multi import MultiNotifier
-from .report import build_report
+from .report import build_report, build_all_signals_report
 from .chunk import split_message
 from .digest import HLDigest
 
@@ -23,4 +23,5 @@ def build_notifier(cfg: object) -> MultiNotifier:
 
 
 __all__ = ["WebhookNotifier", "TelegramNotifier", "FeishuNotifier", "MultiNotifier",
-           "build_notifier", "build_report", "split_message", "HLDigest"]
+           "build_notifier", "build_report", "build_all_signals_report",
+           "split_message", "HLDigest"]

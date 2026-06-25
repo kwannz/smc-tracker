@@ -20,6 +20,8 @@ from .harmonic_dedup import setup_fingerprint, SetupDedup
 from .harmonic_review import build_harmonic_predictions
 # C.1: 微观结构盘口信号三件套（OFI + queue_imbalance + micro_price）
 from .microprice import OFITracker, queue_imbalance, micro_price, ofi_delta
+# 共享聚合 helper：读 11 张信号表 → 统一行结构 → 按 ts 倒序
+from .all_signals import collect_all_signals
 
 __all__ = ["Signal", "SignalEngine", "DivergenceDetector", "DivergenceSignal",
            "ConsensusSignal", "CoinPositioning", "WhaleConsensus", "positioning",
@@ -36,4 +38,5 @@ __all__ = ["Signal", "SignalEngine", "DivergenceDetector", "DivergenceSignal",
            "forward_mult", "apply_forward",
            "funding_extreme_signal", "oi_directional_velocity",
            "setup_fingerprint", "SetupDedup", "build_harmonic_predictions",
-           "OFITracker", "queue_imbalance", "micro_price", "ofi_delta"]
+           "OFITracker", "queue_imbalance", "micro_price", "ofi_delta",
+           "collect_all_signals"]

@@ -26,6 +26,7 @@ from smc_tracker.cli import (  # noqa: E402
     _cmd_dashboard,
     _cmd_evaluate,
     _cmd_cycle,
+    _cmd_signals,
     _poll_once_async,
     _evaluate_once_async,
     _forecast_once_async,
@@ -701,3 +702,256 @@ class TestForecastOnceAsync:
         assert inspect.iscoroutinefunction(_forecast_once_async)
         # 阈值常量也可导入（避免调用方魔法数字）
         assert _FORECAST_IMB_THRESHOLD == 0.25
+
+
+# ---------------------------------------------------------------------------
+# build_all_signals_report 单元测试（tmp Store 插样本，无网络）
+# ---------------------------------------------------------------------------
+
+class TestBuildAllSignalsReport:
+    """build_all_signals_report：tmp Store 插各类型样本行 → 断言输出含各类型与证据串。
+
+    TDD：先写测试（此处），再实现（notify/report.py）。
+    合成数据确定性；不联网；表可能不存在 → _safe_fetchall 优雅跳过（已在 all_signals.py 实现）。
+    """
+
+    def _make_store(self, tmp_path):
+        from pathlib import Path as _Path
+        from smc_tracker.storage import Store
+        db = str(tmp_path / "all_sig_test.db")
+        return Store(_Path(db))
+
+    def _now_ms(self) -> int:
+        import time as _t
+        return int(_t.time() * 1000)
+
+    def test_empty_db_returns_no_signal_text(self, tmp_path):
+        """空库时输出含「无信号」提示，不 crash。"""
+        from smc_tracker.notify import build_all_signals_report
+        store = self._make_store(tmp_path)
+        now = self._now_ms()
+        out = build_all_signals_report(store, now - 3_600_000, now)
+        store.close()
+        assert "全信号汇总" in out or "无信号" in out
+
+    def test_disclaimer_always_present(self, tmp_path):
+        """免责声明（1h≈随机/非投资建议）无论有无数据都必须出现在输出中。"""
+        from smc_tracker.notify import build_all_signals_report
+        store = self._make_store(tmp_path)
+        now = self._now_ms()
+        out = build_all_signals_report(store, now - 3_600_000, now)
+        store.close()
+        assert "非投资建议" in out
+
+    def test_signal_row_appears_in_output(self, tmp_path):
+        """signals 表有一条记录 → 输出含 coin、方向、分数与证据串。"""
+        from smc_tracker.notify import build_all_signals_report
+        store = self._make_store(tmp_path)
+        now = self._now_ms()
+        store.conn.execute(
+            "INSERT INTO signals(ts,coin,direction,score,entry,stop,target,rr,reason) "
+            "VALUES (?,?,?,?,?,?,?,?,?)",
+            (now - 1000, "ETH", "long", 3.5, 3000.0, 2900.0, 3300.0, 3.0, "结构+流向共振"),
+        )
+        store.conn.commit()
+        out = build_all_signals_report(store, now - 3_600_000, now)
+        store.close()
+        assert "ETH" in out
+        assert "long" in out
+        assert "结构+流向共振" in out
+
+    def test_divergence_row_appears_in_output(self, tmp_path):
+        """divergence 表有一条记录 → 输出含背离类型标签与 coin。"""
+        from smc_tracker.notify import build_all_signals_report
+        store = self._make_store(tmp_path)
+        now = self._now_ms()
+        store.conn.execute(
+            "INSERT INTO divergence(ts,coin,direction,score,funding,oi_change_pct,dex_flow_usd,reason) "
+            "VALUES (?,?,?,?,?,?,?,?)",
+            (now - 2000, "SOL", "bullish", 1.8, 0.0005, 0.03, 500000.0, "资金费异常"),
+        )
+        store.conn.commit()
+        out = build_all_signals_report(store, now - 3_600_000, now)
+        store.close()
+        assert "SOL" in out
+        assert "背离" in out
+
+    def test_whale_signal_row_appears_in_output(self, tmp_path):
+        """whale_signals 表有记录 → 输出含「跟庄」标签与 coin。"""
+        from smc_tracker.notify import build_all_signals_report
+        store = self._make_store(tmp_path)
+        now = self._now_ms()
+        store.conn.execute(
+            "INSERT INTO whale_signals(ts,address,label,coin,action,direction,notional,px,pos_after,taker) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?)",
+            (now - 500, "0x1234567890abcdef", "庄王", "BTC", "OPEN", "long",
+             2_000_000.0, 50000.0, 2_000_000.0, 1),
+        )
+        store.conn.commit()
+        out = build_all_signals_report(store, now - 3_600_000, now)
+        store.close()
+        assert "BTC" in out
+        assert "跟庄" in out
+
+    def test_multiple_types_all_grouped(self, tmp_path):
+        """signals + divergence + whale_signals 均插样本 → 输出含所有三种类型标签。"""
+        from smc_tracker.notify import build_all_signals_report
+        store = self._make_store(tmp_path)
+        now = self._now_ms()
+        # signals 行
+        store.conn.execute(
+            "INSERT INTO signals(ts,coin,direction,score,entry,stop,target,rr) "
+            "VALUES (?,?,?,?,?,?,?,?)",
+            (now - 1000, "AVAX", "short", -2.1, 30.0, 31.0, 27.0, 1.5),
+        )
+        # divergence 行
+        store.conn.execute(
+            "INSERT INTO divergence(ts,coin,direction,score,funding,oi_change_pct,dex_flow_usd,reason) "
+            "VALUES (?,?,?,?,?,?,?,?)",
+            (now - 2000, "MATIC", "bearish", 1.2, -0.001, -0.05, -300000.0, "CEX空头主导"),
+        )
+        # whale_signals 行
+        store.conn.execute(
+            "INSERT INTO whale_signals(ts,address,label,coin,action,direction,notional,px,pos_after,taker) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?)",
+            (now - 3000, "0xdeadbeef00000000", "巨鲸A", "DOGE", "ADD", "long",
+             500_000.0, 0.12, 800_000.0, 0),
+        )
+        store.conn.commit()
+        out = build_all_signals_report(store, now - 3_600_000, now)
+        store.close()
+        assert "SMC共振" in out
+        assert "背离" in out
+        assert "跟庄" in out
+        # 各 coin 均应出现
+        assert "AVAX" in out
+        assert "MATIC" in out
+        assert "DOGE" in out
+
+    def test_evidence_text_included_in_each_line(self, tmp_path):
+        """每条信号行必须包含「—」分隔符后的证据文本（evidence_text 非空）。"""
+        from smc_tracker.notify import build_all_signals_report
+        store = self._make_store(tmp_path)
+        now = self._now_ms()
+        store.conn.execute(
+            "INSERT INTO signals(ts,coin,direction,score,entry,stop,target,rr,reason) "
+            "VALUES (?,?,?,?,?,?,?,?,?)",
+            (now - 100, "BNB", "long", 1.0, 300.0, 290.0, 330.0, 2.0, "BNB特殊证据"),
+        )
+        store.conn.commit()
+        out = build_all_signals_report(store, now - 3_600_000, now)
+        store.close()
+        # 每个信号行应含「 — 」分隔的证据
+        signal_lines = [ln for ln in out.splitlines() if "BNB" in ln and " — " in ln]
+        assert len(signal_lines) >= 1, f"未找到含证据的 BNB 信号行：\n{out}"
+        assert "BNB特殊证据" in out
+
+    def test_rows_outside_window_excluded(self, tmp_path):
+        """窗口外（too old）的行不纳入输出。"""
+        from smc_tracker.notify import build_all_signals_report
+        store = self._make_store(tmp_path)
+        now = self._now_ms()
+        # 插入 2 小时前的行（窗口是 1 小时）
+        old_ts = now - 7_200_000
+        store.conn.execute(
+            "INSERT INTO signals(ts,coin,direction,score,entry,stop,target,rr) "
+            "VALUES (?,?,?,?,?,?,?,?)",
+            (old_ts, "LINK", "long", 1.0, 10.0, 9.0, 12.0, 2.0),
+        )
+        store.conn.commit()
+        out = build_all_signals_report(store, now - 3_600_000, now)
+        store.close()
+        # LINK 在窗口外，不应出现在信号明细中
+        assert "LINK" not in out
+
+    def test_custom_title_appears(self, tmp_path):
+        """自定义 title 参数出现在输出头部。"""
+        from smc_tracker.notify import build_all_signals_report
+        store = self._make_store(tmp_path)
+        now = self._now_ms()
+        out = build_all_signals_report(store, now - 3_600_000, now, title="自定义报告标题")
+        store.close()
+        assert "自定义报告标题" in out
+
+    def test_exported_from_notify_init(self):
+        """build_all_signals_report 已从 notify/__init__.py 导出（符号可达性）。"""
+        from smc_tracker.notify import build_all_signals_report as _fn
+        assert callable(_fn)
+
+
+# ---------------------------------------------------------------------------
+# signals 子命令解析与端到端测试
+# ---------------------------------------------------------------------------
+
+class TestSignalsCmd:
+    """signals 子命令：解析正确性 + 端到端（临时合成 SQLite，无网络）。"""
+
+    def _make_args(self, db_path: str, hours: float = 1.0) -> "argparse.Namespace":
+        import argparse
+        args = argparse.Namespace()
+        args.cmd = "signals"
+        args.hours = hours
+        args.db = db_path
+        args.handler = _cmd_signals
+        return args
+
+    def test_signals_parsing_defaults(self):
+        """argparse: signals 子命令默认值正确（--hours 24，handler 绑定 _cmd_signals）。"""
+        args = build_parser().parse_args(["signals"])
+        assert args.cmd == "signals"
+        assert args.hours == 24.0
+        assert "smc.db" in args.db
+        assert args.handler is _cmd_signals
+
+    def test_signals_parsing_custom_hours_db(self):
+        """argparse: --hours / --db 可覆盖默认值。"""
+        args = build_parser().parse_args(["signals", "--hours", "6", "--db", "/tmp/s.db"])
+        assert args.hours == 6.0
+        assert args.db == "/tmp/s.db"
+
+    def test_signals_dispatch(self):
+        """dispatch：main() 正确路由到 _cmd_signals handler。"""
+        from types import SimpleNamespace
+        sentinel = MagicMock()
+        ns = SimpleNamespace(cmd="signals", hours=1.0, db="/tmp/x.db", handler=sentinel)
+        with patch("smc_tracker.cli.build_parser") as mock_bp:
+            mock_ap = MagicMock()
+            mock_ap.parse_args.return_value = ns
+            mock_bp.return_value = mock_ap
+            with patch("sys.argv", ["smc_tracker", "signals"]):
+                main()
+        sentinel.assert_called_once_with(ns)
+
+    def test_signals_empty_db_no_crash(self, capsys, tmp_path):
+        """空库执行 _cmd_signals 不 crash，输出含标题与免责。"""
+        from pathlib import Path as _Path
+        from smc_tracker.storage import Store
+        db = str(tmp_path / "sig_empty.db")
+        Store(_Path(db)).close()
+        args = self._make_args(db, hours=1.0)
+        _cmd_signals(args)
+        captured = capsys.readouterr()
+        assert "全信号汇总" in captured.out
+        assert "非投资建议" in captured.out
+
+    def test_signals_with_data_prints_type_and_evidence(self, capsys, tmp_path):
+        """库中有 signals 行时，输出包含 SMC共振 标签与证据串。"""
+        import time as _t
+        from pathlib import Path as _Path
+        from smc_tracker.storage import Store
+        db = str(tmp_path / "sig_data.db")
+        s = Store(_Path(db))
+        now_ms = int(_t.time() * 1000)
+        s.conn.execute(
+            "INSERT INTO signals(ts,coin,direction,score,entry,stop,target,rr,reason) "
+            "VALUES (?,?,?,?,?,?,?,?,?)",
+            (now_ms - 500, "XRP", "long", 2.0, 0.6, 0.55, 0.7, 2.0, "XRP结构确认"),
+        )
+        s.conn.commit()
+        s.close()
+        args = self._make_args(db, hours=1.0)
+        _cmd_signals(args)
+        captured = capsys.readouterr()
+        assert "XRP" in captured.out
+        assert "SMC共振" in captured.out
+        assert "XRP结构确认" in captured.out
