@@ -981,6 +981,10 @@ class TradingSystem:
         ("bb_levels",            "ts",       7 * 86_400_000),
     ]
 
+    # K 线滚动保留：每 (coin,tf) 保留最新 N 根（历史+实时统一上限；用户#：每周期 3000 bar）
+    # bitget_candles 是计数型上限（非时间型），故独立于 _DB_RETAIN，由 prune_candles_to 裁剪。
+    _CANDLE_RETAIN_BARS: int = 3000
+
     async def _periodic_cleanup(self, every: float = 600.0) -> None:
         """周期清理无界增长的内存累积器 + DB 时间序列旧数据（防长跑内存/磁盘泄漏）。"""
         while not self._stopping:
@@ -1002,6 +1006,15 @@ class TradingSystem:
                 total_pruned += deleted
             if total_pruned:
                 log.info("数据质量：DB 清理旧数据 %d 行", total_pruned)
+            # K 线滚动保留：每 (coin,tf) 仅留最新 _CANDLE_RETAIN_BARS 根（历史+实时统一上限），
+            # 超额删最旧，防 bitget_candles 无界增长（用户#：每周期保持 3000 bar）
+            try:
+                pruned_c = self.store.prune_candles_to(self._CANDLE_RETAIN_BARS)
+                if pruned_c:
+                    log.info("数据质量：K线滚动保留删旧 %d 根（每币周期上限 %d）",
+                             pruned_c, self._CANDLE_RETAIN_BARS)
+            except Exception as exc:  # noqa: BLE001
+                log.warning("K线滚动保留失败: %s", exc)
             # A1：每轮清理末尾触发 PRAGMA optimize（SQLite 分析查询计划优化，
             # 只在有足够变更时才执行，通常毫秒级；不放 __init__，空库无意义）
             try:

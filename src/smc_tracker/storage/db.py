@@ -918,6 +918,34 @@ class Store:
             rows_list,
         )
 
+    def prune_candles_to(self, max_bars: int = 3000) -> int:
+        """每 (coin,tf) 滚动保留最新 max_bars 根 K 线，删更旧，返回删除行数。
+
+        历史 + 实时统一上限：超 max_bars 的旧 bar 删除（防 bitget_candles 无界增长）。
+        用窗口函数 ROW_NUMBER 按 open_ms 降序分区排名（sqlite ≥3.25），rn>max_bars 即删。
+        max_bars<=0 视为不限制（返回 0）。
+        """
+        if max_bars <= 0:
+            return 0
+        try:
+            self.conn.execute("BEGIN")
+            cur = self.conn.execute(
+                "DELETE FROM bitget_candles WHERE rowid IN ("
+                "  SELECT rowid FROM ("
+                "    SELECT rowid, ROW_NUMBER() OVER "
+                "      (PARTITION BY coin, tf ORDER BY open_ms DESC) AS rn"
+                "    FROM bitget_candles"
+                "  ) WHERE rn > ?"
+                ")",
+                (max_bars,),
+            )
+            n = cur.rowcount if cur.rowcount and cur.rowcount > 0 else 0
+            self.conn.execute("COMMIT")
+            return n
+        except Exception:
+            self.conn.execute("ROLLBACK")
+            raise
+
     def get_candles(self, coin: str, tf: str, limit: int = 1000,
                     since_ms: int | None = None) -> list:
         """读取 K 线，升序返回 list[Candle]。

@@ -213,6 +213,17 @@ D 多空符号 · E 真实 userFills 解析/分类自洽 · F WS webData2==REST 
 > 据 codex-loop 反幻觉纪律保持开放，区别于「已实现但 backlog 写保守」的项（已核实证据后闭合）。
 
 ## 迭代日志
+- 2026-06-26 #104: **workflow 全面审计(20 确认) → 修 P1/P2 + K线 3000bar 滚动保留 + Opus/Sonnet 规范**（用户#连续指令）。
+  ① **Opus 规划/审计 Sonnet 执行**写入 CLAUDE.md §三-5 硬规范（[[workflow-opus-plan-sonnet-exec]]）。
+  ② **workflow 多维审计**改动(d9adf96..HEAD)：7 维并行评审 + 逐条对抗验证 → 28 原始→20 确认(无 P0,2 P1)。
+  ③ **修确认问题**：P1-1 discover 默认模式真相源错位回归(默认模式谐波合并 harmonic_collected∪monitored_coins)；
+  P1-2 空清单冷启动死锁(monitored 模式 vol_c2s 空也构建监控器，热载入可复活)；P2-1 周期错配(采集取
+  monitored∪bb∪harmonic 并集，谐波 30m+用户 6H 都采)；P2-2 迁移重触发(user_version bit0 哨兵)；
+  P2-3/4/5/7+nit(velocity 跨周期诚实标注、pdarray band 边界测试、optout wait_for、CLI 帮助、删死参 o、
+  render 用 now_ms 时间戳+幅度+精简 pdarray 返回)。
+  ④ **K线 3000bar 滚动保留**（用户#：每周期保持 3000 bar 历史+实时，超额删旧）：`Store.prune_candles_to(3000)`
+  窗口函数 ROW_NUMBER 每 (coin,tf) 留最新 3000 根，接入 `_periodic_cleanup`；`_CANDLE_RETAIN_BARS=3000`。
+  TDD +8 例（迁移/band/保留）；全量 **2318 passed, 2 skipped**（零回归）。
 - 2026-06-26 #103: **波动板逐周期化 + PDArray(ICT 溢价/折价) + 实时推送接入**（用户#：不要共振，每周期各显指标 + 加 PDArray）。
   ① **逐周期展示**（去共振）：`VolatilityMonitor.rank` 改为每币**逐周期**算指标 → `by_tf`，`render` 每周期一行
   （速度/加速度/σ/ATR/PD），不做跨周期合并；运动分=各周期 move_score 取最大（surface 任意周期在动的币）。
