@@ -325,6 +325,14 @@ CREATE TABLE IF NOT EXISTS harmonic_collected (
     added_ts INTEGER NOT NULL
 );
 
+-- 监控币种清单（watchlist-multi-tf）：主开关 monitored_coins.enabled 打开时驱动采集/谐波/BB 选币
+CREATE TABLE IF NOT EXISTS monitored_coins (
+    coin     TEXT    NOT NULL PRIMARY KEY,
+    symbol   TEXT    NOT NULL,
+    added_ts INTEGER NOT NULL,
+    note     TEXT    NOT NULL DEFAULT ''
+);
+
 -- 7 周期布林带压力/支撑层（S/R 前瞻层，供详情页多周期叠加）
 CREATE TABLE IF NOT EXISTS bb_levels (
     coin     TEXT    NOT NULL,
@@ -394,6 +402,19 @@ class Store:
             "d_idx": "INTEGER",
             "d_px":  "REAL",
         })
+        # 一次性迁移：旧 harmonic_collected → monitored_coins（仅当后者空且前者非空）
+        try:
+            row = self.conn.execute("SELECT COUNT(*) FROM monitored_coins").fetchone()
+            if row and row[0] == 0:
+                legacy = self.conn.execute(
+                    "SELECT coin, symbol, added_ts FROM harmonic_collected"
+                ).fetchall()
+                if legacy:
+                    self.add_monitored_coins(
+                        [(c, s, ts, "migrated:harmonic_collected") for c, s, ts in legacy]
+                    )
+        except Exception:  # noqa: BLE001 — 迁移失败不阻塞启动
+            pass
 
     def _ensure_columns(self, table: str, cols: dict[str, str]) -> None:
         existing = {r[1] for r in self.conn.execute(f"PRAGMA table_info({table})")}
@@ -774,6 +795,57 @@ class Store:
                 "SELECT coin, symbol FROM harmonic_collected"
             ).fetchall()
         }
+
+    # ---- 监控币种清单 monitored_coins（主开关驱动采集/选币；CLI/dashboard 增删，运行时热载入）----
+    def add_monitored_coins(self, items: Iterable[tuple]) -> None:
+        """加入监控币（幂等 upsert）。items: [(coin, symbol, added_ts, note), ...]。空安全。"""
+        rows = list(items)
+        if not rows:
+            return
+        try:
+            self.conn.execute("BEGIN")
+            self.conn.executemany(
+                "INSERT INTO monitored_coins(coin,symbol,added_ts,note) VALUES(?,?,?,?) "
+                "ON CONFLICT(coin) DO UPDATE SET symbol=excluded.symbol, note=excluded.note",
+                rows,
+            )
+            self.conn.execute("COMMIT")
+        except Exception:
+            self.conn.execute("ROLLBACK")
+            raise
+
+    def remove_monitored_coins(self, coins: Iterable[str]) -> int:
+        """从清单删除指定 coin，返回删除行数。空安全返回 0。"""
+        cs = [c for c in coins if c]
+        if not cs:
+            return 0
+        try:
+            self.conn.execute("BEGIN")
+            cur = self.conn.executemany(
+                "DELETE FROM monitored_coins WHERE coin=?", [(c,) for c in cs]
+            )
+            n = cur.rowcount if cur.rowcount is not None and cur.rowcount >= 0 else 0
+            self.conn.execute("COMMIT")
+            return n
+        except Exception:
+            self.conn.execute("ROLLBACK")
+            raise
+
+    def get_monitored_coins(self) -> dict[str, str]:
+        """返回监控清单 {coin: symbol}。"""
+        return {
+            coin: sym
+            for coin, sym in self.conn.execute(
+                "SELECT coin, symbol FROM monitored_coins"
+            ).fetchall()
+        }
+
+    def list_monitored_coins(self) -> list[tuple]:
+        """返回 (coin, symbol, added_ts, note) 行，按 added_ts 升序（CLI/dashboard 展示用）。"""
+        return list(self.conn.execute(
+            "SELECT coin, symbol, added_ts, note FROM monitored_coins "
+            "ORDER BY added_ts ASC, coin ASC"
+        ).fetchall())
 
     def harmonic_history(self, coin: str, limit: int = 50) -> list[tuple]:
         """返回指定 coin 的历史谐波形态，按 ts 降序（最新在前），最多 limit 行。
