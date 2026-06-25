@@ -213,6 +213,14 @@ D 多空符号 · E 真实 userFills 解析/分类自洽 · F WS webData2==REST 
 > 据 codex-loop 反幻觉纪律保持开放，区别于「已实现但 backlog 写保守」的项（已核实证据后闭合）。
 
 ## 迭代日志
+- 2026-06-26 #105: **统一全系统多周期为 CANONICAL_TIMEFRAMES + 闭合审计 P2-6**（用户#连续指令）。
+  ① **P2-6 闭合**：把 `_run` 的 enabled 分支选币决策抽成 3 个纯函数(`select_base_universe`/`harmonic_extra_coins`/
+  `collect_timeframes`)并接入(零孤儿、行为不变)，TDD 6 例钉住 enabled 行为。
+  ② **统一多周期(单一真相源)**（用户#：统一 15m/1h/4h/6h/12h/1d/1w，其余删除，加 CLAUDE.md）：
+  新 `config.CANONICAL_TIMEFRAMES = [15m,1H,4H,6H,12H,1D,1W]`，谐波/BB/监控清单/采集器/dashboard 周期 tab
+  全部引用此常量，**删 30m**；`_DISCOVER_TFS`/`_FIXED_TFS` 改引用常量；`HARMONIC_DEFAULT_TF_BARS` 去 30m 加 6H。
+  写入 **CLAUDE.md §三-2**「统一多周期单一真相源 + 禁硬编码周期列表 + 每周期 3000 根滚动保留」。
+  反转旧 TDD（曾钉 30m 替 6H）到新 canonical。全量 **2324 passed, 2 skipped**（零回归）。
 - 2026-06-26 #104: **workflow 全面审计(20 确认) → 修 P1/P2 + K线 3000bar 滚动保留 + Opus/Sonnet 规范**（用户#连续指令）。
   ① **Opus 规划/审计 Sonnet 执行**写入 CLAUDE.md §三-5 硬规范（[[workflow-opus-plan-sonnet-exec]]）。
   ② **workflow 多维审计**改动(d9adf96..HEAD)：7 维并行评审 + 逐条对抗验证 → 28 原始→20 确认(无 P0,2 P1)。

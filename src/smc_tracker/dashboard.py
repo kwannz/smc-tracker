@@ -1239,7 +1239,7 @@ async def serve(db_path: str, host: str = "127.0.0.1", port: int = 8787) -> None
                 return aiohttp.web.json_response({"discovered": [], "scanned": 0, "note": "无新候选币"})
             # 复用 HarmonicMonitor 快扫（全 7 周期；store 共享 K 线缓存/回填）
             # 7 周期 × N 候选币任务量增加，但 HarmonicMonitor 内 Semaphore(≤8) 限流 + DB 缓存可接受
-            _DISCOVER_TFS = ["15m", "30m", "1H", "4H", "12H", "1D", "1W"]
+            from .config import CANONICAL_TIMEFRAMES as _DISCOVER_TFS  # noqa: PLC0415
             mon = HarmonicMonitor(candidates, _DISCOVER_TFS, 200, 3, 0.05, len(candidates), store=store)
             rows = await mon.refresh(now)
             found = sorted({str(r["coin"]) for r in rows})
@@ -1833,8 +1833,8 @@ def build_coin_detail(store: Any, coin: str, tf: str | None = None) -> dict:
     """
     from .asset_class import asset_class as _asset_class
 
-    # 固定 7 周期 tab（来自 HarmonicCfg.timeframes，前端始终显示完整周期导航）
-    _FIXED_TFS = ["15m", "30m", "1H", "4H", "12H", "1D", "1W"]
+    # 固定 7 周期 tab（统一 CANONICAL_TIMEFRAMES，前端始终显示完整周期导航）
+    from .config import CANONICAL_TIMEFRAMES as _FIXED_TFS  # noqa: PLC0415
 
     # 1. 读该币全部最新 setup 行（所有 tf）
     all_setups: list[dict] = []

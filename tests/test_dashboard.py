@@ -1492,7 +1492,7 @@ def test_build_coin_detail_tf_defaults_to_first_setup():
 
 
 def test_build_coin_detail_tfs_available():
-    """tfs_available 固定返回 7 周期（15m/30m/1H/4H/12H/1D/1W），不受形态存在与否影响。
+    """tfs_available 固定返回统一 7 周期（15m/1H/4H/6H/12H/1D/1W），不受形态存在与否影响。
 
     原合约（数据驱动，仅含有 setup 的周期）已改为「固定 7 周期」合约——
     前端始终显示完整周期导航，无形态周期显示 K 线 + 提示文案。
@@ -1501,9 +1501,9 @@ def test_build_coin_detail_tfs_available():
     result = build_coin_detail(s, "BTC")
     s.close()
     assert isinstance(result["tfs_available"], list)
-    # 固定 7 周期，与 HarmonicCfg.timeframes 一致
-    assert result["tfs_available"] == ["15m", "30m", "1H", "4H", "12H", "1D", "1W"], (
-        f"tfs_available 应为固定 7 周期，实得: {result['tfs_available']}"
+    # 固定统一 7 周期 CANONICAL_TIMEFRAMES
+    assert result["tfs_available"] == ["15m", "1H", "4H", "6H", "12H", "1D", "1W"], (
+        f"tfs_available 应为统一 7 周期，实得: {result['tfs_available']}"
     )
     assert len(result["tfs_available"]) == 7
 
@@ -1865,31 +1865,32 @@ def test_render_hl_html_brace_escape():
 
 
 # ---------------------------------------------------------------------------
-# 新增 TDD：Fix 1 — config 谐波周期 7 个（15m/30m/1H/4H/12H/1D/1W，去 6H）
+# TDD：config 谐波周期统一 CANONICAL_TIMEFRAMES（15m/1H/4H/6H/12H/1D/1W，删 30m）
 # ---------------------------------------------------------------------------
 
 def test_harmonic_cfg_default_timeframes_7_exact():
-    """HarmonicCfg 默认 timeframes 精确 = ['15m','30m','1H','4H','12H','1D','1W']（去 6H，加 30m）。
+    """HarmonicCfg 默认 timeframes 精确 = CANONICAL_TIMEFRAMES（15m/1H/4H/6H/12H/1D/1W）。
 
-    TDD RED 修复前：默认含 6H 不含 30m；GREEN 后：精确匹配用户要求 7 周期。
+    用户#（最新）：全系统统一为 15m/1h/4h/6h/12h/1d/1w，删 30m。
     """
-    from smc_tracker.config import HarmonicCfg
+    from smc_tracker.config import HarmonicCfg, CANONICAL_TIMEFRAMES
     cfg = HarmonicCfg()
-    assert cfg.timeframes == ["15m", "30m", "1H", "4H", "12H", "1D", "1W"], (
-        f"HarmonicCfg 默认周期应为 7 个精确值，实得: {cfg.timeframes}"
+    assert cfg.timeframes == ["15m", "1H", "4H", "6H", "12H", "1D", "1W"], (
+        f"HarmonicCfg 默认周期应为统一 7 周期，实得: {cfg.timeframes}"
     )
+    assert cfg.timeframes == CANONICAL_TIMEFRAMES
 
 
-def test_harmonic_cfg_no_6h_in_defaults():
-    """默认 timeframes 不含 '6H'（已替换为 '30m'）。"""
+def test_harmonic_cfg_no_30m_in_defaults():
+    """默认 timeframes 不含 '30m'（统一后已删）。"""
     from smc_tracker.config import HarmonicCfg
-    assert "6H" not in HarmonicCfg().timeframes, "默认 timeframes 不应含 6H"
+    assert "30m" not in HarmonicCfg().timeframes, "统一后默认 timeframes 不应含 30m"
 
 
-def test_harmonic_cfg_contains_30m():
-    """默认 timeframes 含 '30m'。"""
+def test_harmonic_cfg_contains_6h():
+    """默认 timeframes 含 '6H'（8h 档替代）。"""
     from smc_tracker.config import HarmonicCfg
-    assert "30m" in HarmonicCfg().timeframes, "默认 timeframes 应含 30m"
+    assert "6H" in HarmonicCfg().timeframes, "默认 timeframes 应含 6H（8h 档）"
 
 
 # ---------------------------------------------------------------------------
@@ -1914,10 +1915,11 @@ def test_harmonic_discover_uses_7_timeframes():
     assert '["4H"]' not in discover_section, (
         "handle_harmonic_discover 不应再用 ['4H'] 单周期"
     )
-    # 断言：含多周期特征（30m 或 1W 或读取 timeframes 变量）
-    assert ("30m" in discover_section or "1W" in discover_section
+    # 断言：含多周期特征（引用统一 CANONICAL_TIMEFRAMES，或字面多周期/timeframes 变量）
+    assert ("CANONICAL_TIMEFRAMES" in discover_section
+            or "1W" in discover_section
             or "timeframes" in discover_section), (
-        "discover 函数应使用全 7 周期或读取 timeframes 变量"
+        "discover 函数应使用统一 7 周期（CANONICAL_TIMEFRAMES）或读取 timeframes 变量"
     )
 
 
@@ -2030,7 +2032,7 @@ def test_render_hl_html_no_residual_double_braces_with_data():
 
 
 # ---------------------------------------------------------------------------
-# 新增 TDD：固定 7 周期 tab（用户需求：谐波页每币始终显示 15m/30m/1H/4H/12H/1D/1W）
+# TDD：固定 7 周期 tab（统一 CANONICAL：谐波页每币始终显示 15m/1H/4H/6H/12H/1D/1W）
 # ---------------------------------------------------------------------------
 
 def test_build_coin_detail_tfs_always_7():
@@ -2047,11 +2049,11 @@ def test_build_coin_detail_tfs_always_7():
 
 
 def test_build_coin_detail_tfs_exact_order():
-    """tfs_available 顺序固定为 ['15m','30m','1H','4H','12H','1D','1W']。"""
+    """tfs_available 顺序固定为 ['15m','1H','4H','6H','12H','1D','1W']。"""
     s, _ = _store_with_harmonic_multi()
     result = build_coin_detail(s, "ETH")  # ETH 只有 4h setup
     s.close()
-    assert result["tfs_available"] == ["15m", "30m", "1H", "4H", "12H", "1D", "1W"], (
+    assert result["tfs_available"] == ["15m", "1H", "4H", "6H", "12H", "1D", "1W"], (
         f"tfs_available 顺序不对: {result['tfs_available']}"
     )
 
@@ -2062,12 +2064,12 @@ def test_build_coin_detail_no_setup_tf_returns_empty_setups():
     当用户点击 15m tab（BTC 无 15m 形态），setups 应为空，前端显示「该周期暂无谐波形态」。
     """
     s, _ = _store_with_harmonic_multi()
-    # BTC 只有 1h setup，30m 周期无形态
-    result = build_coin_detail(s, "BTC", tf="30m")
+    # BTC 只有 1h setup，6H 周期无形态
+    result = build_coin_detail(s, "BTC", tf="6H")
     s.close()
     assert result["coin"] == "BTC"
-    assert result["tf"] == "30m"
-    assert result["setups"] == [], f"BTC 30m 无形态，setups 应为 []，实得 {result['setups']}"
+    assert result["tf"] == "6H"
+    assert result["setups"] == [], f"BTC 6H 无形态，setups 应为 []，实得 {result['setups']}"
     # tfs_available 仍是固定 7 个
     assert len(result["tfs_available"]) == 7
 
@@ -2078,8 +2080,8 @@ def test_build_coin_detail_no_setup_tf_still_fetches_candles():
     此测试验证：candles 字段是 list（可为空，取决于 DB 是否有该周期 K 线），不抛异常。
     """
     s, _ = _store_with_harmonic_multi()
-    # 30m 周期：BTC 无 setup，也无 candles（未插入） → candles=[]，不抛
-    result = build_coin_detail(s, "BTC", tf="30m")
+    # 6H 周期：BTC 无 setup，也无 candles（未插入） → candles=[]，不抛
+    result = build_coin_detail(s, "BTC", tf="6H")
     s.close()
     assert isinstance(result["candles"], list), "candles 应为 list（无 K 线时为空 list）"
 
@@ -2089,7 +2091,7 @@ def test_build_coin_detail_empty_store_tfs_still_7():
     s = _store_empty()
     result = build_coin_detail(s, "NONEXISTENT")
     s.close()
-    assert result["tfs_available"] == ["15m", "30m", "1H", "4H", "12H", "1D", "1W"], (
+    assert result["tfs_available"] == ["15m", "1H", "4H", "6H", "12H", "1D", "1W"], (
         f"空库时 tfs_available 应为固定 7 周期，实得: {result['tfs_available']}"
     )
 

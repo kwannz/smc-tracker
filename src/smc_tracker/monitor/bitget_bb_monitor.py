@@ -27,7 +27,7 @@ class BitgetBBMonitor:
 
     Attributes:
         coin_to_symbol: {coin: bitget_symbol}，如 {"BTC": "BTCUSDT"}
-        timeframes:     需要计算的 granularity 列表，如 ["5m","15m","30m","1H","4H","1D","1W"]
+        timeframes:     需要计算的 granularity 列表（默认统一 CANONICAL_TIMEFRAMES：15m/1H/4H/6H/12H/1D/1W）
         bars:           每个周期拉取根数
         period:         布林带均线周期（默认 20）
         k:              标准差倍数（默认 2.0）

@@ -29,6 +29,11 @@
 1. **零孤儿**：每个源文件/模块必须接入运行时（app.py 或 poll_monitor.py 可达），**全部代码都要用上**。
    新建模块同迭代内必须接入 + 从所在目录 `__init__.py` 导出。改完用 grep 自查孤儿。
 2. **去重**：公共 helper 集中到 `util.py`（`to_float` 安全数值解析、`fmt_hms` 时间格式），不重复定义。
+   **统一多周期（单一真相源）**：全系统多周期 K 线**只用** `config.CANONICAL_TIMEFRAMES`
+   = **`15m / 1H / 4H / 6H / 12H / 1D / 1W`**（7 周期；用户#明确，其余周期如 30m 一律删除）。
+   谐波/BB/监控清单/采集器/dashboard 周期 tab 全部引用此常量，**禁止再各自硬编码周期列表**；
+   `bitget.GRANULARITY_MS` 是交易所**能力表**（含 30m/6H 等），非系统选择，勿混淆。
+   **每周期 K 线滚动保留 3000 根**（历史+实时统一上限，`Store.prune_candles_to(3000)`，超额删最旧）。
 3. **数据质量高**：摄入数据加校验（数值用 `util.to_float` 拒 NaN/inf；周期用 VALID_INTERVALS 校验；
    避免裸下标 `r["k"]`/`lst[0]` 导致 KeyError/IndexError；空串 `int()` 加守卫）。
 4. **低延迟**：热路径数值计算用 numpy 向量化（已把 indicators 关键循环向量化，compute_indicators ~1ms）；

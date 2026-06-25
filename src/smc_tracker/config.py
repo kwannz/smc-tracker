@@ -8,6 +8,12 @@ from typing import Any
 
 import yaml
 
+# ── 全系统统一多周期集（单一真相源）────────────────────────────────────────
+# 用户#明确：全系统统一为 15m/1h/4h/6h/12h/1d/1w，其余周期(如 30m)一律删除。
+# （Bitget GRANULARITY_MS 支持全部 7 周期，含 6H；已实证。）
+# 谐波/BB/监控清单/采集器/dashboard 周期 tab 全部引用此常量，禁止再各自硬编码周期列表。
+CANONICAL_TIMEFRAMES: list[str] = ["15m", "1H", "4H", "6H", "12H", "1D", "1W"]
+
 
 @dataclass(slots=True)
 class UniverseCfg:
@@ -101,8 +107,7 @@ class MonitoredCoinsCfg:
     timeframes：清单币的多周期采集集（默认 7 周期；6H 替代 Bitget 不支持的 8h）。
     """
     enabled: bool = False
-    timeframes: list[str] = field(
-        default_factory=lambda: ["15m", "1H", "4H", "6H", "12H", "1D", "1W"])
+    timeframes: list[str] = field(default_factory=lambda: list(CANONICAL_TIMEFRAMES))
     collect_interval_sec: float = 300.0
     vol_board_sec: float = 0.0   # 实时波动追踪板推送间隔(秒)；0=关闭(opt-in，零新增噪声)
 
@@ -307,9 +312,7 @@ class BollingerCfg:
     """
     enabled: bool = True
     interval_sec: float = 900.0          # 推送周期（默认 15 分钟）
-    timeframes: list[str] = field(
-        default_factory=lambda: ["15m", "1H", "4H", "12H", "1D", "1W"]
-    )
+    timeframes: list[str] = field(default_factory=lambda: list(CANONICAL_TIMEFRAMES))
     bars: int = 1000                     # 每周期 K 线根数（用户#：固定 1000）；大周期受 Bitget ~90天/请求上限+
                                          # max_pages 约束取全部可得历史；429 由 _get 退避重试兜底（实现层 clamp ≤1999）
     period: int = 20                     # 布林带均线周期
@@ -390,12 +393,8 @@ class HarmonicCfg:
     """
     enabled: bool = True
     interval_sec: float = 900.0
-    # 用户#：谐波精确 7 周期 15m/30m/1H/4H/12H/1D/1W。
-    # 历史注：曾用 6H 替代 8H（Bitget 不支持 8H），现用户明确要 30m 替代 6H。
-    # Bitget GRANULARITY_MS 支持全部 7 周期（15m/30m/1H/4H/12H/1D/1W 均已实证）。
-    timeframes: list[str] = field(
-        default_factory=lambda: ["15m", "30m", "1H", "4H", "12H", "1D", "1W"]
-    )
+    # 用户#：全系统统一为 CANONICAL_TIMEFRAMES（15m/1H/4H/6H/12H/1D/1W；删 30m）。
+    timeframes: list[str] = field(default_factory=lambda: list(CANONICAL_TIMEFRAMES))
     bars: int = 2500                     # 全局默认 K 线根数（tf_bars 未覆盖的 tf 用此值）
     # §C 高灵敏模式：order 3→2（更早枢轴，含更多早期形态），tol 0.05→0.07（宽容比率）。
     # ⚡注意：误检率上升，止损必执行。置信封顶不变（completed≤0.90/forming≤0.85）。
@@ -440,10 +439,10 @@ class HarmonicCfg:
 # 设计原则：小周期 K 线密集 → 多取覆盖历史；大周期 K 线稀少 → 少取即够枢轴识别。
 # 此为建议参考值，非硬编码默认；实际 HarmonicCfg.tf_bars 默认为空 dict（全用 bars）。
 HARMONIC_DEFAULT_TF_BARS: dict[str, int] = {
-    "15m": 3000,   # 15m：密集，3000 根 ≈ 31 天历史
-    "30m": 2500,   # 30m：沿用全局默认
+    "15m": 3000,   # 15m：密集，3000 根 ≈ 31 天历史（与 _CANDLE_RETAIN_BARS 滚动上限一致）
     "1H":  2000,   # 1H：2000 根 ≈ 83 天
     "4H":  1000,   # 4H：1000 根 ≈ 167 天
+    "6H":  800,    # 6H（8h 档替代）：800 根 ≈ 200 天
     "12H": 500,    # 12H：500 根 ≈ 250 天
     "1D":  365,    # 1D：约 1 年
     "1W":  200,    # 1W：约 4 年，K 线稀，200 根绰绰有余
