@@ -85,6 +85,33 @@ def move_score(m: dict) -> float:
             + _W_RV * m.get("rv", 0.0))
 
 
+def volatility_highlights(rows: list[dict], *, max_each: int = 5) -> dict:
+    """把逐周期矩阵综合成动向摘要（可操作情报）。纯函数。
+
+    - squeeze：处于压缩(蓄势，常先于突破)的 (coin,tf)，按 vol_ratio 升序（最压缩在前）。
+    - expansion：处于扩张(放量启动)的 (coin,tf)，按 |velocity| 降序（最大动量在前）。
+    - extreme_pd：PD≤10%(深折价)或≥90%(深溢价)的 (coin,tf)，按偏离 EQ 程度降序。
+    """
+    sq: list[dict] = []
+    ex: list[dict] = []
+    epd: list[dict] = []
+    for r in rows:
+        for tf, m in r.get("by_tf", {}).items():
+            rg = m.get("regime")
+            if rg == "压缩":
+                sq.append({"coin": r["coin"], "tf": tf, "vol_ratio": m.get("vol_ratio", 1.0)})
+            elif rg == "扩张":
+                ex.append({"coin": r["coin"], "tf": tf, "velocity": m.get("velocity", 0.0)})
+            p = m.get("pd_pct", 0.5)
+            if p <= 0.1 or p >= 0.9:
+                epd.append({"coin": r["coin"], "tf": tf, "pd_pct": p,
+                            "pd_zone": m.get("pd_zone", "")})
+    sq.sort(key=lambda x: x["vol_ratio"])
+    ex.sort(key=lambda x: abs(x["velocity"]), reverse=True)
+    epd.sort(key=lambda x: abs(x["pd_pct"] - 0.5), reverse=True)
+    return {"squeeze": sq[:max_each], "expansion": ex[:max_each], "extreme_pd": epd[:max_each]}
+
+
 class VolatilityMonitor:
     """逐周期读已采 K 线算波动+PD 指标，按运动分排序出当前在动的监控清单币。"""
 
@@ -136,6 +163,18 @@ class VolatilityMonitor:
         from ..util import fmt_ts  # noqa: PLC0415
         ts = fmt_ts(now_ms) if now_ms else ""
         lines = [f"🌀 实时波动追踪板 [{ts}] · 每周期指标(速度+加速度+区间+PD溢价折价) Top {top}"]
+        # 动向摘要：把矩阵综合成可操作情报
+        hl = volatility_highlights(rows)
+        if hl["squeeze"]:
+            lines.append("🔸蓄势(压缩): " + " ".join(
+                f"{x['coin']}/{x['tf']}" for x in hl["squeeze"]))
+        if hl["expansion"]:
+            lines.append("🔶放量(扩张): " + " ".join(
+                f"{x['coin']}/{x['tf']}({x['velocity']:+.1f}%)" for x in hl["expansion"]))
+        if hl["extreme_pd"]:
+            lines.append("⚡极端PD: " + " ".join(
+                f"{x['coin']}/{x['tf']}({x['pd_zone']}{x['pd_pct'] * 100:.0f}%)"
+                for x in hl["extreme_pd"]))
         for r in rows[:top]:
             lines.append(f"━ {r['coin']:<8} 运动分 {r['score']:.1f}")
             for tf in self.timeframes:

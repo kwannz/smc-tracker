@@ -10,7 +10,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from smc_tracker.monitor.volatility_monitor import (
-    vol_metrics, pdarray, VolatilityMonitor,
+    vol_metrics, pdarray, VolatilityMonitor, volatility_highlights,
 )
 
 
@@ -155,3 +155,24 @@ def test_per_tf_block_shows_each_tf():
 def test_rank_skips_insufficient_data():
     mon = VolatilityMonitor({"X": "XUSDT"}, ["15m"], _FakeStore({"X": [(1.0, 1.0, 1.0, 1.0)]}))
     assert mon.rank(0) == []
+
+
+def test_volatility_highlights_synthesizes_matrix():
+    """动向摘要：从矩阵提取 压缩(蓄势)/扩张(放量)/极端PD。"""
+    rows = [
+        {"coin": "A", "score": 1, "by_tf": {"15m": {
+            "velocity": 0.1, "vol_ratio": 0.3, "regime": "压缩", "pd_pct": 0.5, "pd_zone": "均衡"}}},
+        {"coin": "B", "score": 1, "by_tf": {"1H": {
+            "velocity": 5.0, "vol_ratio": 2.0, "regime": "扩张", "pd_pct": 0.95, "pd_zone": "溢价"}}},
+        {"coin": "C", "score": 1, "by_tf": {"4H": {
+            "velocity": -1.0, "vol_ratio": 1.0, "regime": "常态", "pd_pct": 0.05, "pd_zone": "折价"}}},
+    ]
+    h = volatility_highlights(rows)
+    assert [x["coin"] for x in h["squeeze"]] == ["A"]
+    assert [x["coin"] for x in h["expansion"]] == ["B"]
+    assert {x["coin"] for x in h["extreme_pd"]} == {"B", "C"}   # 0.95溢价 + 0.05折价
+
+
+def test_volatility_highlights_empty():
+    h = volatility_highlights([])
+    assert h == {"squeeze": [], "expansion": [], "extreme_pd": []}

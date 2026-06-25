@@ -16,7 +16,7 @@ from typing import Any
 import aiohttp.web
 
 from .config import CANONICAL_TIMEFRAMES
-from .monitor.volatility_monitor import VolatilityMonitor
+from .monitor.volatility_monitor import VolatilityMonitor, volatility_highlights
 
 
 def pick_coins(store: Any) -> dict[str, str]:
@@ -39,7 +39,8 @@ def volatility_state(
 ) -> dict:
     """构建波动面板 JSON 态：{tfs, coins:[{coin,score,by_tf:{tf:metrics}}]}。纯逻辑可测。"""
     mon = VolatilityMonitor(coins, timeframes, store)
-    return {"tfs": list(timeframes), "coins": mon.rank(now_ms)[:top]}
+    rows = mon.rank(now_ms)[:top]
+    return {"tfs": list(timeframes), "coins": rows, "highlights": volatility_highlights(rows)}
 
 
 def render_volatility_page() -> str:
@@ -55,8 +56,17 @@ def render_volatility_page() -> str:
  .note{color:#8b949e;font-size:12px}
 </style></head><body>
 <h1>🌀 实时波动追踪 <span class="note">逐周期 速度·PD溢价折价·波动状态（绿=折价/买区 红=溢价/卖区；🔸压缩=蓄势 🔶扩张=放量）</span></h1>
+<div id="hl" class="note"></div>
 <div id="box" class="note">加载中…</div>
 <script>
+function hlbar(h){
+ if(!h) return '';
+ var s='';
+ if(h.squeeze&&h.squeeze.length) s+='🔸蓄势: '+h.squeeze.map(function(x){return x.coin+'/'+x.tf;}).join(' ')+'　';
+ if(h.expansion&&h.expansion.length) s+='🔶放量: '+h.expansion.map(function(x){return x.coin+'/'+x.tf+'('+(x.velocity>=0?'+':'')+x.velocity.toFixed(1)+'%)';}).join(' ')+'　';
+ if(h.extreme_pd&&h.extreme_pd.length) s+='⚡极端PD: '+h.extreme_pd.map(function(x){return x.coin+'/'+x.tf+'('+x.pd_zone+Math.round(x.pd_pct*100)+'%)';}).join(' ');
+ return s;
+}
 function cell(m){
  if(!m) return '<td class="eq">—</td>';
  var v=m.velocity, cls=v>=0?'up':'dn', arr=v>=0?'↑':'↓';
@@ -68,6 +78,7 @@ function cell(m){
 async function load(){
  var r=await fetch('/api/volatility'); var j=await r.json();
  var tfs=j.tfs||[], coins=j.coins||[];
+ document.getElementById('hl').innerHTML=hlbar(j.highlights);
  if(!coins.length){document.getElementById('box').textContent='暂无数据（监控清单为空或采集器未填 K 线）';return;}
  var h='<table><thead><tr><th>币</th><th>分</th>';
  tfs.forEach(function(t){h+='<th>'+t+'</th>';}); h+='</tr></thead><tbody>';

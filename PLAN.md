@@ -213,6 +213,11 @@ D 多空符号 · E 真实 userFills 解析/分类自洽 · F WS webData2==REST 
 > 据 codex-loop 反幻觉纪律保持开放，区别于「已实现但 backlog 写保守」的项（已核实证据后闭合）。
 
 ## 迭代日志
+- 2026-06-26 #110: **波动动向摘要(蓄势/放量/极端PD)把矩阵综合成可操作情报**（/loop；本地 main 开发不推送）。
+  `volatility_highlights(rows)` 纯函数扫逐周期矩阵 → 🔸蓄势(压缩,按 vol_ratio 升序)/🔶放量(扩张,按|velocity|降序)/
+  ⚡极端PD(≤10%深折价或≥90%深溢价)；接入 CLI 板头部摘要 + dashboard `/api/volatility` highlights + 页面摘要条。
+  真实数据实证：三大币 15m 蓄势·1H 放量·1W/1D 深折价(逼近周线底)，3 行综合 21 格矩阵。
+  模块 192 行(守 800)。TDD 2 例；全量 **2333 passed, 2 skipped**（零回归）。
 - 2026-06-26 #109: **真实数据全链路实证（CLAUDE.md §四-2，非投资建议）+ 固化验证脚本**（/loop：全栈实时波动）。
   真实 Bitget 数据跑通整条「监控清单 → 真实多周期采集 → 波动/regime/PD 板」：watch add BTC/ETH/SOL →
   `BitgetCandleCollector` 真实采集 **4029 根** K 线(3 币 × 7 canonical 周期，全覆盖) → `VolatilityMonitor`
