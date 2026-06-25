@@ -1,0 +1,650 @@
+<!DOCTYPE html>
+<html lang="zh-Hans">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>SMC 抓庄监控</title>
+<style>
+:root{{
+  --bg:#0d1117;--card:#161b22;--border:#30363d;--text:#c9d1d9;
+  --muted:#8b949e;--green:#3fb950;--red:#f85149;--blue:#58a6ff;
+  --yellow:#e3b341;--purple:#bc8cff;--orange:#ffa657;
+  --card-shadow:0 1px 4px rgba(0,0,0,.35);
+  --accent-border:rgba(88,166,255,.28);--accent-bg:rgba(88,166,255,.06);
+}}
+*{{box-sizing:border-box;margin:0;padding:0}}
+body{{background:var(--bg);color:var(--text);
+  font-family:'Inter',system-ui,-apple-system,sans-serif;
+  font-size:13px;line-height:1.5}}
+.mono{{font-family:"SF Mono",ui-monospace,monospace;
+  font-variant-numeric:tabular-nums}}
+header{{padding:14px 24px;border-bottom:1px solid var(--border);
+  display:flex;align-items:center;gap:16px;flex-wrap:wrap}}
+h1{{font-size:19px;color:var(--blue);font-weight:700}}
+#meta{{color:var(--muted);font-size:12px}}
+.hdr-nav{{display:flex;gap:6px;margin-left:auto}}
+.hdr-nav a{{font-size:11.5px;color:var(--muted);text-decoration:none;
+  border:1px solid var(--border);border-radius:5px;padding:3px 10px;
+  transition:color .15s,border-color .15s}}
+.hdr-nav a:hover{{color:var(--blue);border-color:var(--blue)}}
+main{{display:grid;grid-template-columns:repeat(auto-fill,minmax(480px,1fr));gap:16px;padding:16px}}
+.card{{background:var(--card);border:1px solid var(--border);border-radius:8px;overflow:hidden;
+  box-shadow:var(--card-shadow);
+  transition:box-shadow .15s,border-color .15s}}
+.card:hover{{box-shadow:0 2px 8px rgba(0,0,0,.45)}}
+.card.accent{{border-color:var(--accent-border)}}
+.card.accent .card-title{{background:var(--accent-bg)}}
+.card-title{{padding:10px 14px;border-bottom:1px solid var(--border);
+  font-weight:700;color:var(--blue);font-size:13px}}
+.card-body{{padding:12px 14px;overflow-x:auto}}
+table{{width:100%;border-collapse:collapse;font-size:12px}}
+th{{color:var(--muted);font-weight:600;text-align:left;padding:4px 6px;border-bottom:1px solid var(--border)}}
+td{{padding:3px 6px;vertical-align:top;white-space:nowrap}}
+tr:hover td{{background:rgba(255,255,255,.06)}}
+.long{{color:var(--green)}} .short{{color:var(--red)}}
+.bullish{{color:var(--green)}} .bearish{{color:var(--red)}}
+.pos{{color:var(--green)}} .neg{{color:var(--red)}}
+.none{{color:var(--muted);font-style:italic}}
+.tag{{display:inline-block;padding:1px 5px;border-radius:4px;font-size:11px;font-weight:600}}
+.tag-long{{background:#1a3a2a;color:var(--green)}}
+.tag-short{{background:#3a1a1a;color:var(--red)}}
+.addr{{font-family:"SF Mono",ui-monospace,monospace;font-size:11px;color:var(--purple)}}
+.coin{{color:var(--orange);font-weight:600}}
+.score{{color:var(--yellow)}}
+#refresh-bar{{font-size:11px;color:var(--muted);padding:4px 24px;border-top:1px solid var(--border)}}
+@keyframes flashin{{0%{{background:rgba(88,166,255,.12)}}100%{{background:transparent}}}}
+</style>
+</head>
+<body>
+<header>
+  <h1>🐋 SMC 抓庄监控</h1>
+  <span id="meta">加载中…</span>
+  <nav class="hdr-nav">
+    <a href="/hl2">HL 系统</a>
+    <a href="/harmonic2">谐波系统</a>
+    <a href="/signals">信号总览</a>
+  </nav>
+</header>
+<main id="main"><!-- 由 JS renderAll() 填充 --></main>
+<div id="refresh-bar">自动刷新 · 5 秒</div>
+<script>
+const S = __INITIAL_STATE__;
+
+// ---- CSS 色彩 token（单一来源，SVG 拼接复用）----
+const CV = {{
+  green:'#3fb950', red:'#f85149', blue:'#58a6ff',
+  muted:'#8b949e', border:'#30363d',
+}};
+
+// ---------- 工具函数 ----------
+function fmtTime(ms){{
+  if(!ms)return'--';
+  const d=new Date(ms);
+  return d.toLocaleTimeString('zh-CN',{{hour12:false}});
+}}
+function fmtUsd(v){{
+  if(v==null)return'--';
+  const n=parseFloat(v);
+  if(isNaN(n))return'--';
+  const abs=Math.abs(n);
+  let s;
+  if(abs>=1e9)s=(n/1e9).toFixed(2)+'B';
+  else if(abs>=1e6)s=(n/1e6).toFixed(2)+'M';
+  else if(abs>=1e3)s=(n/1e3).toFixed(1)+'K';
+  else s=n.toFixed(2);
+  return(n>=0?'$':'−$')+s.replace('-','');
+}}
+function fmtNum(v,dec=2){{
+  if(v==null)return'--';
+  const n=parseFloat(v);
+  return isNaN(n)?'--':n.toFixed(dec);
+}}
+function fmtPct(v){{
+  if(v==null)return'--';
+  return(parseFloat(v)*100).toFixed(3)+'%';
+}}
+function shortAddr(a){{
+  if(!a)return'--';
+  if(a.startsWith('0x')&&a.length>10)return a.slice(0,6)+'…'+a.slice(-4);
+  if(a.length>12)return a.slice(0,6)+'…'+a.slice(-4);
+  return a;
+}}
+function dirTag(d){{
+  if(!d)return'';
+  const cls=d==='long'?'tag-long':'tag-short';
+  const lbl=d==='long'?'做多':'做空';
+  return`<span class="tag ${{cls}}">${{lbl}}</span>`;
+}}
+function none(){{ return'<span class="none">（无）</span>'; }}
+
+// ---------- 纯 inline SVG 图表（无 CDN/无依赖）----------
+// XML 转义：防止标签文本里的 < > & 破坏 SVG 结构
+function svgEsc(s){{
+  return String(s==null?'':s)
+    .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}}
+// 发散横向条形图：每项一行，标签在左，横条从中线向右(正/绿)或向左(负/红)，数值在右
+//   items: 数据数组；getLabel(item)->标签字符串；getVal(item)->数值
+//   opts: {{fmt: 数值->显示文本; width: viewBox 宽; labelW: 标签列宽; valW: 数值列宽}}
+//   无数据返回空串。
+function svgBars(items, getLabel, getVal, opts){{
+  if(!items||!items.length)return'';
+  opts=opts||{{}};
+  const width=opts.width||460;
+  const labelW=opts.labelW||96;
+  const valW=opts.valW||78;
+  const fmt=opts.fmt||(v=>fmtUsd(v));
+  const rowH=22, padT=6, padB=6;
+  // 归一化：取所有 |值| 的最大值（>0 防除零）
+  let maxAbs=0;
+  items.forEach(it=>{{ const v=Math.abs(parseFloat(getVal(it))||0); if(v>maxAbs)maxAbs=v; }});
+  if(maxAbs<=0)maxAbs=1;
+  // 绘图区：中线两侧各占一半（barArea 为单侧最大像素长度）
+  const x0=labelW;                       // 条形区左起点
+  const x1=width-valW;                   // 条形区右终点
+  const mid=(x0+x1)/2;                   // 中线（0 值）
+  const half=(x1-x0)/2-2;                // 单侧最大长度
+  const h=items.length*rowH+padT+padB;
+  let s=`<svg viewBox="0 0 ${{width}} ${{h}}" width="100%" height="${{h}}" `
+       +`xmlns="http://www.w3.org/2000/svg" style="display:block">`;
+  // 中线（0 轴）
+  s+=`<line x1="${{mid}}" y1="${{padT}}" x2="${{mid}}" y2="${{h-padB}}" `
+    +`stroke="${{CV.border}}" stroke-width="1"/>`;
+  items.forEach((it,i)=>{{
+    const v=parseFloat(getVal(it))||0;
+    const y=padT+i*rowH;
+    const cy=y+rowH/2;
+    const len=Math.abs(v)/maxAbs*half;
+    const color=v>=0?CV.green:CV.red;   // 正绿/负红
+    // 条形：正值从中线向右，负值从中线向左
+    const bx=v>=0?mid:(mid-len);
+    s+=`<rect x="${{bx}}" y="${{y+4}}" width="${{Math.max(len,0.5)}}" height="${{rowH-8}}" `
+      +`fill="${{color}}" rx="2"/>`;
+    // 左侧标签
+    s+=`<text x="4" y="${{cy+4}}" fill="${{CV.muted}}" font-size="11">`
+      +`${{svgEsc(getLabel(it))}}</text>`;
+    // 右侧数值（按符号着色）
+    s+=`<text x="${{width-4}}" y="${{cy+4}}" fill="${{color}}" font-size="11" `
+      +`text-anchor="end">${{svgEsc(fmt(v))}}</text>`;
+  }});
+  s+=`</svg>`;
+  return s;
+}}
+// 折线 sparkline：points=数值数组，返回 inline SVG <polyline>；无/单点安全返回空串
+function svgSpark(points, opts){{
+  if(!points||points.length<2)return'';
+  opts=opts||{{}};
+  const width=opts.width||160;
+  const height=opts.height||32;
+  const pad=2;
+  let lo=Infinity, hi=-Infinity;
+  points.forEach(p=>{{ const v=parseFloat(p); if(!isNaN(v)){{ if(v<lo)lo=v; if(v>hi)hi=v; }} }});
+  if(!isFinite(lo)||!isFinite(hi))return'';
+  const span=(hi-lo)||1;                 // 防除零（全平时 span=1）
+  const n=points.length;
+  const dx=(width-2*pad)/(n-1);
+  const color=opts.color||CV.blue;
+  let pts='';
+  points.forEach((p,i)=>{{
+    const v=parseFloat(p)||0;
+    const x=pad+i*dx;
+    // y 翻转（SVG 原点左上：高值在上）
+    const y=height-pad-((v-lo)/span)*(height-2*pad);
+    pts+=`${{x.toFixed(1)}},${{y.toFixed(1)}} `;
+  }});
+  return`<svg viewBox="0 0 ${{width}} ${{height}}" width="${{width}}" height="${{height}}" `
+       +`xmlns="http://www.w3.org/2000/svg" style="display:block">`
+       +`<polyline points="${{pts.trim()}}" fill="none" stroke="${{color}}" `
+       +`stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round"/></svg>`;
+}}
+
+// ---------- 各 section 渲染 ----------
+function renderSignals(rows){{
+  if(!rows||!rows.length)return none();
+  let h='<table><tr><th>时间</th><th>标的</th><th>方向</th><th>评分</th><th>入场</th><th>止损</th><th>目标</th><th>RR</th></tr>';
+  rows.forEach(r=>{{
+    h+=`<tr>
+      <td>${{fmtTime(r.ts)}}</td>
+      <td class="coin">${{r.coin||''}}</td>
+      <td>${{dirTag(r.direction)}}</td>
+      <td class="score">${{fmtNum(r.score,2)}}</td>
+      <td>${{r.entry?fmtNum(r.entry,4):'--'}}</td>
+      <td>${{r.stop?fmtNum(r.stop,4):'--'}}</td>
+      <td>${{r.target?fmtNum(r.target,4):'--'}}</td>
+      <td>${{r.rr?fmtNum(r.rr,2):'--'}}</td>
+    </tr>`;
+  }});
+  return h+'</table>';
+}}
+
+function renderDivergence(rows){{
+  if(!rows||!rows.length)return none();
+  let h='<table><tr><th>时间</th><th>标的</th><th>偏向</th><th>评分</th><th>资金费</th><th>DEX净流</th></tr>';
+  rows.forEach(r=>{{
+    const cls=r.direction==='bullish'?'bullish':'bearish';
+    const lbl=r.direction==='bullish'?'吸筹↑':'分销↓';
+    h+=`<tr>
+      <td>${{fmtTime(r.ts)}}</td>
+      <td class="coin">${{r.coin||''}}</td>
+      <td class="${{cls}}">${{lbl}}</td>
+      <td class="score">${{fmtNum(r.score,2)}}</td>
+      <td>${{fmtPct(r.funding)}}</td>
+      <td>${{fmtUsd(r.dex_flow_usd)}}</td>
+    </tr>`;
+  }});
+  return h+'</table>';
+}}
+
+function renderWhaleFlows(rows){{
+  if(!rows||!rows.length)return none();
+  // 图在上：净流向发散条形图（净买绿向右 / 净卖红向左），数值用美元格式
+  const chart=svgBars(
+    rows,
+    r=>r.coin||'',
+    r=>parseFloat(r.net)||0,
+    {{fmt:v=>(v>=0?'净买 ':'净卖 ')+fmtUsd(Math.abs(v))}}
+  );
+  // 表在下：原始明细表
+  let h='<table><tr><th>标的</th><th>净主动流向</th><th>方向</th></tr>';
+  rows.forEach(r=>{{
+    const n=parseFloat(r.net)||0;
+    const cls=n>=0?'pos':'neg';
+    const arrow=n>=0?'净买↑':'净卖↓';
+    h+=`<tr>
+      <td class="coin">${{r.coin||''}}</td>
+      <td class="${{cls}}">${{fmtUsd(Math.abs(n))}}</td>
+      <td class="${{cls}}">${{arrow}}</td>
+    </tr>`;
+  }});
+  return chart+h+'</table>';
+}}
+
+function renderTopAddresses(rows){{
+  if(!rows||!rows.length)return none();
+  let h='<table><tr><th>地址</th><th>评分</th><th>净值</th><th>月PnL</th><th>偏向</th><th>偏好</th></tr>';
+  rows.forEach(r=>{{
+    h+=`<tr>
+      <td class="addr" title="${{r.address||''}}">${{shortAddr(r.address)}}</td>
+      <td class="score">${{fmtNum(r.score,1)}}</td>
+      <td>${{fmtUsd(r.account_value)}}</td>
+      <td class="${{parseFloat(r.month_pnl)>=0?'pos':'neg'}}">${{fmtUsd(r.month_pnl)}}</td>
+      <td>${{r.net_bias||'--'}}</td>
+      <td style="color:var(--muted);max-width:120px;overflow:hidden;text-overflow:ellipsis">${{r.fav_coins||'--'}}</td>
+    </tr>`;
+  }});
+  return h+'</table>';
+}}
+
+function renderClusters(rows){{
+  if(!rows||!rows.length)return none();
+  let h='<table><tr><th>#</th><th>成员数</th><th>协同次数</th><th>跨币数</th><th>涉及币种</th><th>成员</th></tr>';
+  rows.forEach((r,i)=>{{
+    const coins=(r.coin_list||[]).slice(0,5).join(' ');
+    const members=(r.members||[]).map(shortAddr).join(' ');
+    h+=`<tr>
+      <td>${{i+1}}</td>
+      <td>${{r.size||0}}</td>
+      <td class="score">${{r.events||0}}</td>
+      <td class="${{(r.coins||0)>=2?'pos':'muted'}}">${{r.coins||0}}</td>
+      <td class="coin">${{coins||'--'}}</td>
+      <td class="addr" style="white-space:normal">${{members}}</td>
+    </tr>`;
+  }});
+  return h+'</table>';
+}}
+
+function renderOiSurges(rows){{
+  if(!rows||!rows.length)return none();
+  let h='<table><tr><th>合约</th><th>OI(张)</th><th>资金费</th><th>更新时间</th></tr>';
+  rows.forEach(r=>{{
+    h+=`<tr>
+      <td class="coin">${{r.symbol||''}}</td>
+      <td>${{fmtNum(r.oi_size,0)}}</td>
+      <td>${{fmtPct(r.funding)}}</td>
+      <td>${{fmtTime(r.ts)}}</td>
+    </tr>`;
+  }});
+  return h+'</table>';
+}}
+
+function renderOnchain(rows){{
+  if(!rows||!rows.length)return none();
+  let h='<table><tr><th>时间</th><th>标的</th><th>链</th><th>数量(USD)</th><th>TxHash</th></tr>';
+  rows.forEach(r=>{{
+    const th=r.tx_hash||'';
+    h+=`<tr>
+      <td>${{fmtTime(r.ts)}}</td>
+      <td class="coin">${{r.coin||''}}</td>
+      <td>${{r.chain||''}}</td>
+      <td>${{fmtUsd(r.amount_usd)}}</td>
+      <td class="addr" title="${{th}}">${{shortAddr(th)}}</td>
+    </tr>`;
+  }});
+  return h+'</table>';
+}}
+
+function renderWhaleSignals(rows){{
+  if(!rows||!rows.length)return none();
+  let h='<table><tr><th>时间</th><th>标签</th><th>标的</th><th>方向</th><th>名义(USD)</th><th>价格</th></tr>';
+  rows.forEach(r=>{{
+    h+=`<tr>
+      <td>${{fmtTime(r.ts)}}</td>
+      <td class="addr">${{r.label||'--'}}</td>
+      <td class="coin">${{r.coin||''}}</td>
+      <td>${{dirTag(r.direction)}}</td>
+      <td>${{fmtUsd(r.notional)}}</td>
+      <td>${{fmtNum(r.px,4)}}</td>
+    </tr>`;
+  }});
+  return h+'</table>';
+}}
+
+function fmtOpenTime(open_ms){{
+  // 将 open_ms(ms 时间戳) 格式化为本地时间 MM-DD HH:MM
+  if(!open_ms)return'—';
+  const d=new Date(open_ms);
+  const mo=String(d.getMonth()+1).padStart(2,'0');
+  const dd=String(d.getDate()).padStart(2,'0');
+  const hh=String(d.getHours()).padStart(2,'0');
+  const mm=String(d.getMinutes()).padStart(2,'0');
+  return`${{mo}}-${{dd}} ${{hh}}:${{mm}}`;
+}}
+function fmtHoldSec(hold_sec){{
+  // 将 hold_sec(秒) 格式化为紧凑时长
+  if(hold_sec==null||hold_sec<=0)return'—';
+  const s=Math.floor(hold_sec);
+  if(s<60)return s+'s';
+  const m=Math.floor(s/60);
+  if(m<60)return m+'m';
+  const h=Math.floor(m/60);
+  const mr=m%60;
+  if(h<24)return h+'h'+(mr?mr+'m':'');
+  const d=Math.floor(h/24);
+  const hr=h%24;
+  return d+'d'+(hr?hr+'h':'');
+}}
+function renderWalletPortfolio(rows){{
+  if(!rows||!rows.length)return none();
+  let html='';
+  rows.forEach(r=>{{
+    const shortA=shortAddr(r.address);
+    const lbl=r.label||shortA;
+    html+=`<div style="margin-bottom:14px;border-bottom:1px solid var(--border);padding-bottom:10px">`;
+    html+=`<div style="font-weight:700;color:var(--blue);margin-bottom:4px">`;
+    html+=`🏦 ${{lbl}} <span class="addr" title="${{r.address||''}}">${{shortA}}</span>`;
+    html+=` 净值${{fmtUsd(r.account_value)}} 总名义${{fmtUsd(r.total_ntl_pos)}} 持仓${{r.n_positions||0}}个`;
+    html+=`</div>`;
+    if(r.positions&&r.positions.length){{
+      html+='<table><tr><th>币种</th><th>方向</th><th>名义</th><th>入场</th><th>uPnL</th><th>杠杆</th><th>爆仓</th><th>开仓时间</th><th>持仓时长</th></tr>';
+      r.positions.forEach(p=>{{
+        const dc=p.direction==='long'?'long':'short';
+        const dlbl=p.direction==='long'?'多🟢':'空🔴';
+        const upnl=parseFloat(p.unrealized_pnl||0);
+        html+=`<tr>
+          <td class="coin">${{p.coin||''}}</td>
+          <td class="${{dc}}">${{dlbl}}</td>
+          <td>${{fmtUsd(p.position_value)}}</td>
+          <td>${{p.entry_px!=null?fmtNum(p.entry_px,4):'--'}}</td>
+          <td class="${{upnl>=0?'pos':'neg'}}">${{fmtUsd(p.unrealized_pnl)}}</td>
+          <td>${{p.leverage!=null?fmtNum(p.leverage,0)+'x':'--'}}</td>
+          <td style="color:var(--muted)">${{p.liquidation_px!=null?fmtNum(p.liquidation_px,4):'—'}}</td>
+          <td style="color:var(--muted);font-size:11px">${{fmtOpenTime(p.open_ms)}}</td>
+          <td style="color:var(--yellow)">${{fmtHoldSec(p.hold_sec)}}</td>
+        </tr>`;
+      }});
+      html+='</table>';
+    }}else{{html+='<span class="none">暂无持仓</span>';}}
+    html+='</div>';
+  }});
+  return html;
+}}
+
+function renderExchangeFlows(rows){{
+  if(!rows||!rows.length)return none();
+  let h='<table><tr><th>交易所</th><th>链</th><th>净流(BTC)</th><th>流入</th><th>流出</th><th>笔数</th><th>更新时间</th></tr>';
+  rows.forEach(r=>{{
+    const net=parseFloat(r.net)||0;
+    // 净流入(正)=资金流向交易所/潜在抛压🔴；净流出(负)=资金离开交易所/潜在吸筹🟢
+    const netSymbol=net>=0?'🔴':'🟢';
+    const netCls=net>=0?'neg':'pos';
+    const netStr=netSymbol+' '+(net>=0?'+':'')+fmtNum(net,2);
+    h+=`<tr>
+      <td class="coin">${{r.exchange||''}}</td>
+      <td>${{r.chain||'BTC'}}</td>
+      <td class="${{netCls}}">${{netStr}}</td>
+      <td>${{fmtNum(r.inflow,2)}}</td>
+      <td>${{fmtNum(r.outflow,2)}}</td>
+      <td>${{r.n_tx||0}}</td>
+      <td style="color:var(--muted);font-size:11px">${{r.dt||'--'}}</td>
+    </tr>`;
+  }});
+  return h+'</table>';
+}}
+
+function renderOkxLiquidations(rows){{
+  if(!rows||!rows.length)return none();
+  // 先按 coin 聚合强平名义总额 → 条形图（强平规模 by coin，全部为正→统一红色告警语义）
+  const agg={{}};
+  rows.forEach(r=>{{
+    const c=r.coin||'?';
+    agg[c]=(agg[c]||0)+(parseFloat(r.notional)||0);
+  }});
+  const items=Object.keys(agg)
+    .map(c=>({{coin:c, total:agg[c]}}))
+    .sort((a,b)=>b.total-a.total)
+    .slice(0,12);
+  const chart=svgBars(
+    items,
+    it=>it.coin,
+    it=>parseFloat(it.total)||0,
+    {{fmt:v=>'💥 '+fmtUsd(Math.abs(v))}}
+  );
+  // 表在下：时间/coin/被平方向/名义（pos_side='long'=多头被平→抛压级联；'short'=空头被平→逼空）
+  let h='<div style="color:var(--muted);font-size:11px;margin-bottom:6px">'
+       +'诚实标注：强平=已发生告警（多头被平🔴抛压级联 / 空头被平🟢逼空）</div>';
+  h+='<table><tr><th>时间</th><th>标的</th><th>被平方向</th><th>名义(USD)</th></tr>';
+  rows.slice().reverse().forEach(r=>{{   // reverse：最新在前（底层按 ts ASC）
+    const ps=r.pos_side;
+    const psLbl=ps==='long'?'多头被平🔴':(ps==='short'?'空头被平🟢':(ps||'--'));
+    const psCls=ps==='long'?'neg':(ps==='short'?'pos':'');
+    h+=`<tr>
+      <td>${{fmtTime(r.ts)}}</td>
+      <td class="coin">${{r.coin||''}}</td>
+      <td class="${{psCls}}">${{psLbl}}</td>
+      <td>${{fmtUsd(r.notional)}}</td>
+    </tr>`;
+  }});
+  return chart+h+'</table>';
+}}
+
+function renderOkxSignals(rows){{
+  if(!rows||!rows.length)return none();
+  // 表：coin/方向/类型/净流向（kind: accumulation=吸筹 / distribution=分销）
+  let h='<table><tr><th>标的</th><th>方向</th><th>类型</th><th>净流向(USD)</th></tr>';
+  rows.slice().reverse().forEach(r=>{{   // reverse：最新在前（底层按 ts ASC）
+    const k=r.kind;
+    const kLbl=k==='accumulation'?'吸筹↑':(k==='distribution'?'分销↓':(k||'--'));
+    const n=parseFloat(r.net_flow)||0;
+    const nCls=n>=0?'pos':'neg';
+    h+=`<tr>
+      <td class="coin">${{r.coin||''}}</td>
+      <td>${{dirTag(r.direction)}}</td>
+      <td>${{kLbl}}</td>
+      <td class="${{nCls}}">${{(n>=0?'净买 ':'净卖 ')+fmtUsd(Math.abs(n))}}</td>
+    </tr>`;
+  }});
+  return h+'</table>';
+}}
+
+function renderHlWalls(rows){{
+  if(!rows||!rows.length)return none();
+  // 可选图：按 coin 聚合墙名义总额（spoof 风险高，仅作意图体量参考）
+  const agg={{}};
+  rows.forEach(r=>{{
+    const c=r.coin||'?';
+    agg[c]=(agg[c]||0)+(parseFloat(r.notional)||0);
+  }});
+  const items=Object.keys(agg)
+    .map(c=>({{coin:c, total:agg[c]}}))
+    .sort((a,b)=>b.total-a.total)
+    .slice(0,12);
+  const chart=svgBars(
+    items,
+    it=>it.coin,
+    it=>parseFloat(it.total)||0,
+    {{fmt:v=>'🧱 '+fmtUsd(Math.abs(v))}}
+  );
+  // 诚实标注：挂单墙=未成交意图（可能 spoof 诱多/诱空），非已实现
+  let h='<div style="color:var(--muted);font-size:11px;margin-bottom:6px">'
+       +'诚实标注：挂单墙=未成交意图（领先信号，但可能 spoof 诱单）</div>';
+  h+='<table><tr><th>时间</th><th>标的</th><th>墙向</th><th>动作</th><th>价</th><th>名义(USD)</th></tr>';
+  rows.slice().reverse().forEach(r=>{{   // reverse：最新在前（底层按 ts ASC）
+    // side: 'bid'=买墙(支撑/吸筹意图) / 'ask'=卖墙(压制/分销意图)
+    const sd=r.side;
+    const sdLbl=sd==='bid'?'买墙🟢':(sd==='ask'?'卖墙🔴':(sd||'--'));
+    const sdCls=sd==='bid'?'pos':(sd==='ask'?'neg':'');
+    // kind: 'build'=墙出现 / 'pull'=抽单（撤墙，意图反转/诱单兑现）
+    const k=r.kind;
+    const kLbl=k==='build'?'出现':(k==='pull'?'抽单':(k||'--'));
+    h+=`<tr>
+      <td>${{fmtTime(r.ts)}}</td>
+      <td class="coin">${{r.coin||''}}</td>
+      <td class="${{sdCls}}">${{sdLbl}}</td>
+      <td>${{kLbl}}</td>
+      <td>${{r.px!=null?fmtNum(r.px,4):'--'}}</td>
+      <td>${{fmtUsd(r.notional)}}</td>
+    </tr>`;
+  }});
+  return chart+h+'</table>';
+}}
+
+function renderHealth(h){{
+  if(!h||!h.freshness||!h.freshness.length)return none();
+  const ok=h.ok?'<span class="pos">✅ 健康</span>':'<span class="neg">⚠️ 告警</span>';
+  let html='<div style="margin-bottom:8px">总体：'+ok+'</div>';
+  html+='<table><tr><th>表</th><th>行数</th><th>最新</th><th>状态</th></tr>';
+  h.freshness.forEach(f=>{{
+    let st,cls;
+    if(!f.exists){{st='缺失';cls='neg';}}
+    else if(f.age_s==null){{st='空表';cls='none';}}
+    else if(f.stale){{st=(f.age_s/3600).toFixed(1)+'h前·陈旧';cls='neg';}}
+    else{{st=(f.age_s/3600).toFixed(1)+'h前';cls='pos';}}
+    html+=`<tr><td>${{f.table}}</td><td>${{f.n||0}}</td><td style="color:var(--muted);font-size:11px">${{f.latest_dt||'--'}}</td><td class="${{cls}}">${{st}}</td></tr>`;
+  }});
+  html+='</table>';
+  const p=h.predictions||{{}};
+  const ovCls=(p.overdue||0)>0?'neg':'pos';
+  html+=`<div style="margin-top:8px">验证闭环：预测 ${{p.total||0}} · 已评 ${{p.evaluated||0}} · 待评 ${{p.pending||0}} · <span class="${{ovCls}}">到期未评 ${{p.overdue||0}}</span></div>`;
+  return html;
+}}
+
+function renderAccuracy(a){{
+  if(!a||!a.total_n)return '<span class="none">样本不足，继续积累（尚无已到期评估）</span>';
+  const hr=(a.hit_rate*100).toFixed(1);
+  const edge=a.edge*100;
+  const edgeCls=edge>=0?'pos':'neg';
+  const edgeStr=(edge>=0?'+':'')+edge.toFixed(1)+'pp';
+  let html=`<div style="margin-bottom:6px">总体：样本 ${{a.total_n}} · 命中率 ${{hr}}% · 相对随机 <span class="${{edgeCls}}">${{edgeStr}}</span></div>`;
+  if(!a.sufficient){{html+=`<div class="neg" style="margin-bottom:6px">⚠️ 样本不足(${{a.total_n}}<${{a.min_sample||20}})，结论仅供参考</div>`;}}
+  const bk=a.by_kind||{{}};
+  const keys=Object.keys(bk);
+  if(keys.length){{
+    html+='<table><tr><th>类型</th><th>命中</th><th>命中率</th><th>边际</th><th>均按向收益</th></tr>';
+    keys.forEach(k=>{{
+      const d=bk[k];
+      const e=d.edge*100;
+      const ecls=e>=0?'pos':'neg';
+      const ar=d.avg_ret*100;
+      html+=`<tr><td>${{k}}</td><td>${{d.hits}}/${{d.n}}</td><td>${{(d.hit_rate*100).toFixed(0)}}%</td><td class="${{ecls}}">${{(e>=0?'+':'')+e.toFixed(0)}}pp</td><td class="${{ar>=0?'pos':'neg'}}">${{(ar>=0?'+':'')+ar.toFixed(2)}}%</td></tr>`;
+    }});
+    html+='</table>';
+  }}
+  // MTF 多时间段命中率（alpha 诊断：哪个 TF 有真 alpha）
+  const bh=a.by_horizon||{{}};
+  const bhMn=a.by_horizon_market_neutral||{{}};
+  const hzKeys=Object.keys(bh).map(Number).sort((x,y)=>x-y);
+  function tfLabel(hzMs){{
+    const min=Math.round(hzMs/60000);
+    return min<60?min+'m':(min/60)+'h';
+  }}
+  if(hzKeys.length){{
+    html+='<div style="margin-top:8px;font-weight:600">MTF alpha 诊断（各时间段命中率）：</div>';
+    // 图在上：各 TF 命中率发散条形图（以 50% 随机基线为中心，>50% 绿/<50% 红）
+    const hrItems=hzKeys.map(hz=>({{hz:hz, hr:bh[hz].hit_rate}}));
+    const hrChart=svgBars(
+      hrItems,
+      it=>tfLabel(it.hz),
+      it=>(parseFloat(it.hr)||0)-0.5,   // 相对 50% 随机基线的偏移（正=有边际）
+      {{fmt:it=>((parseFloat(it)+0.5)*100).toFixed(0)+'%'}}
+    );
+    html+=hrChart;
+    html+='<table><tr><th>TF</th><th>命中</th><th>命中率</th><th>边际</th><th>均按向收益</th><th>中性alpha边际</th><th>样本</th></tr>';
+    hzKeys.forEach(hz=>{{
+      const d=bh[hz];
+      const mn=bhMn[hz]||{{}};
+      const e=d.edge*100;
+      const ecls=e>=0?'pos':'neg';
+      const ar=d.avg_ret*100;
+      const mnEdge=mn.edge!=null?(mn.edge*100):null;
+      const mnStr=mnEdge!=null?`<span class="${{mnEdge>=0?'pos':'neg'}}">${{(mnEdge>=0?'+':'')+mnEdge.toFixed(0)}}pp</span>`:'--';
+      const insuf=d.n<20?'<span class="neg">⚠️不足</span>':'';
+      html+=`<tr><td>${{tfLabel(hz)}}</td><td>${{d.hits}}/${{d.n}}</td><td>${{(d.hit_rate*100).toFixed(0)}}%</td><td class="${{ecls}}">${{(e>=0?'+':'')+e.toFixed(0)}}pp</td><td class="${{ar>=0?'pos':'neg'}}">${{(ar>=0?'+':'')+ar.toFixed(2)}}%</td><td>${{mnStr}}</td><td>${{insuf||d.n}}</td></tr>`;
+    }});
+    html+='</table>';
+  }}
+  return html;
+}}
+
+// ---------- 主渲染入口 ----------
+function renderAll(state){{
+  const m=state.meta||{{}};
+  document.getElementById('meta').textContent=
+    `生成于 ${{m.generated||'--'}}  ·  近 ${{m.window_min||60}} 分钟`;
+
+  // accent=true → 蓝边高亮（核心卡片：鲸鱼信号/净流向/系统健康）
+  const sections=[
+    ['🩺 系统健康','health',renderHealth,true],
+    ['📊 预测准确率(诚实回顾)','accuracy',renderAccuracy,false],
+    ['🏦 交易所资金流(24h)','exchange_flows',renderExchangeFlows,false],
+    ['🏦 钱包持仓画像','wallet_portfolio',renderWalletPortfolio,false],
+    ['共振信号 ⚡','signals',renderSignals,false],
+    ['背离信号 🔀','divergence',renderDivergence,false],
+    ['聪明钱净流向 🐋','whale_flows',renderWhaleFlows,true],
+    ['鲸鱼信号 🚨','whale_signals',renderWhaleSignals,true],
+    ['聪明钱地址排行 🏆','top_addresses',renderTopAddresses,false],
+    ['庄家集团 🕸️','clusters',renderClusters,false],
+    ['Bitget OI 动向 📊','oi_surges',renderOiSurges,false],
+    ['链上大额转账 ⛓️','onchain',renderOnchain,false],
+    ['OKX 强平级联 💥','okx_liquidations',renderOkxLiquidations,false],
+    ['OKX 跨所信号 🌐','okx_signals',renderOkxSignals,false],
+    ['HL 挂单墙 🧱','okx_walls',renderHlWalls,false],
+  ];
+
+  document.getElementById('main').innerHTML=sections.map(([title,key,fn,accent])=>
+    `<div class="card${{accent?' accent':''}}">
+      <div class="card-title">${{title}}</div>
+      <div class="card-body">${{fn(state[key]||[])}}</div>
+    </div>`
+  ).join('');
+}}
+
+// ---------- 首屏 + 定时刷新 ----------
+renderAll(S);
+async function refresh(){{
+  try{{
+    const r=await fetch('/api/state');
+    if(r.ok){{
+      renderAll(await r.json());
+      // 数据更新时对全部 .card-body 触发 flashin 动画（视觉反馈）
+      document.querySelectorAll('.card-body').forEach(el=>{{
+        el.style.animation='none';
+        el.offsetHeight;
+        el.style.animation='flashin .6s ease-out';
+      }});
+    }}
+  }}catch(e){{console.warn('refresh err',e)}}
+}}
+setInterval(refresh,5000);
+</script>
+</body>
+</html>

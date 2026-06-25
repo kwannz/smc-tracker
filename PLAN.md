@@ -213,6 +213,11 @@ D 多空符号 · E 真实 userFills 解析/分类自洽 · F WS webData2==REST 
 > 据 codex-loop 反幻觉纪律保持开放，区别于「已实现但 backlog 写保守」的项（已核实证据后闭合）。
 
 ## 迭代日志
+- 2026-06-26 #114: **主页/hl2 模板外置成资源(dashboard.py 2345→915，4190→915 累计削 78%)**（Sonnet 执行/Opus 复核）。
+  同 #113 范式：把 `_HTML_TEMPLATE`(主页)/`_HL_TEMPLATE`(hl2) 外置成 `templates/index.html`(649)+`templates/hl2.html`(785)，
+  dashboard.py 改 read_text 加载，render 函数不动。round-trip 逐字一致。**dashboard.py 915 行**(剩 build_*/handlers/serve
+  纯 Python，再降需拆逻辑、风险高，诚实保留)。Opus 复核：复跑 2359 passed、/·/hl2·/harmonic 三页 200、package-data(#113加)
+  已覆盖全 4 模板。dashboard.py 累计 **4190→915**(4 轮:vol/monitored/signals/harmonic 迁出 + 4 模板外置)。零回归。
 - 2026-06-26 #113: **谐波渲染层迁出 + HTML 模板外置成资源(dashboard.py 3834→2345,真·≤800)**（Sonnet 执行/Opus 复核）。
   Sonnet 把谐波渲染 render_harmonic_html/render_harmonic_detail_html + 两大模板迁出 → 新 `dashboard_harmonic.py`；
   Opus 复核发现新模块 1501 行(97% 内联 HTML)仍违反 ≤800 → 令 Sonnet **模板外置成 `templates/*.html` 资源**
