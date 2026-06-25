@@ -22,10 +22,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from smc_tracker.storage import Store
-from smc_tracker.dashboard import (
-    build_all_signals_state,
-    render_all_signals_html,
-)
+from smc_tracker.dashboard_signals import build_all_signals_state, render_all_signals_html
 
 
 # ---------------------------------------------------------------------------

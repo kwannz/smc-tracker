@@ -213,6 +213,16 @@ D 多空符号 · E 真实 userFills 解析/分类自洽 · F WS webData2==REST 
 > 据 codex-loop 反幻觉纪律保持开放，区别于「已实现但 backlog 写保守」的项（已核实证据后闭合）。
 
 ## 迭代日志
+- 2026-06-26 #111: **Opus 规划/Sonnet 执行 一次性完成 3 功能 + Opus 复核**（用户#：opus 规划 md→sonnet 执行）。
+  Opus 写计划 md(`docs/superpowers/plans/2026-06-26-vol-breakout-nav-signals.md`，文件归属保证并行零冲突)→
+  workflow 派 **Sonnet** 执行：Build 并行 T1/T2/T3 + Integrate 串行 T4：
+  ① **T1 波动突破跟踪器** `monitor/volatility_regime_tracker.py`(59 行)：跨刷新检测 (coin,tf) 压缩/常态→扩张
+     (蓄势→放量=领先突破)，带 per-key 冷却；接入 `_periodic_volatility_board` opt-in 推送🔶突破告警。
+  ② **T2 dashboard 导航页** `dashboard_nav.py`(37 行)：/nav 列全部面板入口(可发现性)。
+  ③ **T3 /signals 迁出** `dashboard_signals.py`(289 行)：build_all_signals_state/render_all_signals_html 迁出，
+     **dashboard.py 4101→3835 行**(削 266，继续稀释巨文件)。
+  **Opus 复核**(不采信 agent 自报)：亲自复跑全量、查无循环/零孤儿、读关键产物(Sonnet 改进了首见守卫)、
+  审计删死 re-export、端到端 /nav·/signals·/api/signals·/volatility 全 200。TDD +24 例；全量 **2357 passed, 2 skipped**(零回归)。
 - 2026-06-26 #110: **波动动向摘要(蓄势/放量/极端PD)把矩阵综合成可操作情报**（/loop；本地 main 开发不推送）。
   `volatility_highlights(rows)` 纯函数扫逐周期矩阵 → 🔸蓄势(压缩,按 vol_ratio 升序)/🔶放量(扩张,按|velocity|降序)/
   ⚡极端PD(≤10%深折价或≥90%深溢价)；接入 CLI 板头部摘要 + dashboard `/api/volatility` highlights + 页面摘要条。

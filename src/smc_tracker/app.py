@@ -1723,6 +1723,8 @@ class TradingSystem:
         if not mc.enabled or mc.vol_board_sec <= 0:
             return
         from .monitor.volatility_monitor import VolatilityMonitor  # noqa: PLC0415
+        from .monitor.volatility_regime_tracker import VolatilityRegimeTracker  # noqa: PLC0415
+        tracker = VolatilityRegimeTracker()
         await asyncio.sleep(120.0)   # 等采集器填 DB
         while not self._stopping:
             try:
@@ -1730,10 +1732,15 @@ class TradingSystem:
                 if coins:
                     mon = VolatilityMonitor(coins, list(mc.timeframes), self.store)
                     now = int(time.time() * 1000)
-                    card = mon.render(mon.rank(now), now)
+                    rows = mon.rank(now)
+                    card = mon.render(rows, now)
                     if card:
                         print(card)
                         self._push_harmonic(card)   # 独立 TA 通道
+                    events = tracker.update(rows, now)          # 新增：突破检测
+                    bo = tracker.render(events, now)
+                    if bo:
+                        print(bo); self._push_harmonic(bo)      # 新增：突破告警推送
             except Exception as exc:  # noqa: BLE001
                 log.warning("波动追踪板推送失败: %s", exc)
             await asyncio.sleep(mc.vol_board_sec)
