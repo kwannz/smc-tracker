@@ -33,11 +33,17 @@
    避免裸下标 `r["k"]`/`lst[0]` 导致 KeyError/IndexError；空串 `int()` 加守卫）。
 4. **低延迟**：热路径数值计算用 numpy 向量化（已把 indicators 关键循环向量化，compute_indicators ~1ms）；
    全程非阻塞 asyncio；SQLite WAL + 批量 executemany。
-5. **异步并行**：数据收集用 asyncio 并发(Semaphore 限流)；大开发任务用 **workflow 多 agent 并行**(文件零冲突)。
+5. **异步并行 + 模型分工**：数据收集用 asyncio 并发(Semaphore 限流)；大开发任务用 **workflow 多 agent 并行**(文件零冲突)。
+   **模型分工规范（Opus 规划/审计，Sonnet 执行）**：
+   - **Opus（本模型）= 规划 + 审计**：拆 spec/plan、设计架构、定任务边界与依赖、最终把关合并；
+     **亲自复核**每个执行单元产出（零孤儿 / TDD / §三-四规范 / 对抗式验证），不亲自写大批量样板代码。
+   - **Sonnet = 执行**：按 plan 实现代码 + 写测试；workflow 里 `agent(prompt, {model:'sonnet'})` 或 builder-agent。
+     不做架构决策、不改任务边界（有疑问回报 Opus）。
+   - **闭合门**：每个 Sonnet 执行单元完成后**必须经 Opus 复核通过**才算闭合；复核不过则回退重做，不假闭合。
 6. **风格**：中文注释 + 英文标识符 + 类型注解；slots dataclass；与现有代码一致。
 
 ## 四、验证规范（声称完成前必须做）
-1. 改动后跑全量 `./.venv/bin/python -m pytest -q` 必须全绿（当前基线 357 passed）。
+1. 改动后跑全量 `./.venv/bin/python -m pytest -q` 必须全绿（当前基线 2313 passed, 2 skipped；2026-06-26 实测）。
 2. 新功能配单测（合成数据，确定性）；关键功能再用**真实数据**实证（非投资建议，仅验证）。
    指标类用 **TA-Lib 基准交叉验证**数值正确性（test_talib_parity，importorskip 零硬依赖）。
 3. 编译检查 `python -m py_compile`。诚实报告结果，失败就说失败。
