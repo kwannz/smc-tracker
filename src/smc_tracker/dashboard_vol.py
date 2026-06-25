@@ -54,14 +54,15 @@ def render_volatility_page() -> str:
  .up{color:#3fb950} .dn{color:#f85149} .prem{background:#3a1d1d} .disc{background:#16301d} .eq{color:#8b949e}
  .note{color:#8b949e;font-size:12px}
 </style></head><body>
-<h1>🌀 实时波动追踪 <span class="note">逐周期 速度·加速度·PD溢价折价（绿=折价/买区，红=溢价/卖区）</span></h1>
+<h1>🌀 实时波动追踪 <span class="note">逐周期 速度·PD溢价折价·波动状态（绿=折价/买区 红=溢价/卖区；🔸压缩=蓄势 🔶扩张=放量）</span></h1>
 <div id="box" class="note">加载中…</div>
 <script>
 function cell(m){
  if(!m) return '<td class="eq">—</td>';
- var v=m.velocity, a=m.accel, cls=v>=0?'up':'dn', arr=v>=0?'↑':'↓';
+ var v=m.velocity, cls=v>=0?'up':'dn', arr=v>=0?'↑':'↓';
  var z=m.pd_zone, zc=z==='溢价'?'prem':(z==='折价'?'disc':'eq');
- return '<td class="'+zc+'"><span class="'+cls+'">'+arr+Math.abs(v).toFixed(1)+'%</span>'
+ var rg=m.regime, rs=rg==='压缩'?'🔸':(rg==='扩张'?'🔶':'');
+ return '<td class="'+zc+'"><span class="'+cls+'">'+arr+Math.abs(v).toFixed(1)+'%</span>'+rs
    +'<br>PD'+Math.round(m.pd_pct*100)+'%</td>';
 }
 async function load(){

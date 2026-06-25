@@ -48,6 +48,34 @@ def test_too_few_bars_returns_empty():
     assert vol_metrics([1.0], [1.0], [1.0]) == {}
 
 
+def test_regime_expansion_recent_volatility_up():
+    """近窗波动 >> 长窗基线 → 扩张（放量）。"""
+    calm = [100.0] * 40
+    osc = [100.0 + (2.0 if i % 2 else -2.0) for i in range(20)]
+    _o, h, l, c = _ohlc(calm + osc)
+    m = vol_metrics(h, l, c)
+    assert m["vol_ratio"] > 1.4
+    assert m["regime"] == "扩张"
+
+
+def test_regime_squeeze_recent_calm():
+    """近窗波动 << 长窗基线 → 压缩（蓄势）。"""
+    osc = [100.0 + (2.0 if i % 2 else -2.0) for i in range(40)]
+    calm = [100.0] * 20
+    _o, h, l, c = _ohlc(osc + calm)
+    m = vol_metrics(h, l, c)
+    assert m["vol_ratio"] < 0.7
+    assert m["regime"] == "压缩"
+
+
+def test_regime_normal_steady_volatility():
+    """波动稳定 → 常态（ratio≈1）。"""
+    osc = [100.0 + (1.0 if i % 2 else -1.0) for i in range(80)]
+    _o, h, l, c = _ohlc(osc)
+    m = vol_metrics(h, l, c)
+    assert m["regime"] == "常态"
+
+
 # ---- pdarray 纯函数（ICT 溢价/折价）----
 
 def test_pdarray_premium_near_high():

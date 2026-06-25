@@ -16,18 +16,23 @@ import numpy as np
 
 # 指标窗口（根）：rv/atr 用近 _RV_WIN 根，速度用近 _VEL_WIN 根，PD dealing range 用近 _PD_WIN 根
 _RV_WIN = 20
+_RV_LONG = 60   # 波动 regime 长窗基线（短窗 σ / 长窗 σ → 压缩/扩张）
 _VEL_WIN = 5
 _PD_WIN = 60
+# 波动 regime 阈值：短/长 σ 比值 < 压缩阈=蓄势(领先突破)，> 扩张阈=放量
+_SQUEEZE, _EXPAND = 0.7, 1.4
 # 运动分权重：加速度领先量加权最高，其次速度，波动率辅助
 _W_VEL, _W_ACCEL, _W_RV = 1.0, 1.5, 0.5
 
 
 def vol_metrics(h: Any, l: Any, c: Any, *,
-                rv_win: int = _RV_WIN, vel_win: int = _VEL_WIN) -> dict:
+                rv_win: int = _RV_WIN, vel_win: int = _VEL_WIN,
+                rv_long_win: int = _RV_LONG) -> dict:
     """单周期 HLC → 波动专业指标（numpy 向量化）。数据 <3 根返回 {}。（open 不参与，故不收）
 
-    返回：rv(已实现波动率=对数收益σ,%)、atr_pct(真实波幅均值/价,%)、
-         range_pct(当前 bar 区间,%)、velocity(近窗%变化=1 阶导)、accel(速度差=2 阶导)。
+    返回：rv(已实现波动率=对数收益σ,%)、atr_pct(真实波幅均值/价,%)、range_pct(当前 bar 区间,%)、
+         velocity(近窗%变化=1 阶导)、accel(速度差=2 阶导)、
+         vol_ratio(短窗σ/长窗σ)、regime(压缩/扩张/常态=波动状态领先信号)。
     """
     c = np.asarray(c, dtype=float)
     n = c.size
@@ -36,6 +41,9 @@ def vol_metrics(h: Any, l: Any, c: Any, *,
     cc = np.clip(c, 1e-12, None)                      # 防 log(0)/除 0
     logret = np.diff(np.log(cc))
     rv = float(np.std(logret[-rv_win:], ddof=0)) * 100.0
+    rv_long = float(np.std(logret[-rv_long_win:], ddof=0)) * 100.0 if logret.size else 0.0
+    vol_ratio = rv / rv_long if rv_long > 1e-9 else 1.0
+    regime = "压缩" if vol_ratio < _SQUEEZE else ("扩张" if vol_ratio > _EXPAND else "常态")
     hi, lo = np.asarray(h, float), np.asarray(l, float)
     prev = cc[:-1]
     tr = np.maximum.reduce([hi[1:] - lo[1:], np.abs(hi[1:] - prev), np.abs(lo[1:] - prev)])
@@ -48,7 +56,8 @@ def vol_metrics(h: Any, l: Any, c: Any, *,
                 if n >= 2 * k + 1 else 0.0)
     accel = velocity - vel_prev
     return {"rv": rv, "atr_pct": atr_pct, "range_pct": range_pct,
-            "velocity": velocity, "accel": accel}
+            "velocity": velocity, "accel": accel,
+            "vol_ratio": vol_ratio, "regime": regime}
 
 
 def pdarray(h: Any, l: Any, c: Any, *, win: int = _PD_WIN, band: float = 0.03) -> dict:
@@ -138,7 +147,7 @@ class VolatilityMonitor:
                 adir = "加速" if a * v > 0 else ("减速" if a * v < 0 else "—")
                 lines.append(
                     f"  {tf:<4} {vdir}{abs(v):.2f}% a{a:+.2f}{adir}"
-                    f" σ{m['rv']:.2f}% ATR{m['atr_pct']:.2f}% 幅{m['range_pct']:.2f}%"
+                    f" σ{m['rv']:.2f}%[{m['regime']}] ATR{m['atr_pct']:.2f}% 幅{m['range_pct']:.2f}%"
                     f" PD{m['pd_pct'] * 100:.0f}%{m['pd_zone']}"
                 )
         return "\n".join(lines)

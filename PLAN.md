@@ -213,6 +213,12 @@ D 多空符号 · E 真实 userFills 解析/分类自洽 · F WS webData2==REST 
 > 据 codex-loop 反幻觉纪律保持开放，区别于「已实现但 backlog 写保守」的项（已核实证据后闭合）。
 
 ## 迭代日志
+- 2026-06-26 #107: **波动状态领先信号(压缩/扩张 regime)接入波动板 CLI+dashboard**（/loop：专业细节追踪实时波动）。
+  ① `vol_metrics` 加 `vol_ratio`(短窗σ/长窗σ)+`regime`(压缩<0.7/扩张>1.4/常态)——开源 Bollinger squeeze 思路，
+  纯 K 线零额外数据；**压缩=蓄势常先于突破**(领先信号，CLAUDE.md §二)。
+  ② CLI 板每周期行加 `σ..[压缩/扩张]`；dashboard 矩阵格加 🔸压缩/🔶扩张标记 + 图例。
+  ③ 端到端实跑：先静后动→扩张、先动后静→压缩，正确区分。模块 153 行(守 800)。
+  TDD 3 例；全量 **2331 passed, 2 skipped**（零回归）。
 - 2026-06-26 #106: **波动追踪接入 dashboard UI（新扁平模块 dashboard_vol.py，巨文件零增长）**（/loop：全栈实时波动）。
   ① 新建 `dashboard_vol.py`（~110 行扁平模块）：`volatility_state`（store+币集→逐周期 JSON 态，纯逻辑可测）、
   `pick_coins`（监控清单优先，空则回退 DB 已采币）、`render_volatility_page`（自包含迷你页，矩阵 行=币 列=周期，
