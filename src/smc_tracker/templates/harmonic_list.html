@@ -1,0 +1,272 @@
+<!DOCTYPE html>
+<html lang="zh-Hans">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>谐波形态 Setup</title>
+<style>
+:root{{
+  --bg:#0d1117;--card:#161b22;--border:#30363d;--text:#c9d1d9;
+  --muted:#8b949e;--green:#3fb950;--red:#f85149;--blue:#58a6ff;
+  --yellow:#e3b341;--purple:#bc8cff;--orange:#ffa657;
+}}
+*{{box-sizing:border-box;margin:0;padding:0}}
+body{{background:var(--bg);color:var(--text);font-family:"SF Mono",ui-monospace,monospace;font-size:13px;line-height:1.5}}
+header{{padding:16px 24px;border-bottom:1px solid var(--border);display:flex;align-items:baseline;gap:16px;flex-wrap:wrap}}
+h1{{font-size:20px;color:var(--blue)}}
+#meta{{color:var(--muted);font-size:12px}}
+.nav-link{{font-size:12px;color:var(--muted);text-decoration:none;border:1px solid var(--border);
+  border-radius:4px;padding:2px 8px}}
+.nav-link:hover{{color:var(--blue);border-color:var(--blue)}}
+.disclaimer{{margin:12px 16px;padding:10px 14px;background:#1c1a10;border:1px solid #5a4a00;
+  border-radius:6px;color:var(--yellow);font-size:12px;line-height:1.6}}
+main{{display:grid;gap:16px;padding:16px}}
+.card{{background:var(--card);border:1px solid var(--border);border-radius:8px;overflow:hidden}}
+.card-title{{padding:10px 14px;border-bottom:1px solid var(--border);font-weight:700;
+  color:var(--blue);font-size:13px}}
+.card-body{{padding:12px 14px;overflow-x:auto}}
+table{{width:100%;border-collapse:collapse;font-size:12px}}
+th{{color:var(--muted);font-weight:600;text-align:left;padding:4px 6px;
+  border-bottom:1px solid var(--border)}}
+td{{padding:3px 6px;vertical-align:top;white-space:nowrap}}
+tr:hover td{{background:rgba(255,255,255,.03)}}
+.long{{color:var(--green)}} .short{{color:var(--red)}}
+.pos{{color:var(--green)}} .neg{{color:var(--red)}}
+.none{{color:var(--muted);font-style:italic}}
+.tag{{display:inline-block;padding:1px 5px;border-radius:4px;font-size:11px;font-weight:600}}
+.tag-long{{background:#1a3a2a;color:var(--green)}}
+.tag-short{{background:#3a1a1a;color:var(--red)}}
+.coin{{color:var(--orange);font-weight:600}}
+.conf-bar{{display:inline-block;height:8px;background:var(--blue);border-radius:2px;
+  vertical-align:middle;margin-right:4px}}
+.knn-ok{{color:var(--green)}} .knn-no{{color:var(--muted)}} .knn-unk{{color:var(--yellow)}}
+.of-ok{{color:var(--green)}} .of-no{{color:var(--muted)}}
+#refresh-bar{{font-size:11px;color:var(--muted);padding:4px 24px;border-top:1px solid var(--border)}}
+/* 资产类别徽章 */
+.badge-tradfi{{display:inline-block;padding:1px 5px;border-radius:3px;font-size:10px;
+  font-weight:700;background:#3a2400;color:var(--orange);margin-right:3px}}
+.badge-crypto{{display:inline-block;padding:1px 5px;border-radius:3px;font-size:10px;
+  font-weight:700;background:#0e1f3a;color:var(--blue);margin-right:3px}}
+/* 傻瓜版解释面板 */
+details.explainer{{margin:12px 16px;background:#111820;border:1px solid #2a3f55;
+  border-radius:6px;overflow:hidden}}
+details.explainer summary{{padding:10px 14px;cursor:pointer;font-weight:700;
+  color:var(--blue);font-size:13px;list-style:none;user-select:none}}
+details.explainer summary::-webkit-details-marker{{display:none}}
+details.explainer summary::before{{content:"▶ ";font-size:10px;color:var(--muted)}}
+details[open].explainer summary::before{{content:"▼ ";font-size:10px;color:var(--muted)}}
+.explainer-body{{padding:12px 16px;color:var(--text);font-size:12px;line-height:1.8;
+  border-top:1px solid #2a3f55}}
+.explainer-body dt{{font-weight:700;color:var(--yellow);margin-top:8px}}
+.explainer-body dd{{margin-left:12px;color:var(--text)}}
+.explainer-honest{{margin-top:10px;padding:8px 10px;background:#1c1a10;
+  border-left:3px solid var(--yellow);color:var(--muted);font-size:11px}}
+</style>
+</head>
+<body>
+<header>
+  <h1>🔷 谐波形态 + 可执行交易 Setup</h1>
+  <span id="meta">加载中…</span>
+  <a class="nav-link" href="/">← HL 主页</a>
+</header>
+
+<!-- 傻瓜版解释面板（默认展开，可折叠） -->
+<details class="explainer" open>
+  <summary>📖 名词傻瓜解释（点击收起）</summary>
+  <div class="explainer-body">
+    <dl>
+      <dt>看多 / 看空</dt>
+      <dd>看多 = 预期价格上涨，参考买入方向；看空 = 预期价格下跌，参考卖出方向。</dd>
+
+      <dt>完整形态（入场触发）</dt>
+      <dd>形态已走完 D 点，现在是参考入场区（<strong>反应式信号</strong>，价格已到达 PRZ，可观察是否反转确认）。</dd>
+
+      <dt>成形中（前瞻 PRZ）</dt>
+      <dd>形态尚未走完，系统<strong>前瞻预测</strong>未来反转区（PRZ）的价格范围。价格还没到，是预判性信号，不是当前入场点。</dd>
+
+      <dt>斐波那契 / fib_note</dt>
+      <dd>谐波形态本身基于斐波那契比率（0.618、0.786、0.886 等）定义 D 点/PRZ 位置。fib_note 列显示当前形态用到的具体 Fib 比率。</dd>
+
+      <dt>🏦TradFi 徽章</dt>
+      <dd>标的为 Bitget 代币化传统金融资产（美股/ETF/贵金属等，如 XAU、SOXL、AAPL），行情逻辑与原生加密不同。</dd>
+
+      <dt>₿加密 徽章</dt>
+      <dd>标的为原生加密货币（BTC/ETH/SOL 等），Bitget 永续合约。</dd>
+
+      <dt>进场区（entry_lo ~ entry_hi）</dt>
+      <dd>建议参考入场的价格区间（PRZ 范围内）。不是固定点，需结合当前成交量/订单流确认后再考虑介入。</dd>
+
+      <dt>止损（stop）</dt>
+      <dd>一旦价格跌破/突破此位，形态失效，应立即止损离场，不拖延。</dd>
+
+      <dt>止盈（target1 / target2）</dt>
+      <dd>形态结构给出的两个参考目标位（target1=保守，target2=扩展）。可分批止盈。</dd>
+
+      <dt>盈亏比（RR）</dt>
+      <dd>= (目标1 - 进场) / (进场 - 止损)。RR≥2 意味着赔 1 赚 2，是风险管理基础要求。</dd>
+
+      <dt>订单流✓（orderflow）</dt>
+      <dd>该价位附近有大挂单墙或成交量失衡确认（<strong>领先意图信号</strong>，优先于价格）。注意挂单墙可能 spoof（虚假挂单），需结合实际成交判断。</dd>
+
+      <dt>KNN（≈随机基线，仅辅助）</dt>
+      <dd>历史相似形态的方向参考。诚实标注：历史 KNN 命中率接近随机（无真实 alpha），仅供辅助参考，不可单独依赖。</dd>
+    </dl>
+    <div class="explainer-honest">
+      ⚠️ <strong>诚实声明：以上为确认层参考工具，非投资建议。</strong>
+      谐波形态 + 订单流确认提高概率，但不保证盈利；KNN ≈ 随机基线仅辅助；
+      止损必须执行，价格进入进场区不等于必然反转。
+    </div>
+  </div>
+</details>
+
+<div class="disclaimer">
+  ⚠️ <strong>确认层非投资建议</strong>：谐波PRZ前瞻 × 订单流确认；
+  挂单墙可能 spoof/吸收 ≠ 必反转；KNN ≈ 随机基线（历史 KNN 命中无真实 alpha，仅供参考）。
+  入场需等待价格进入进场区 + 订单流/成交量确认，止损触碰即离场。
+</div>
+
+<main id="main"><!-- 由 JS renderAll() 填充 --></main>
+<div id="refresh-bar">自动刷新 · 5 秒</div>
+<script>
+const S = __INITIAL_STATE__;
+
+// ---------- 工具函数 ----------
+function fmtTime(ms){{
+  if(ms==null)return'—';
+  const d=new Date(ms);
+  return d.toLocaleTimeString('zh-CN',{{hour12:false}});
+}}
+function fmtNum(v,dec){{
+  if(v==null||v===undefined)return'—';
+  const n=parseFloat(v);
+  return isNaN(n)?'—':n.toFixed(dec!=null?dec:4);
+}}
+function fmtPct(v){{
+  if(v==null)return'—';
+  return(parseFloat(v)*100).toFixed(1)+'%';
+}}
+function none(){{return'<span class="none">（无数据）</span>';}}
+
+// 方向标签：看多绿 / 看空红
+function dirTag(d){{
+  if(!d)return'—';
+  if(d==='long')return'<span class="tag tag-long">看多</span>';
+  if(d==='short')return'<span class="tag tag-short">看空</span>';
+  return'<span>'+d+'</span>';
+}}
+
+// 置信进度条 + 百分比（confidence 为 0~1 小数）
+function confBar(v){{
+  if(v==null)return'—';
+  const pct=Math.round(parseFloat(v)*100);
+  const w=Math.max(2,pct);
+  return'<span class="conf-bar" style="width:'+w+'px"></span>'+pct+'%';
+}}
+
+// KNN 标记（✓/✗/?）
+function knnTag(v){{
+  if(v==null||v==='')return'<span class="knn-unk">?</span>';
+  if(v==='✓')return'<span class="knn-ok">✓</span>';
+  if(v==='✗')return'<span class="knn-no">✗</span>';
+  return'<span class="knn-unk">'+v+'</span>';
+}}
+
+// 订单流标记（'✓...'=确认/绿; '✗'=否定/灰; ''=无数据/灰）
+function ofTag(v){{
+  if(v==null||v==='')return'<span class="of-no">—</span>';
+  if(v.startsWith('✓'))return'<span class="of-ok">'+v+'</span>';
+  return'<span class="of-no">'+v+'</span>';
+}}
+
+// 资产类别徽章：tradfi → 🏦TradFi（橙色）；crypto → ₿加密（蓝色）
+function badgeHtml(ac){{
+  if(ac==='tradfi')return'<span class="badge-tradfi">🏦TradFi</span>';
+  return'<span class="badge-crypto">₿加密</span>';
+}}
+
+// 进场区间 "entry_lo ~ entry_hi"，NULL 安全
+function fmtRange(lo,hi){{
+  if(lo==null&&hi==null)return'—';
+  const l=lo!=null?fmtNum(lo,4):'—';
+  const h=hi!=null?fmtNum(hi,4):'—';
+  return l+' ~ '+h;
+}}
+
+// ---------- 完整形态（completed）表格渲染 ----------
+function renderCompleted(rows){{
+  if(!rows||!rows.length)return none();
+  let h='<table><tr>'
+      +'<th>类别</th><th>币/周期</th><th>形态</th><th>方向</th><th>进场区</th>'
+      +'<th>止损</th><th>目标1</th><th>目标2</th><th>盈亏比</th>'
+      +'<th>置信</th><th>KNN</th><th>订单流</th>'
+      +'</tr>';
+  rows.forEach(r=>{{
+    h+='<tr>'
+      +'<td>'+badgeHtml(r.asset_class||'crypto')+'</td>'
+      +'<td><span class="coin">'+r.coin+'</span>'
+      +' <span style="color:var(--muted);font-size:11px">'+r.tf+'</span></td>'
+      +'<td>'+r.pattern+'</td>'
+      +'<td>'+dirTag(r.direction)+'</td>'
+      +'<td>'+fmtRange(r.entry_lo,r.entry_hi)+'</td>'
+      +'<td class="'+(r.direction==='long'?'neg':'pos')+'">'+fmtNum(r.stop,4)+'</td>'
+      +'<td>'+fmtNum(r.target1,4)+'</td>'
+      +'<td>'+fmtNum(r.target2,4)+'</td>'
+      +'<td class="pos">'+fmtNum(r.rr,2)+'</td>'
+      +'<td>'+confBar(r.confidence)+'</td>'
+      +'<td>'+knnTag(r.knn)+'</td>'
+      +'<td>'+ofTag(r.orderflow)+'</td>'
+      +'</tr>';
+  }});
+  return h+'</table>';
+}}
+
+// ---------- 成形中（forming）PRZ 前瞻表格 ----------
+function renderForming(rows){{
+  if(!rows||!rows.length)return none();
+  let h='<table><tr>'
+      +'<th>类别</th><th>币/周期</th><th>形态</th><th>方向</th><th>PRZ 区间</th><th>置信</th>'
+      +'</tr>';
+  rows.forEach(r=>{{
+    h+='<tr>'
+      +'<td>'+badgeHtml(r.asset_class||'crypto')+'</td>'
+      +'<td><span class="coin">'+r.coin+'</span>'
+      +' <span style="color:var(--muted);font-size:11px">'+r.tf+'</span></td>'
+      +'<td>'+r.pattern+'</td>'
+      +'<td>'+dirTag(r.direction)+'</td>'
+      +'<td>'+fmtRange(r.prz_lo,r.prz_hi)+'</td>'
+      +'<td>'+confBar(r.confidence)+'</td>'
+      +'</tr>';
+  }});
+  return h+'</table>';
+}}
+
+// ---------- 主渲染 ----------
+function renderAll(state){{
+  const gen=state.generated_at||'--';
+  document.getElementById('meta').textContent='生成于 '+gen;
+
+  const sections=[
+    ['✅ 完整形态（入场触发）','completed',renderCompleted],
+    ['🔭 成形中（前瞻 PRZ）','forming',renderForming],
+  ];
+
+  document.getElementById('main').innerHTML=sections.map(([title,key,fn])=>
+    '<div class="card">'
+    +'<div class="card-title">'+title+'</div>'
+    +'<div class="card-body">'+fn(state[key]||[])+'</div>'
+    +'</div>'
+  ).join('');
+}}
+
+// ---------- 首屏 + 5s 自动刷新 ----------
+renderAll(S);
+async function refresh(){{
+  try{{
+    const r=await fetch('/api/harmonic');
+    if(r.ok)renderAll(await r.json());
+  }}catch(e){{console.warn('harmonic refresh err',e)}}
+}}
+setInterval(refresh,5000);
+</script>
+</body>
+</html>

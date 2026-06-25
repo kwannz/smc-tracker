@@ -213,6 +213,12 @@ D 多空符号 · E 真实 userFills 解析/分类自洽 · F WS webData2==REST 
 > 据 codex-loop 反幻觉纪律保持开放，区别于「已实现但 backlog 写保守」的项（已核实证据后闭合）。
 
 ## 迭代日志
+- 2026-06-26 #113: **谐波渲染层迁出 + HTML 模板外置成资源(dashboard.py 3834→2345,真·≤800)**（Sonnet 执行/Opus 复核）。
+  Sonnet 把谐波渲染 render_harmonic_html/render_harmonic_detail_html + 两大模板迁出 → 新 `dashboard_harmonic.py`；
+  Opus 复核发现新模块 1501 行(97% 内联 HTML)仍违反 ≤800 → 令 Sonnet **模板外置成 `templates/*.html` 资源**
+  (import 时 read_text 加载) → dashboard_harmonic.py **降到 39 行代码**(harmonic_list.html 271 + harmonic_detail.html 1188 资产)。
+  Opus 复核：亲自复跑、无循环、端到端 /harmonic 200、并**修 agent 诚实标注的 wheel 打包隐患**(pyproject package-data)。
+  dashboard.py 累计 4190→2345(三轮稀释 vol/monitored/signals/harmonic)。全量 **2359 passed, 2 skipped**(零回归)。
 - 2026-06-26 #112: **市场级波动态势聚合(market_regime)——第三层信号坍缩**（/loop；本地 main 不推送）。
   `market_regime(rows)` 纯函数把逐币×周期矩阵聚合成市场广度：统计各 regime(压缩/扩张/常态)与 PD(折价/溢价/均衡)
   占比 → 主导态势 label(如"蓄势(压缩) 12/21 · 普遍折价(偏超卖) 18/21")；接入 CLI 板头 + dashboard /api/volatility
