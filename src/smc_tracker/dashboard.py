@@ -969,6 +969,27 @@ def render_html(state: dict) -> str:
 # Web 服务层 —— aiohttp
 # ---------------------------------------------------------------------------
 
+def apply_monitored_action(
+    store: Any, action: str, coins: list[str], note: str, now_ms: int,
+) -> dict:
+    """监控清单 API 纯逻辑：执行 add/rm/list，返回 {"monitored": rows, "changed": n}。
+
+    coins 统一大写归一；add 用 coin+'USDT' 作 symbol。可单测，不碰 HTTP。
+    """
+    changed = 0
+    cs = [c.upper() for c in (coins or []) if c]
+    if action == "add" and cs:
+        store.add_monitored_coins([(c, f"{c}USDT", now_ms, note or "") for c in cs])
+        changed = len(cs)
+    elif action == "rm" and cs:
+        changed = store.remove_monitored_coins(cs)
+    rows = [
+        {"coin": coin, "symbol": sym, "added_ts": ts, "note": n}
+        for coin, sym, ts, n in store.list_monitored_coins()
+    ]
+    return {"monitored": rows, "changed": changed}
+
+
 async def serve(db_path: str, host: str = "127.0.0.1", port: int = 8787) -> None:
     """用 aiohttp 起仪表盘服务：GET / 返回 HTML，GET /api/state 返回 JSON。
 
@@ -1112,6 +1133,28 @@ async def serve(db_path: str, host: str = "127.0.0.1", port: int = 8787) -> None
         state = build_all_signals_state(store, now_ms, hours=hours)
         return aiohttp.web.json_response(state, dumps=lambda o: json.dumps(o, default=str))
 
+    async def handle_monitored(request: aiohttp.web.Request) -> aiohttp.web.Response:
+        """GET=list；POST body {action, coins, note} 执行 add/rm。监控进程周期对账热载入。"""
+        import time as _t  # noqa: PLC0415
+        now = int(_t.time() * 1000)
+        if request.method == "POST":
+            try:
+                body = await request.json()
+            except Exception:  # noqa: BLE001
+                body = {}
+            action = str(body.get("action") or "list")
+            coins = body.get("coins") or []
+            if isinstance(coins, str):
+                coins = [coins]
+            note = str(body.get("note") or "")
+        else:
+            action, coins, note = "list", [], ""
+        try:
+            result = apply_monitored_action(store, action, list(coins), note, now)
+            return aiohttp.web.json_response(result, dumps=lambda o: json.dumps(o, default=str))
+        except Exception as exc:  # noqa: BLE001
+            return aiohttp.web.json_response({"monitored": [], "error": str(exc)}, status=500)
+
     async def handle_harmonic_discover(request: aiohttp.web.Request) -> aiohttp.web.Response:
         """GET/POST /api/harmonic/discover — 「发现搜集」按钮：扫描更广 Bitget 宇宙
         （按成交额排序、排除已监控/已收集），快扫有谐波形态的币 → 立即落库展示 +
@@ -1129,6 +1172,7 @@ async def serve(db_path: str, host: str = "127.0.0.1", port: int = 8787) -> None
             batch_ts = now
             current = {r[1] for r in existing}
             current |= set(store.get_harmonic_collected())
+            current |= set(store.get_monitored_coins())  # 监控清单也排除（统一真相源）
             async with BitgetREST() as bg:
                 base_map = await bg.perp_base_coins()   # {symbol: base}
                 tickers = await bg.tickers()            # {symbol: ticker}
@@ -1154,7 +1198,8 @@ async def serve(db_path: str, host: str = "127.0.0.1", port: int = 8787) -> None
             if rows:
                 store.insert_harmonic_setups(mon.to_records(rows, batch_ts))   # 并入当前批次立即展示
             if found:
-                store.add_harmonic_collected([(c, candidates[c], now) for c in found])  # 持续监控
+                # 写监控清单 monitored_coins（统一真相源；监控进程周期对账热载入持续监控）
+                store.add_monitored_coins([(c, candidates[c], now, "discover") for c in found])
             return aiohttp.web.json_response(
                 {"discovered": found, "scanned": len(candidates)},
                 dumps=lambda o: json.dumps(o, default=str),
@@ -1175,6 +1220,8 @@ async def serve(db_path: str, host: str = "127.0.0.1", port: int = 8787) -> None
     app.router.add_get("/api/harmonic/coin/{coin}", handle_harmonic_coin)
     app.router.add_get("/api/harmonic/discover", handle_harmonic_discover)
     app.router.add_post("/api/harmonic/discover", handle_harmonic_discover)
+    app.router.add_get("/api/monitored", handle_monitored)
+    app.router.add_post("/api/monitored", handle_monitored)
     # HL 聪明钱追踪终端（新增，不动现有 / 路由）
     app.router.add_get("/hl2", handle_hl2)
     # 信号总览页（/signals + /api/signals）
