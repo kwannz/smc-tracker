@@ -1904,10 +1904,11 @@ def test_harmonic_discover_uses_7_timeframes():
     from smc_tracker import dashboard as _dash
 
     src = inspect.getsource(_dash)
-    # discover 函数段：从 handle_harmonic_discover 到下一个 async def
-    start = src.find("handle_harmonic_discover")
-    # 取足够长的片段（2000 chars 覆盖 HarmonicMonitor 调用行及 _DISCOVER_TFS 定义）
-    discover_section = src[start:start + 2000]
+    # discover 函数段：从 handle_harmonic_discover 到函数末尾边界（下一个 app = aiohttp.web.Application）
+    # 用真实边界而非固定窗口，避免无关编辑（如新增排除行）把 _DISCOVER_TFS 挤出窗口致误报。
+    start = src.find("async def handle_harmonic_discover")
+    end = src.find("app = aiohttp.web.Application", start)
+    discover_section = src[start:end] if end > start else src[start:start + 2000]
 
     # 断言：不再用 ["4H"] 单周期
     assert '["4H"]' not in discover_section, (

@@ -46,7 +46,8 @@
 - venv：`./.venv/bin/python`（websockets/aiohttp/orjson/numpy/pyyaml/pytest/telethon；TA-Lib 仅用于平价校验）。
 - **统一 CLI**（推荐入口）：`PYTHONPATH=src ./.venv/bin/python -m smc_tracker <cmd>`，子命令：
   `run`(流式实时) / `poll [--loop --interval N]`(轮询) / `report [--hours]` / `address <addr>` /
-  `discover [--top]` / `bench` / `llm` / `dashboard [--port]`(Web 仪表盘)。
+  `discover [--top]` / `bench` / `llm` / `dashboard [--port]`(Web 仪表盘) /
+  `watch <add|rm|list>`(监控币种清单，config.monitored_coins.enabled 时驱动多周期采集，热载入)。
 - 流式（等价）：`-m smc_tracker.app`；轮询（等价）：`scripts/poll_monitor.py`。
 - **仪表盘**：`-m smc_tracker dashboard` → http://127.0.0.1:8787（aiohttp 实时单页，5s 自刷新；无 CDN/依赖）。
 - 推送：config.telegram(bot_token+chat_id) → Telegram；config.output.webhook_url → Discord/Slack。

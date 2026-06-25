@@ -149,3 +149,13 @@ correlation:
   max_p: 0.01                    # 二项右尾 p ≤1%（99% 置信非随机）
   min_shared: 3                  # 协同事件至少 3 次
   min_coins: 2                   # 跨 ≥2 币（单币追涨人群隔离；跨币=同一实体硬证据）
+
+# ── 监控币种清单（watchlist-multi-tf）─────────────────────────────────────
+# enabled=true：只为清单内币种采集多周期数据，不再监控全市场（采集器/谐波/BB 都改清单驱动）。
+# 清单增删：`PYTHONPATH=src ./.venv/bin/python -m smc_tracker watch add BTC ETH`（或 watch rm / watch list），
+# 或 dashboard 访问 http://127.0.0.1:8787/monitored 页面增删；运行中热载入（≤1 个采集周期生效）。
+# enabled=false（默认）：完全保持现状 all_perp 行为（零回归）。
+monitored_coins:
+  enabled: false
+  timeframes: ["15m", "1H", "4H", "6H", "12H", "1D", "1W"]   # 6H 替代 Bitget 不支持的 8h
+  collect_interval_sec: 300
