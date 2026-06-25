@@ -281,6 +281,36 @@ def _cmd_signals(args: argparse.Namespace) -> None:
         sys.exit(1)
 
 
+def _cmd_watch(args: argparse.Namespace) -> None:
+    """监控币种清单增删查（写本地 SQLite，运行中监控进程周期对账热载入）。"""
+    try:
+        from .storage import Store
+
+        store = Store(Path(args.db))
+        if args.action == "add":
+            now = int(time.time() * 1000)
+            note = args.note or ""
+            items = [(c.upper(), f"{c.upper()}USDT", now, note) for c in args.coins]
+            store.add_monitored_coins(items)
+            print(f"[watch] 已加入 {len(items)} 币: {', '.join(c.upper() for c in args.coins)}")
+        elif args.action == "rm":
+            n = store.remove_monitored_coins([c.upper() for c in args.coins])
+            print(f"[watch] 已移除 {n} 币")
+        else:  # list
+            rows = store.list_monitored_coins()
+            if not rows:
+                print("[watch] 监控清单为空（用 `watch add BTC ETH` 添加）")
+            else:
+                print(f"[watch] 监控清单（{len(rows)} 币）:")
+                for coin, sym, _ts, note in rows:
+                    note_s = f"  # {note}" if note else ""
+                    print(f"  {coin:<10} {sym:<14}{note_s}")
+        store.close()
+    except Exception as exc:
+        print(f"[watch] 出错：{exc}", file=sys.stderr)
+        sys.exit(1)
+
+
 def _cmd_address(args: argparse.Namespace) -> None:
     """完整追踪单个 Hyperliquid 地址：画像 + 实时持仓 + 协同/对手方 + 轨迹 + PnL。"""
     try:
@@ -722,6 +752,23 @@ def build_parser() -> argparse.ArgumentParser:
     p_addr.add_argument("--hours", type=float, default=24.0, metavar="H",
                         help="协同/对手方/轨迹回看窗口小时数（默认 24）")
     p_addr.set_defaults(handler=_cmd_address)
+
+    # ---- watch（监控币种清单，驱动多周期采集，热载入）----
+    p_watch = sub.add_parser("watch", help="监控币种清单增删查（驱动多周期采集，热载入）")
+    watch_sub = p_watch.add_subparsers(dest="action", metavar="<add|rm|list>", required=True)
+    _w_add = watch_sub.add_parser("add", help="加入币种（如 watch add BTC ETH）")
+    _w_add.add_argument("coins", nargs="+", metavar="COIN", help="币种符号（如 BTC ETH）")
+    _w_add.add_argument("--note", default="", metavar="N", help="可选备注（为什么加）")
+    _w_add.add_argument("--db", default=_DEFAULT_DB, metavar="PATH",
+                        help=f"SQLite 数据库路径（默认 {_DEFAULT_DB}）")
+    _w_rm = watch_sub.add_parser("rm", help="移除币种（如 watch rm BTC）")
+    _w_rm.add_argument("coins", nargs="+", metavar="COIN", help="币种符号")
+    _w_rm.add_argument("--db", default=_DEFAULT_DB, metavar="PATH",
+                       help=f"SQLite 数据库路径（默认 {_DEFAULT_DB}）")
+    _w_list = watch_sub.add_parser("list", help="打印当前监控清单")
+    _w_list.add_argument("--db", default=_DEFAULT_DB, metavar="PATH",
+                         help=f"SQLite 数据库路径（默认 {_DEFAULT_DB}）")
+    p_watch.set_defaults(handler=_cmd_watch)
 
     # ---- discover ----
     p_disc = sub.add_parser("discover", help="从排行榜自动发现聪明钱地址")
