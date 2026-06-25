@@ -156,6 +156,44 @@ def reconcile_universe(
     return added, removed
 
 
+def select_base_universe(
+    mc_enabled: bool,
+    monitored: dict[str, str],
+    base_map: dict[str, str],
+    tickers: dict[str, dict],
+    universe_cfg: "UniverseCfg",
+) -> dict[str, str]:
+    """选币基集(谐波/BB/采集共用)：监控清单模式用清单，否则走 universe_cfg。纯函数，可测。"""
+    if mc_enabled:
+        return resolve_monitored_universe(monitored, base_map, tickers)
+    return resolve_universe(base_map, tickers, universe_cfg)
+
+
+def harmonic_extra_coins(
+    mc_enabled: bool,
+    harmonic_collected: dict[str, str],
+    monitored: dict[str, str],
+) -> dict[str, str]:
+    """默认模式并入谐波宇宙的额外币 = harmonic_collected ∪ monitored(discover 现写后者)；
+    监控清单模式返回 {}（清单已是谐波基集，不重复并入）。纯函数。"""
+    if mc_enabled:
+        return {}
+    out = dict(harmonic_collected)
+    out.update(monitored)
+    return out
+
+
+def collect_timeframes(
+    mc_enabled: bool,
+    monitored_tfs: list[str],
+    bb_tfs: list[str],
+    harm_tfs: list[str],
+) -> list[str]:
+    """采集器周期集：监控模式取 monitored∪bb∪harm 并集(保谐波 30m+用户 6H 都采)，否则 bb∪harm。纯函数。"""
+    seq = (list(monitored_tfs) if mc_enabled else []) + list(bb_tfs) + list(harm_tfs)
+    return list(dict.fromkeys(seq))
+
+
 @dataclass(slots=True)
 class WatchAddress:
     address: str

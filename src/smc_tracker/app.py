@@ -725,17 +725,15 @@ class TradingSystem:
                             for tk in tickers_map.values()]
                     if vols and all(v <= 0 for v in vols):
                         log.warning("选币：tickers 成交额全为 0（quoteVolume 字段可能已变更），退化插入序")
-                    # resolve_universe：统一选币（配置化，支持 mode/asset_filter/exclude）
-                    from .config import resolve_universe, resolve_monitored_universe  # noqa: PLC0415
-                    if self.cfg.monitored_coins.enabled:
-                        # 监控清单模式（watchlist-multi-tf）：只采清单内币，替换 all_perp/top_n
-                        _monitored = self.store.get_monitored_coins()
-                        if not _monitored:
-                            log.warning("监控清单为空(monitored_coins.enabled=true)，本轮不纳入任何币；"
-                                        "用 `watch add` 或 dashboard 添加")
-                        vol_c2s = resolve_monitored_universe(_monitored, base_map, tickers_map)
-                    else:
-                        vol_c2s = resolve_universe(base_map, tickers_map, self.cfg.universe)
+                    # select_base_universe：统一选币纯函数（监控清单模式用清单，否则 universe_cfg）
+                    from .config import select_base_universe  # noqa: PLC0415
+                    _mc_on = self.cfg.monitored_coins.enabled
+                    _monitored = self.store.get_monitored_coins() if _mc_on else {}
+                    if _mc_on and not _monitored:
+                        log.warning("监控清单为空(monitored_coins.enabled=true)，本轮不纳入任何币；"
+                                    "用 `watch add` 或 dashboard 添加")
+                    vol_c2s = select_base_universe(
+                        _mc_on, _monitored, base_map, tickers_map, self.cfg.universe)
                     # 无 universe 配置（默认 top_n=12）时行为不变；mode=all 则返回全部符合条件的币
                 except Exception as exc:  # noqa: BLE001
                     log.warning("选币 tickers 拉取失败（不影响主流程）: %s", exc)
@@ -785,15 +783,17 @@ class TradingSystem:
                 else:
                     # top_n 模式（默认，向后兼容）：按成交额取前 harm_n 个
                     harm_c2s = dict(list(vol_c2s.items())[:harm_n])
-                # 并入用户「发现搜集」的币 → 持续监控。enabled 时清单已是唯一真相源(上面 harm_c2s=vol_c2s)；
-                # 默认模式并入 monitored_coins(discover 现写此表) + harmonic_collected(旧迁移残留)，
+                # 并入「发现搜集」币 → 持续监控（harmonic_extra_coins 纯函数）：监控模式返回 {}(清单已是基集)；
+                # 默认模式并入 harmonic_collected(旧迁移残留) ∪ monitored_coins(discover 现写此表)，
                 # 修 discover 真相源错位回归(写 monitored_coins 但默认只读 harmonic_collected)。
-                if not self.cfg.monitored_coins.enabled:
-                    try:
-                        harm_c2s.update(self.store.get_harmonic_collected())
-                        harm_c2s.update(self.store.get_monitored_coins())
-                    except Exception as exc:  # noqa: BLE001
-                        log.warning("读取 collected/monitored 失败: %s", exc)
+                try:
+                    from .config import harmonic_extra_coins  # noqa: PLC0415
+                    harm_c2s.update(harmonic_extra_coins(
+                        self.cfg.monitored_coins.enabled,
+                        self.store.get_harmonic_collected(),
+                        self.store.get_monitored_coins()))
+                except Exception as exc:  # noqa: BLE001
+                    log.warning("读取 collected/monitored 失败: %s", exc)
                 # 逐笔 taker 监控：订阅 Bitget trade channel → 资金流加速度 flow_score（补 R2 最后数据源）
                 harm_s2c = {sym: coin for coin, sym in harm_c2s.items()}
                 self.harmonic_trade = BitgetTradeMonitor(harm_s2c, self.bg_ws)
@@ -931,17 +931,17 @@ class TradingSystem:
                     for _coin, _sym in harm_c2s.items():
                         if _coin not in cc_c2s:
                             cc_c2s[_coin] = _sym
-                cc_tfs = list(dict.fromkeys(
-                    list(self.cfg.bollinger.timeframes) + list(self.cfg.harmonic.timeframes)))
+                # collect_timeframes 纯函数：监控模式取 monitored∪bb∪harm 并集，否则 bb∪harm（修周期错配 P2-1）
+                from .config import collect_timeframes  # noqa: PLC0415
+                cc_tfs = collect_timeframes(
+                    self.cfg.monitored_coins.enabled,
+                    self.cfg.monitored_coins.timeframes,
+                    self.cfg.bollinger.timeframes,
+                    self.cfg.harmonic.timeframes)
                 cc_bars = max(self.cfg.bollinger.bars, self.cfg.harmonic.bars)
-                # 监控清单模式：采集集=清单(vol_c2s)；周期取并集(monitored 含用户 6H ∪ bollinger ∪ harmonic 含 30m)，
-                # 避免谐波 30m 落空走 live 回退读陈旧数据（修周期错配 P2-1）
+                # 监控清单模式：采集集=清单(vol_c2s)
                 if self.cfg.monitored_coins.enabled:
                     cc_c2s = dict(vol_c2s)
-                    cc_tfs = list(dict.fromkeys(
-                        list(self.cfg.monitored_coins.timeframes)
-                        + list(self.cfg.bollinger.timeframes)
-                        + list(self.cfg.harmonic.timeframes))) or cc_tfs
                 self.candle_collector = BitgetCandleCollector(
                     cc_c2s, cc_tfs, cc_bars, self.store)
                 log.info("K线采集器已建，%d 币 × %d 周期 → DB（轮转模式）", len(cc_c2s), len(cc_tfs))
