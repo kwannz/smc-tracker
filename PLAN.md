@@ -213,6 +213,13 @@ D 多空符号 · E 真实 userFills 解析/分类自洽 · F WS webData2==REST 
 > 据 codex-loop 反幻觉纪律保持开放，区别于「已实现但 backlog 写保守」的项（已核实证据后闭合）。
 
 ## 迭代日志
+- 2026-06-26 #106: **波动追踪接入 dashboard UI（新扁平模块 dashboard_vol.py，巨文件零增长）**（/loop：全栈实时波动）。
+  ① 新建 `dashboard_vol.py`（~110 行扁平模块）：`volatility_state`（store+币集→逐周期 JSON 态，纯逻辑可测）、
+  `pick_coins`（监控清单优先，空则回退 DB 已采币）、`render_volatility_page`（自包含迷你页，矩阵 行=币 列=周期，
+  格显 速度↑↓+PD% 溢价红/折价绿）、`register(app,store)`（外置挂 /volatility + /api/volatility 路由）。
+  ② **dashboard.py 仅 +1 行调用**（4190 行巨文件零增长，示范模块化扁平拆分方向，对抗 800 行约束）。
+  ③ **端到端实跑验证**：启动真实 dashboard → /api/volatility 返回 canonical 7 周期逐周期指标(BTC 速度10.4%/PD99%溢价)、
+  /volatility 返回页。TDD 4 例；全量 **2328 passed, 2 skipped**（零回归）。
 - 2026-06-26 #105: **统一全系统多周期为 CANONICAL_TIMEFRAMES + 闭合审计 P2-6**（用户#连续指令）。
   ① **P2-6 闭合**：把 `_run` 的 enabled 分支选币决策抽成 3 个纯函数(`select_base_universe`/`harmonic_extra_coins`/
   `collect_timeframes`)并接入(零孤儿、行为不变)，TDD 6 例钉住 enabled 行为。

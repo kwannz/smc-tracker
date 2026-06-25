@@ -1271,6 +1271,9 @@ async def serve(db_path: str, host: str = "127.0.0.1", port: int = 8787) -> None
     app.router.add_get("/monitored", handle_monitored_page)
     app.router.add_get("/api/monitored", handle_monitored)
     app.router.add_post("/api/monitored", handle_monitored)
+    # 波动追踪面板：外置扁平模块注册路由（/volatility + /api/volatility），dashboard.py 零增长
+    from .dashboard_vol import register as _register_vol  # noqa: PLC0415
+    _register_vol(app, store)
     # HL 聪明钱追踪终端（新增，不动现有 / 路由）
     app.router.add_get("/hl2", handle_hl2)
     # 信号总览页（/signals + /api/signals）
