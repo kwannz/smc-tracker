@@ -51,8 +51,10 @@ def ewma_vol(c: Any, lam: float = _RM_LAMBDA) -> float:
     近端指数加权，比等权 rv 对新波动更**灵敏**(rv 把 spike 摊薄到 20 根等权)。
     seed=首 ≤20 根对数收益样本方差，其后逐根 λ 衰减更新。<3 根或含 NaN/inf → -1.0 哨兵。
 
-    **本模块唯一经验证的前瞻量(#153/#154)**：实测波动水平强持续(corr(rv,10bar后rv)=0.73)，
+    **本模块唯一经验证的前瞻量(#153/#154/#155)**：实测波动水平强持续(corr(rv,10bar后rv)=0.73)，
     EWMA 在 IGARCH 下 h 步预测=当前 σ，故可读作**预期波动水平**——仍是水平非方向(方向短期反转,#152)。
+    #155 自我证伪：EWMA 比等权 rv **更准预测未来已实现波动**(150币 corr 0.414 vs rv 0.387、MAE 更小、
+    76% 币 EWMA 更优)，改进温和但一致——前瞻宣称有实测背书，非仅"行业标准"。
     """
     cc = np.asarray(c, dtype=float)
     if cc.size < 3 or not np.all(np.isfinite(cc)):
