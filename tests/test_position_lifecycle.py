@@ -292,6 +292,8 @@ class _FakeSession:
             payload = self._page2
 
         class _FakeResp:
+            status = 200                 # 真实 aiohttp 响应必有(#189 _post 读 status 判 429)
+            headers: dict = {}
             async def __aenter__(self_inner):
                 return self_inner
             async def __aexit__(self_inner, *_):
@@ -347,6 +349,8 @@ def test_user_fills_by_time_dedup():
             call_count_holder[0] += 1
 
             class _Resp:
+                status = 200             # #189:_post 读 status 判 429
+                headers: dict = {}
                 async def __aenter__(self):
                     return self
                 async def __aexit__(self, *_):

@@ -5,11 +5,17 @@
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Any
 
 import aiohttp
 import orjson
+
+# 429 限流退避重试(开源标准):生产 discover/address/监控全走 HL info,遇限流须退避非静默丢数据(#189)
+_MAX_RETRIES = 3
+_RETRY_BASE_S = 0.5
+_RETRY_CAP_S = 8.0
 
 from ..models import Candle, Fill, Position, Side
 from .constants import MAINNET_REST, VALID_INTERVALS
@@ -40,10 +46,19 @@ class HyperliquidInfo:
 
     async def _post(self, body: dict[str, Any]) -> Any:
         assert self._session is not None, "需在 async with 上下文中使用"
-        async with self._session.post(self.url, data=orjson.dumps(body),
-                                       headers={"Content-Type": "application/json"}) as resp:
-            resp.raise_for_status()
-            return orjson.loads(await resp.read())
+        delay = _RETRY_BASE_S
+        for attempt in range(_MAX_RETRIES + 1):
+            async with self._session.post(self.url, data=orjson.dumps(body),
+                                           headers={"Content-Type": "application/json"}) as resp:
+                # 429 限流:指数退避重试(尊重 Retry-After),避免生产 discover/监控遇限流静默丢数据
+                if resp.status == 429 and attempt < _MAX_RETRIES:
+                    ra = resp.headers.get("Retry-After", "")
+                    wait = float(ra) if ra.replace(".", "", 1).isdigit() else delay
+                    await asyncio.sleep(min(wait, _RETRY_CAP_S))
+                    delay *= 2
+                    continue
+                resp.raise_for_status()
+                return orjson.loads(await resp.read())
 
     # ---- 元数据 ----
     async def meta(self) -> dict[str, Any]:

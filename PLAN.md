@@ -214,6 +214,14 @@ D 多空符号 · E 真实 userFills 解析/分类自洽 · F WS webData2==REST 
 > 据 codex-loop 反幻觉纪律保持开放，区别于「已实现但 backlog 写保守」的项（已核实证据后闭合）。
 
 ## 迭代日志
+- 2026-06-27 #189: **生产健壮性:HL info API 429 限流退避重试(开源标准)——从"绕过限流"升级为"系统性解决"**（/loop;Opus 发现即修,TDD）。
+  #185-188 审计反复被 HL 429 打成筛子(#188 几乎全 candle 被限流致结论不可靠)。这暴露生产隐患:`discover`/`address`/地址监控全走同一 HL info API,
+  而 `HyperliquidInfo._post` 遇 429 直接 raise_for_status()抛、**无退避重试**→生产一次限流就静默丢地址/漏庄动作(数据质量漏洞,§三-3/4)。
+  修:_post 加 429 指数退避重试(_MAX_RETRIES=3/base0.5s/cap8s,尊重 Retry-After)——中心化于 _post,**所有 HL 方法(user_fills/candle_snapshot/discover)零接线自动获益**。
+  TDD:注入 fake session 测 429→重试→200成功 / 首次成功不重试 / 持续429重试用尽后抛(3测)。副带修 test_position_lifecycle 2个桩补 .status(真实aiohttp响应必有,原mock不完整)。
+  全量2470 passed(+3),202行≤800。审计脚本也自动受益(user_fills/candle 走_post,#188 限流不稳定部分缓解)。
+  教训:反复咬人的"外部障碍"(429)往往是生产代码缺健壮性的信号;把它从"审计绕过"升级成"_post系统性退避",是审计副产品里最有生产价值的一种。
+
 - 2026-06-27 #188: **诚实纠正:严格复核推翻 #187——共识放大 UNESTABLISHED(双庄 alpha +7.1%↔−6% 跨运行符号翻转)**（/loop;Opus 经验验证+自我纠错,#178类）。
   兑现 #187 自留的"待更多数据"——加中位数(抗离群)+bootstrap CI+扩样本(80庄)严格拷问 #187 的"双庄峰值 +7.1%"非单调。
   铁证:双庄 24h alpha **从 +7.1%(#187)翻转成 −6.0%(#188)**,符号都反了。**根因**:HL 限流致两次加载**不同币子集**,而共识事件集中少数币→前瞻 alpha 由"哪些币 candle 加载"主导,跨运行极不稳定。
