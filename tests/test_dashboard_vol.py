@@ -59,6 +59,17 @@ def test_pick_coins_fallback_ranks_by_recent_range():
     assert list(got.keys())[0] == "WILD"             # 最剧烈者排首(query DESC + dict 保序)
 
 
+def test_pick_coins_single_source_shared_with_cli():
+    """dashboard 与 CLI 必须共用同一 pick_coins(消除两前端选币分叉，#141)：身份相同。"""
+    from smc_tracker.dashboard_vol import pick_coins as dash_pick
+    from smc_tracker.monitor.volatility_monitor import pick_coins as core_pick
+    from smc_tracker.cli_commands import _cmd_vol  # CLI 内部惰性 import 同一函数
+    import inspect
+    assert dash_pick is core_pick                       # dashboard 经再导出指向同一对象
+    src = inspect.getsource(_cmd_vol)
+    assert "pick_coins(store)" in src                   # CLI 走共用选币而非裸 get_monitored_coins
+
+
 def test_render_page_self_contained():
     html = render_volatility_page()
     assert "/api/volatility" in html

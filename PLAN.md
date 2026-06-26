@@ -214,6 +214,14 @@ D 多空符号 · E 真实 userFills 解析/分类自洽 · F WS webData2==REST 
 > 据 codex-loop 反幻觉纪律保持开放，区别于「已实现但 backlog 写保守」的项（已核实证据后闭合）。
 
 ## 迭代日志
+- 2026-06-26 #141: **可达性验证 + 修 CLI/dashboard 选币分叉(DRY 单一源)**（/loop；Opus 验证+重构）。
+  先验证 800 行不变量(✅无文件超800,改动的 volatility_monitor 443行)。再做可达性验证:波动板三条触达路径
+  (dashboard路由/CLI子命令/opt-in推送)都接线。但发现真 bug:`_cmd_vol` 只用 get_monitored_coins,空清单(=当前
+  生产态)直接打印"监控清单为空"**什么都不显示**——而 dashboard 的 pick_coins(#139)有 fallback。**同一波动板
+  dashboard 能用、CLI 死胡同**,且当前生产态 CLI vol 完全不可用。根因:两前端各自实现选币(DRY 裂缝)。
+  修:把 pick_coins 提到 volatility_monitor(波动板引擎,不依赖 aiohttp),dashboard+CLI 共用单一源,从根消除分叉。
+  实测 CLI vol 现在空清单态出板(SYN/BEAT/SKHYNIX,诚实标陈旧)。TDD +2(身份锁 + CLI fallback 出板);全量 **2447 passed**(零回归)。
+  教训:复制选择逻辑必然分叉,#139 修 dashboard 漏了 CLI 那份;DRY 真正价值是消除"修一处忘另一处"的结构可能。
 - 2026-06-26 #140: **"实时"性能实测背书 + 顺带修选择性样本诚实裂缝**（/loop；Opus 实测+§二加固）。
   ① **性能实测(主交付)**:实时板每5s刷新要为50币×7周期算全套numpy(350次get_candles+向量化),
   "实时"是有数字门槛的承诺却从没量过。实测 volatility_state 全路径(真实1.6GB库)=**154-157ms**,

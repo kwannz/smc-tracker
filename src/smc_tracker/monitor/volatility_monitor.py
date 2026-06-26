@@ -14,6 +14,7 @@
 from __future__ import annotations
 
 import math
+import time
 from typing import Any
 
 import numpy as np
@@ -280,6 +281,37 @@ def vol_term_structure(by_tf: dict) -> dict:
     shape = ("倒挂" if ratio > _TS_BACKWARD
              else ("顺挂" if ratio < _TS_CONTANGO else "平坦"))
     return {"shape": shape, "ratio": ratio, "short": sv, "long": lv, "n": n}
+
+
+_FALLBACK_TOP = 50              # 清单空时展示币数上界(性能：rank 每币算 7 周期，不能全 665)
+_FALLBACK_WIN_MS = 86_400_000  # 振幅预筛窗口(近 24h)：只在近端真实波动里选
+
+
+def pick_coins(store: Any) -> dict[str, str]:
+    """选波动板展示币集(dashboard+CLI 共用单一源，消除两前端选币分叉)：优先监控清单；
+    清单空则回退「近 24h 振幅最大的 N 币」——波动板该突出**正在剧烈波动**的币，而非任意 50 个。
+
+    振幅预筛是 SQL 廉价代理(~12ms：(MAX(h)-MIN(l))/MIN(l))，昂贵的全指标 rank 仅作用这最该看的
+    N 币——性能上界与信息质量兼得。近端无 bar(合成/采集停摆)→ 降级 DISTINCT，保证不空。
+    """
+    coins = store.get_monitored_coins()
+    if coins:
+        return coins
+    from ..config import CANONICAL_TIMEFRAMES  # noqa: PLC0415 — 惰性导入避顶层环
+    try:
+        cutoff = int(time.time() * 1000) - _FALLBACK_WIN_MS
+        rows = store.conn.execute(
+            "SELECT coin FROM bitget_candles WHERE tf=? AND open_ms>=? "
+            "GROUP BY coin ORDER BY (MAX(h)-MIN(l))/NULLIF(MIN(l),0) DESC LIMIT ?",
+            (CANONICAL_TIMEFRAMES[0], cutoff, _FALLBACK_TOP),
+        ).fetchall()
+        if not rows:   # 无近端数据(合成测试/采集停摆)→ 降级任意已采币，保证不空
+            rows = store.conn.execute(
+                "SELECT DISTINCT coin FROM bitget_candles LIMIT ?", (_FALLBACK_TOP,)
+            ).fetchall()
+        return {r[0]: f"{r[0]}USDT" for r in rows}
+    except Exception:  # noqa: BLE001
+        return {}
 
 
 class VolatilityMonitor:

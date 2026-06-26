@@ -73,12 +73,13 @@ def _cmd_vol(args: argparse.Namespace) -> None:
     """实时波动追踪板：监控清单币按速度+加速度领先信号排序（读 DB 已采 K 线，无网络）。"""
     try:
         from .storage import Store
-        from .monitor.volatility_monitor import VolatilityMonitor
+        from .monitor.volatility_monitor import VolatilityMonitor, pick_coins
 
         store = Store(Path(args.db))
-        coins = store.get_monitored_coins()
+        # 与 dashboard 共用选币：有清单用清单，清单空则取近 24h 最剧烈币(消除两前端分叉，#141)
+        coins = pick_coins(store)
         if not coins:
-            print("[vol] 监控清单为空（先 `watch add BTC ETH` 添加并等采集器填 K 线）")
+            print("[vol] 无可显示币（采集器尚未填 K 线；可 `watch add BTC ETH` 指定关注币）")
             store.close()
             return
         tfs = [t.strip() for t in args.tf.split(",") if t.strip()]

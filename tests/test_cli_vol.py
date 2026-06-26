@@ -32,10 +32,26 @@ def test_vol_prints_board(tmp_path, capsys):
     assert "BTC" in out and "波动追踪" in out
 
 
-def test_vol_empty_watchlist(tmp_path, capsys):
+def test_vol_empty_watchlist_no_data(tmp_path, capsys):
+    """空清单 + 无 K 线 → 诚实提示无可显示(不再死板'监控清单为空')。"""
     db = str(tmp_path / "t.db")
-    Store(Path(db)).close()  # 建库但不加币
+    Store(Path(db)).close()  # 建库但不加币、无 K 线
     ap = build_parser()
     args = ap.parse_args(["vol", "--db", db])
     args.handler(args)
-    assert "监控清单为空" in capsys.readouterr().out
+    assert "无可显示币" in capsys.readouterr().out
+
+
+def test_vol_empty_watchlist_falls_back_to_collected(tmp_path, capsys):
+    """空清单但 DB 有 K 线 → fallback 出板(与 dashboard 共用 pick_coins，不再死胡同，#141)。"""
+    db = str(tmp_path / "t.db")
+    s = Store(Path(db))
+    rows = [("ETH", "15m", i * 900_000, 100.0 + i, 100.0 + i, 100.0 + i, 100.0 + i, 1.0)
+            for i in range(40)]   # 关键：未 add_monitored_coins，清单空但已采 K 线
+    s.upsert_candles(rows)
+    s.close()
+    ap = build_parser()
+    args = ap.parse_args(["vol", "--tf", "15m", "--db", db])
+    args.handler(args)
+    out = capsys.readouterr().out
+    assert "ETH" in out and "波动追踪" in out
