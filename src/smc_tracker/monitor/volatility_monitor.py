@@ -481,7 +481,9 @@ class VolatilityMonitor:
             lines.append("🔸蓄势(压缩): " + " ".join(
                 f"{x['coin']}/{x['tf']}" for x in hl["squeeze"]))
         if hl["expansion"]:
-            lines.append("🔶放量(扩张): " + " ".join(
+            # 扩张是系统第一号 edge:实测 90% 续高波动(#153,lift7.6×)——操作化提示「波动会续」,
+            # 但**方向不定**(方向类信号皆~0 #150-158);故标注续波动而非续涨/跌。
+            lines.append("🔶放量(扩张·实测90%续高波动·方向不定): " + " ".join(
                 f"{x['coin']}/{x['tf']}({x['velocity']:+.1f}%)" for x in hl["expansion"]))
         if hl["extreme_pd"]:
             lines.append("⚡极端PD: " + " ".join(
