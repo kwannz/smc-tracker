@@ -11,8 +11,41 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from smc_tracker.monitor.volatility_monitor import (
     vol_metrics, pdarray, VolatilityMonitor, volatility_highlights, market_regime,
-    mtf_alignment, vol_percentile,
+    mtf_alignment, vol_percentile, coin_vol_state,
 )
+
+
+def _m(regime="常态", vol_pct=0.5, pd_pct=0.5):
+    return {"regime": regime, "vol_pct": vol_pct, "pd_pct": pd_pct}
+
+
+def test_coin_vol_state_expansion_takes_priority():
+    """任一周期扩张且该周期 HVP≥0.7 → 🔶放量(进行中最优先)。"""
+    by_tf = {"15m": _m("常态"), "1H": _m("扩张", vol_pct=0.85)}
+    assert coin_vol_state(by_tf) == "🔶放量"
+
+
+def test_coin_vol_state_hvp_extreme():
+    """多数周期 HVP≥0.9 → 🔥高位剧烈。"""
+    by_tf = {"15m": _m(vol_pct=0.95), "1H": _m(vol_pct=0.92), "4H": _m(vol_pct=0.5)}
+    assert coin_vol_state(by_tf) == "🔥高位剧烈"
+
+
+def test_coin_vol_state_squeeze():
+    """多数周期压缩 → 🔸蓄势。"""
+    by_tf = {"15m": _m("压缩"), "1H": _m("压缩"), "4H": _m("常态")}
+    assert coin_vol_state(by_tf) == "🔸蓄势"
+
+
+def test_coin_vol_state_deep_discount():
+    """多数周期深折价(pd≤0.15) → 深折价。"""
+    by_tf = {"15m": _m(pd_pct=0.05), "1H": _m(pd_pct=0.10), "4H": _m(pd_pct=0.5)}
+    assert coin_vol_state(by_tf) == "深折价"
+
+
+def test_coin_vol_state_normal_and_empty():
+    assert coin_vol_state({"15m": _m()}) == "常态"
+    assert coin_vol_state({}) == "常态"
 
 
 def test_vol_percentile_high_when_recent_spike():

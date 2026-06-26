@@ -92,7 +92,8 @@ async function load(){
  coins.forEach(function(c){
   var al=c.align||{bias:'分歧',aligned:0,total:0};
   var bm=al.bias==='多'?'<span class="up">🟢多</span>':(al.bias==='空'?'<span class="dn">🔴空</span>':'⚪');
-  h+='<tr><td class="coin">'+c.coin+'<br><small>'+bm+' '+al.aligned+'/'+al.total+'</small></td><td>'+c.score.toFixed(1)+'</td>';
+  var st=c.state?(' '+c.state):'';
+  h+='<tr><td class="coin">'+c.coin+st+'<br><small>'+bm+' '+al.aligned+'/'+al.total+'</small></td><td>'+c.score.toFixed(1)+'</td>';
   tfs.forEach(function(t){h+=cell(c.by_tf[t]);}); h+='</tr>';
  });
  document.getElementById('box').innerHTML=h+'</tbody></table>';

@@ -204,6 +204,31 @@ def mtf_alignment(by_tf: dict) -> dict:
     return {"bias": bias, "aligned": dominant, "total": total, "score": score}
 
 
+def coin_vol_state(by_tf: dict) -> str:
+    """把单币多周期指标(regime/HVP/PD)合成一个可操作的一词状态(决策级,非新计算)。纯函数。
+
+    优先级(进行中最优先)：🔶放量(任一周期扩张且 HVP≥0.7) > 🔥高位剧烈(多数周期 HVP≥0.9)
+    > 🔸蓄势(多数压缩) > 深折价/深溢价(多数周期 PD 极端) > 常态。
+    """
+    ms = list(by_tf.values())
+    n = len(ms)
+    if n == 0:
+        return "常态"
+    half = (n + 1) // 2   # 过半
+    expansion = [m for m in ms if m.get("regime") == "扩张"]
+    if expansion and any(m.get("vol_pct", -1.0) >= 0.7 for m in expansion):
+        return "🔶放量"
+    if sum(1 for m in ms if m.get("vol_pct", -1.0) >= 0.9) >= half:
+        return "🔥高位剧烈"
+    if sum(1 for m in ms if m.get("regime") == "压缩") >= half:
+        return "🔸蓄势"
+    if sum(1 for m in ms if m.get("pd_pct", 0.5) <= 0.15) >= half:
+        return "深折价"
+    if sum(1 for m in ms if m.get("pd_pct", 0.5) >= 0.85) >= half:
+        return "深溢价"
+    return "常态"
+
+
 class VolatilityMonitor:
     """逐周期读已采 K 线算波动+PD 指标，按运动分排序出当前在动的监控清单币。"""
 
@@ -265,6 +290,7 @@ class VolatilityMonitor:
             rows.append({"coin": coin,
                          "score": sc,
                          "align": mtf_alignment(by_tf),
+                         "state": coin_vol_state(by_tf),   # 多周期合成状态(决策级)
                          "last_ms": self._latest_bar_ms(coin),
                          "by_tf": by_tf})
         rows.sort(key=lambda r: r["score"], reverse=True)
@@ -305,7 +331,7 @@ class VolatilityMonitor:
             al = r.get("align") or {"bias": "分歧", "aligned": 0, "total": 0}
             bias_mark = {"多": "🟢多", "空": "🔴空", "分歧": "⚪分歧"}[al["bias"]]
             lines.append(
-                f"━ {r['coin']:<8} 运动分 {r['score']:.1f}"
+                f"━ {r['coin']:<8} [{r.get('state', '常态')}] 运动分 {r['score']:.1f}"
                 f" · {bias_mark}({al['aligned']}/{al['total']}周期一致)")
             for tf in self.timeframes:
                 m = r["by_tf"].get(tf)
