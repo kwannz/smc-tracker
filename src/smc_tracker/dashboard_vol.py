@@ -19,15 +19,31 @@ from .config import CANONICAL_TIMEFRAMES
 from .monitor.volatility_monitor import VolatilityMonitor, volatility_highlights, market_regime
 
 
+_FALLBACK_TOP = 50              # 清单空时展示币数上界(性能：rank 每币算 7 周期，不能全 665)
+_FALLBACK_WIN_MS = 86_400_000  # 振幅预筛窗口(近 24h)：只在近端真实波动里选
+
+
 def pick_coins(store: Any) -> dict[str, str]:
-    """选展示币集：优先监控清单；空则回退 DB 中已采 K 线的币（默认模式也可用）。"""
+    """选展示币集：优先监控清单；清单空则回退「近 24h 振幅最大的 N 币」。
+
+    波动板该突出**正在剧烈波动**的币，而非任意 50 个(修 §二 静默任意截断)。振幅预筛是
+    SQL 廉价代理(~12ms：MAX(h)-MIN(l) / MIN(l))，昂贵的全指标 rank 仅作用于这最该看的 N 币——
+    性能上界与信息质量兼得。近端无 bar(合成/陈旧场景)→ 降级为 DISTINCT，保证不空。
+    """
     coins = store.get_monitored_coins()
     if coins:
         return coins
     try:
+        cutoff = int(time.time() * 1000) - _FALLBACK_WIN_MS
         rows = store.conn.execute(
-            "SELECT DISTINCT coin FROM bitget_candles LIMIT 50"
+            "SELECT coin FROM bitget_candles WHERE tf=? AND open_ms>=? "
+            "GROUP BY coin ORDER BY (MAX(h)-MIN(l))/NULLIF(MIN(l),0) DESC LIMIT ?",
+            (CANONICAL_TIMEFRAMES[0], cutoff, _FALLBACK_TOP),
         ).fetchall()
+        if not rows:   # 无近端数据(合成测试/采集停摆)→ 降级任意已采币，保证不空
+            rows = store.conn.execute(
+                "SELECT DISTINCT coin FROM bitget_candles LIMIT ?", (_FALLBACK_TOP,)
+            ).fetchall()
         return {r[0]: f"{r[0]}USDT" for r in rows}
     except Exception:  # noqa: BLE001
         return {}

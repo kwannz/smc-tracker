@@ -41,7 +41,22 @@ def test_pick_coins_prefers_monitored():
 def test_pick_coins_fallback_to_db():
     s = _store()
     _seed(s, "BTC", "15m", lambda i: 100.0 + i)
-    assert pick_coins(s) == {"BTC": "BTCUSDT"}  # 清单空 → DB 已采币
+    assert pick_coins(s) == {"BTC": "BTCUSDT"}  # 清单空 + 数据非近端 → DISTINCT 降级仍含 BTC
+
+
+def test_pick_coins_fallback_ranks_by_recent_range():
+    """清单空 + 近端数据 → 按近 24h 振幅降序：剧烈波动币优先于安静币(波动板该突出在动的)。"""
+    import time
+    s = _store()
+    base = int(time.time() * 1000) - 40 * 900_000   # 近期起点(40 根 15m ≈ 10h 内)
+    calm = [("CALM", "15m", base + i * 900_000, 100.0, 100.1, 99.9, 100.0, 1.0)
+            for i in range(40)]                      # 振幅 ~0.2%
+    wild = [("WILD", "15m", base + i * 900_000, 100.0, 100.0 + i * 2, 100.0 - i * 2, 100.0, 1.0)
+            for i in range(40)]                      # 振幅巨大(i=39 → h178/l22)
+    s.upsert_candles(calm + wild)
+    got = pick_coins(s)
+    assert "WILD" in got and "CALM" in got
+    assert list(got.keys())[0] == "WILD"             # 最剧烈者排首(query DESC + dict 保序)
 
 
 def test_render_page_self_contained():
