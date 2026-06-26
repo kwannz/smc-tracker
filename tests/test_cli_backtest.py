@@ -34,3 +34,32 @@ def test_backtest_runs_on_stored_candles(tmp_path, capsys):
     args.handler(args)
     out = capsys.readouterr().out
     assert "回测" in out and "freqtrade" in out      # 报告头出现=命令端到端跑通
+
+
+def test_harmonic_backtest_runs_no_repaint():
+    """#201 谐波回测:HarmonicState 重放→build_setups→run_setups,返回 BacktestResult(结构性,无崩溃)。"""
+    from smc_tracker.backtest import harmonic_backtest, BacktestResult
+    from smc_tracker.models import Candle
+    px, cs = 100.0, []
+    for i in range(200):
+        px *= math.exp(0.02 * math.sin(i / 6.0))
+        cs.append(Candle("BTC", "1H", i * 3_600_000, (i + 1) * 3_600_000,
+                         px, px * 1.01, px * 0.99, px, 1.0, 0))
+    res = harmonic_backtest("BTC", "1H", cs, target_rr=2.0)
+    assert isinstance(res, BacktestResult)            # 跑通返回结果(谐波形态有无视数据而定)
+    assert all(t.entry_idx >= 0 for t in res.trades)  # no-repaint:entry_idx 有效
+
+
+def test_backtest_harmonic_flag(tmp_path, capsys):
+    db = str(tmp_path / "h.db")
+    s = Store(Path(db))
+    s.add_monitored_coins([("BTC", "BTCUSDT", 1, "")])
+    px, rows = 100.0, []
+    for i in range(150):
+        px *= math.exp(0.015 * math.sin(i / 5.0))
+        rows.append(("BTC", "1H", i * 3_600_000, px, px * 1.01, px * 0.99, px, 1.0))
+    s.upsert_candles(rows)
+    s.close()
+    args = build_parser().parse_args(["backtest", "--tf", "1H", "--harmonic", "--db", db])
+    args.handler(args)
+    assert "谐波 setup" in capsys.readouterr().out     # --harmonic 走谐波分支

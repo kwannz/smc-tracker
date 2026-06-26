@@ -22,6 +22,8 @@ from .harmonic_review import build_harmonic_predictions
 from .microprice import OFITracker, queue_imbalance, micro_price, ofi_delta
 # 共享聚合 helper：读 11 张信号表 → 统一行结构 → 按 ts 倒序
 from .all_signals import collect_all_signals
+# MTF 分层入场决策(顶12h+1d定向/中1h+4h确认/底5m+15m触发)
+from .mtf_confluence import mtf_decision, fmt_mtf
 
 __all__ = ["Signal", "SignalEngine", "DivergenceDetector", "DivergenceSignal", "pred_kind",
            "ConsensusSignal", "CoinPositioning", "WhaleConsensus", "positioning",
@@ -39,4 +41,4 @@ __all__ = ["Signal", "SignalEngine", "DivergenceDetector", "DivergenceSignal", "
            "funding_extreme_signal", "oi_directional_velocity",
            "setup_fingerprint", "SetupDedup", "build_harmonic_predictions",
            "OFITracker", "queue_imbalance", "micro_price", "ofi_delta",
-           "collect_all_signals"]
+           "collect_all_signals", "mtf_decision", "fmt_mtf"]

@@ -23,7 +23,7 @@ from typing import Any
 from .cli_commands import (  # noqa: F401
     _cmd_run, _cmd_report, _cmd_signals, _cmd_vol, _cmd_watch, _cmd_address,
     _cmd_discover, _cmd_bench, _cmd_llm, _cmd_wallet, _cmd_dashboard,
-    _cmd_okx, _cmd_health, _cmd_backtest,
+    _cmd_okx, _cmd_health, _cmd_backtest, _cmd_mtf,
 )
 
 # 项目根：src/smc_tracker/cli.py → parents[2] = repo 根
@@ -472,9 +472,17 @@ def build_parser() -> argparse.ArgumentParser:
     p_bt.add_argument("--rr", type=float, default=2.0, metavar="R", help="目标盈亏比（默认 2.0）")
     p_bt.add_argument("--require-zone", action="store_true", help="要求 OB/FVG 区域共振过滤")
     p_bt.add_argument("--require-sweep", action="store_true", help="要求流动性扫荡共振过滤")
+    p_bt.add_argument("--harmonic", action="store_true", help="回测谐波 setup(no-repaint 增量重放,#165 edge)而非 SMC 结构")
+    p_bt.add_argument("--min-conf", type=float, default=0.0, metavar="C",
+                      help="谐波回测最低置信(对齐推送门控 0.75;默认 0=全收)")
     p_bt.add_argument("--db", default=_DEFAULT_DB, metavar="PATH",
                       help=f"SQLite 数据库路径（默认 {_DEFAULT_DB}）")
     p_bt.set_defaults(handler=_cmd_backtest)
+
+    p_mtf = sub.add_parser("mtf", help="MTF 分层入场决策(顶12h+1d定向·中1h+4h确认·底5m+15m触发,读DB无网络)")
+    p_mtf.add_argument("--db", default=_DEFAULT_DB, metavar="PATH",
+                       help=f"SQLite 数据库路径（默认 {_DEFAULT_DB}）")
+    p_mtf.set_defaults(handler=_cmd_mtf)
 
     # ---- discover ----
     p_disc = sub.add_parser("discover", help="从排行榜自动发现聪明钱地址")

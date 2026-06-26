@@ -131,7 +131,7 @@ def _cmd_backtest(args: argparse.Namespace) -> None:
     """
     try:
         from .storage import Store
-        from .backtest import Backtester, BacktestResult
+        from .backtest import Backtester, BacktestResult, harmonic_backtest
         from .monitor.volatility_monitor import pick_coins
 
         store = Store(Path(args.db))
@@ -140,21 +140,25 @@ def _cmd_backtest(args: argparse.Namespace) -> None:
             print("[backtest] 无可回测币（采集器尚未填 K 线；`watch add BTC ETH`）")
             store.close()
             return
-        flt = []
-        if args.require_zone:
-            flt.append("OB/FVG共振")
-        if args.require_sweep:
-            flt.append("扫荡共振")
-        print(f"📊 回测 SMC 结构信号 [{args.tf}] 目标{args.rr}R "
-              f"{'· ' + '+'.join(flt) if flt else '(无过滤)'} —— freqtrade 式绩效（keyless,无实盘）")
+        if args.harmonic:
+            head = f"谐波 setup(min_conf≥{args.min_conf})"
+        else:
+            flt = [s for s, on in (("OB/FVG共振", args.require_zone),
+                                   ("扫荡共振", args.require_sweep)) if on]
+            head = "SMC结构信号 " + ("· " + "+".join(flt) if flt else "(无过滤)")
+        print(f"📊 回测 {head} [{args.tf}] 目标{args.rr}R —— freqtrade 式绩效（keyless,无实盘）")
         agg = BacktestResult("合计")
         for coin in coins:
             cs = store.get_candles(coin, args.tf, limit=args.bars)
             if len(cs) < 100:
                 continue
-            res = Backtester(coin).run(
-                cs, target_rr=args.rr, require_zone=args.require_zone,
-                require_sweep=args.require_sweep)
+            if args.harmonic:
+                res = harmonic_backtest(coin, args.tf, cs, target_rr=args.rr,
+                                        min_conf=args.min_conf)
+            else:
+                res = Backtester(coin).run(
+                    cs, target_rr=args.rr, require_zone=args.require_zone,
+                    require_sweep=args.require_sweep)
             if res.wins + res.losses > 0:
                 print("  " + res.summary())
                 agg.trades.extend(res.trades)
@@ -168,6 +172,43 @@ def _cmd_backtest(args: argparse.Namespace) -> None:
         store.close()
     except Exception as exc:
         print(f"[backtest] 出错：{exc}", file=sys.stderr)
+        sys.exit(1)
+
+
+def _cmd_mtf(args: argparse.Namespace) -> None:
+    """MTF 分层入场决策快照(用户规范):顶 12h+1d 定向 · 中 1h+4h 确认(须同向) · 底 5m+15m 触发(取最高置信)。
+
+    各层方向取该 tf 谐波最优 setup 的 direction/confidence;层层对齐才出入场,否则 hold。读 DB 无网络。
+    """
+    try:
+        from .storage import Store
+        from .signals import mtf_decision, fmt_mtf
+        from .signals.trade_setup import build_setups
+        from .indicators.harmonic import analyze_candles
+        from .monitor.volatility_monitor import pick_coins
+
+        store = Store(Path(args.db))
+        coins = pick_coins(store)
+        if not coins:
+            print("[mtf] 无可决策币（采集器尚未填 K 线；`watch add BTC ETH`）")
+            store.close()
+            return
+        layers = ["5m", "15m", "1H", "4H", "12H", "1D"]
+        print("🔭 MTF 分层入场决策（顶 12h+1d 定向 · 中 1h+4h 确认须同向 · 底 5m+15m 触发取最高置信）")
+        for coin in coins:
+            decisions: dict = {}
+            for tf in layers:
+                cs = store.get_candles(coin, tf, limit=400)
+                if len(cs) < 60:
+                    continue
+                setups = build_setups(coin, tf, cs, analyze_candles(cs))
+                if setups:                       # completed 优先、置信降序 → 取首条
+                    decisions[tf] = {"direction": setups[0].direction,
+                                     "confidence": setups[0].confidence}
+            print("  " + fmt_mtf(coin, mtf_decision(decisions)))
+        store.close()
+    except Exception as exc:
+        print(f"[mtf] 出错：{exc}", file=sys.stderr)
         sys.exit(1)
 
 
