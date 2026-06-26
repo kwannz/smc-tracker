@@ -76,12 +76,12 @@ class EventHandlersMixin:
                     evt.time_ms, evt.address, evt.label, evt.coin, evt.type.value,
                     direction, abs(net), evt.px, evt.position_after, int(evt.is_taker)))
                 d = "做多🟢" if direction == "long" else "做空🔴"
-                # #186 操作化:流式=WS 低延迟路径→可吃短线 edge(实测庄群入场领先 gross+0.46%/4h)
+                # #192 撤回 #190 的入场领先标注:#186 的"+0.46%/4h"经币内配对+更好覆盖证伪(coin-selection 伪影,
+                # 扣成本净利负、净胜率<50%);庄技巧持续(#185)但盈利非来自可复制入场timing→信号作"聪明钱活跃"语境,非"照入场跟单即盈利"。
                 msg = (f"[{_ts(evt.time_ms)}] 🐋跟庄信号 {evt.label or evt.address[:8]} "
                        f"净{d} {evt.coin} ${abs(net):,.0f}(3min累积) @ {_fmt_px(evt.px)}(HL成交价)"
                        + self._price_tag(evt.coin)
-                       + self.efficacy.label_of("跟庄")
-                       + " ·入场实测领先gross+0.46%/4h·WS低延迟可吃短线(#186)")
+                       + self.efficacy.label_of("跟庄"))
                 print(f"\n{'='*60}\n{msg}\n{'='*60}\n")
                 self._emit("whale", msg)
                 self._record_pred(evt.coin, "跟庄", direction)

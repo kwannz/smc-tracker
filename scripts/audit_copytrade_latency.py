@@ -35,6 +35,8 @@ _LAT = {"0延迟": 0, "15m": 1, "1h": 4}     # 跟单延迟(15m bar 数)
 _TOP_COINS = 20
 _CONC = 3
 _DELAY = 0.2
+# 跟单来回成本(%):HL taker ~0.045%/边×2 + 跟随者滞后滑点 ~0.005%/边 → 保守 0.10% round-trip(#192)
+_ROUND_TRIP_COST = 0.10
 
 
 async def _fetch_fills(addrs: list[str]) -> dict[str, list]:
@@ -113,7 +115,9 @@ async def main() -> None:
     drift = {c: {h: _coin_drift(px[c], n) for h, n in _HZ.items()} for c in px}
 
     # 聚合:edge[lat][hz] = list of (方向调整前瞻收益 − 同向漂移基线)
-    agg: dict = {lk: {hk: [] for hk in _HZ} for lk in _LAT}
+    agg: dict = {lk: {hk: [] for hk in _HZ} for lk in _LAT}      # alpha(扣漂移)
+    raw_agg: dict = {lk: {hk: [] for hk in _HZ} for lk in _LAT}  # 方向调整原始收益(净利计算用)
+    pc: dict = defaultdict(lambda: {lk: {hk: [] for hk in _HZ} for lk in _LAT})  # 币内 alpha(#192 配对)
     for coin, tm, is_long in entries:
         if coin not in px:
             continue
@@ -130,6 +134,8 @@ async def main() -> None:
                 adj = r if is_long else -r
                 base = drift[coin][hk] if is_long else -drift[coin][hk]
                 agg[lk][hk].append((adj - base) * 100.0)   # alpha %,扣漂移
+                raw_agg[lk][hk].append(adj * 100.0)        # 方向调整原始收益 %(净利=此−成本)
+                pc[coin][lk][hk].append((adj - base) * 100.0)   # 币内 alpha(#192 等权聚合)
 
     print("=" * 70)
     print(f"跟庄延迟 alpha(方向调整前瞻收益 − 币种同向漂移基线,%;n 笔入场)")
@@ -140,6 +146,31 @@ async def main() -> None:
             v = agg[lk][hk]
             cells.append(f"{np.mean(v):+.3f}%(n{len(v)})" if len(v) > 20 else "  —  ")
         print(f"  {lk:<8}" + "".join(f"{c:>12}" for c in cells))
+    print("-" * 70)
+    print(f"【#192 净利:扣来回成本 {_ROUND_TRIP_COST}%(费+滑点)后,跟单实际落袋——均值净利 / 净赚比例(胜率)】")
+    print(f"  {'延迟':<8}" + "".join(f"{hk:>18}" for hk in _HZ))
+    for lk in _LAT:
+        cells = []
+        for hk in _HZ:
+            v = raw_agg[lk][hk]
+            if len(v) > 20:
+                net = np.array(v) - _ROUND_TRIP_COST
+                cells.append(f"{net.mean():+.3f}%/{(net > 0).mean():.0%}")
+            else:
+                cells.append("—")
+        print(f"  {lk:<8}" + "".join(f"{c:>18}" for c in cells))
+    print("  读法:均值净利>0 且 净赚比例>50% 才是可跟;胜率<50% 但均值>0=少数暴赚撑(跟着心惊)。")
+    print("-" * 70)
+    print("【#192 币内配对(消除币种选择混淆,#191同法)=决定性】每币 0延迟 alpha 均值,跨币等权")
+    for hk in ("4h", "24h"):
+        pcm = [float(np.mean(d["0延迟"][hk])) for d in pc.values() if len(d["0延迟"][hk]) >= 15]
+        if len(pcm) >= 4:
+            a = np.array(pcm)
+            print(f"  {hk}: {len(pcm)}币  币内均值 {a.mean():+.3f}% / 中位 {np.median(a):+.3f}% / "
+                  f"{int((a > 0).sum())}/{len(pcm)}币为正")
+        else:
+            print(f"  {hk}: 合格币不足({len(pcm)})")
+    print("  ⚠对比 #186(+0.46%/4h)↔#192(本run池化−0.53%/4h)符号翻转——币内配对定:入场领先 edge 是否扛得住币种控制。")
     print("-" * 70)
     def mean(lk, hk):
         v = agg[lk][hk]
