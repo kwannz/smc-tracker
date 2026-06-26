@@ -47,7 +47,7 @@ def render_volatility_page() -> str:
  .up{color:#3fb950} .dn{color:#f85149} .prem{background:#3a1d1d} .disc{background:#16301d} .eq{color:#8b949e}
  .note{color:#8b949e;font-size:12px} .fc{color:#58a6ff;font-size:11px}
 </style></head><body>
-<h1>🌀 实时波动追踪 <span class="note">逐周期 速度·<b style="color:#58a6ff">σ→GA波动预测</b>·PD·波动状态·HVP（蓝 σ→GA=当前波动→GARCH一步预测(系统主前瞻量#179,15m胜EWMA+0.078;水平可测,非方向)；速度箭头=回望/方向~0勿据以追涨#150-152；绿=折价/区间下半段 红=溢价/区间上半段(位置描述非买卖,#151溢价无反转)；🔸压缩 🔶扩张；HVP 🔥≥90%异常剧烈 ❄️≤10%极静蓄势；期限结构 ⏫倒挂=近端急 ⏬顺挂=远端主导）</span></h1>
+<h1>🌀 实时波动追踪 <span class="note">逐周期 速度·<b style="color:#58a6ff">σ→GR波动预测</b>·PD·波动状态·HVP（蓝 σ→GR=当前波动→range-GARCH一步预测(主前瞻量#199,吃Parkinson PK²胜标准GARCH;水平可测,非方向)；速度箭头=回望/方向~0勿据以追涨#150-152；绿=折价/区间下半段 红=溢价/区间上半段(位置描述非买卖,#151溢价无反转)；🔸压缩 🔶扩张；HVP 🔥≥90%异常剧烈 ❄️≤10%极静蓄势；期限结构 ⏫倒挂=近端急 ⏬顺挂=远端主导）</span></h1>
 <div id="hl" class="note"></div>
 <div id="box" class="note">加载中…</div>
 <script>
@@ -65,8 +65,9 @@ function cell(m){
  var z=m.pd_zone, zc=z==='溢价'?'prem':(z==='折价'?'disc':'eq');
  var rg=m.regime, rs=rg==='压缩'?'🔸':(rg==='扩张'?'🔶':'');
  var vp=(m.vol_pct>=0)?((m.vol_pct>=0.9?'🔥':(m.vol_pct<=0.1?'❄️':''))+'HVP'+Math.round(m.vol_pct*100)+'%'):'';
- // 波动水平 σ→GARCH 一步预测(系统主前瞻量#179;EWMA 退而求其次)——真前瞻 edge,与速度箭头(回望/方向~0)区分
- var fc=(m.garch_vol>=0)?'σ'+(m.rv||0).toFixed(1)+'→GA'+m.garch_vol.toFixed(1)+'%':'';
+ // 波动水平 σ→GR=range-GARCH 一步预测(主前瞻量,#199 实测最优:吃 Parkinson PK² 胜标准 GARCH)——真前瞻 edge,与速度箭头(回望/方向~0)区分
+ var gr=(m.garch_range>=0)?m.garch_range:m.garch_vol;
+ var fc=(gr>=0)?'σ'+(m.rv||0).toFixed(1)+'→GR'+gr.toFixed(1)+'%':'';
  return '<td class="'+zc+'"><span class="'+cls+'">'+arr+Math.abs(v).toFixed(1)+'%</span>'+rs
    +'<br><span class="fc">'+fc+'</span><br>PD'+Math.round(m.pd_pct*100)+'%　<small class="note">'+vp+'</small></td>';
 }

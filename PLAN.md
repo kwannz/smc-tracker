@@ -214,6 +214,12 @@ D 多空符号 · E 真实 userFills 解析/分类自洽 · F WS webData2==REST 
 > 据 codex-loop 反幻觉纪律保持开放，区别于「已实现但 backlog 写保守」的项（已核实证据后闭合）。
 
 ## 迭代日志
+- 2026-06-27 #200: **传导一致性:#199 range-GARCH 升级传到 dashboard(σ→GR),修两呈现面口径分裂**（/loop;Opus 发现即修,#174一致性）。
+  #199 把 CLI vol 板主前瞻量从 GA(标准GARCH)换成 GR(range-GARCH,实测最优),但 dashboard /volatility 还显示旧 σ→GA=两主呈现面口径分裂(#174铁律:同结论所有路径一致)。
+  数据已在 state(vol_metrics 含 garch_range,实证契约确认),改 dashboard_vol cell σ→GA→**σ→GR**(读 m.garch_range,回退 garch_vol)+ 表头标 range-GARCH 主前瞻量#199。
+  TDD 同步:dashboard 测试断言 garch_range/GR(原断言 garch_vol/GA)。全量2475 passed,115行≤800。
+  教训:升级核心量(#199 GA→GR)后必须核查传到所有呈现面(CLI+dashboard);单面升级=口径分裂,dashboard 用户看到的还是次优 GA。
+
 - 2026-06-27 #199: **构建(validate后):range-GARCH 升级系统第一前瞻量——吃 Parkinson PK² 而非 r²,实证胜标准 GARCH**（/loop;Opus 综合两线索 build+validate）。
   #198 显示 Parkinson(当前估计)预测未来波动 corr 0.50≈GARCH 0.53;综合问:用更干净的 Parkinson 方差喂 GARCH 引擎会不会更准?先实证(铁律):
   scripts/audit_parkinson_efficiency.py 加 range-GARCH(吃 PK²)vs 标准 GARCH(吃 r²)。真实20币15m:**range-GARCH 每视野胜 +0.008~0.043 corr**(1/5/10bar:0.40/0.54/0.57 vs 0.39/0.50/0.53)——理论兑现。
