@@ -96,6 +96,9 @@ def garch_vol(c: Any, alpha: float = _GARCH_A, beta: float = _GARCH_B) -> float:
     净 better-or-equal,**短周期获益最大**(bar 多→ω/回归估计更准、高频聚集最强);全周期统一用 GARCH 不实质伤害。
     EWMA 是其 α+β=1 退化特例。返回对**下一 bar**的条件波动预测(前瞻波动水平)。<3 根或 NaN/inf → -1.0。
     seed=首 ≤20 根样本方差(与 ewma_vol 一致),其后逐根递推。
+    **价值限于水平、不延伸到方向(#181 诚实负结果)**：GARCH 预测的"波动变化方向"corr~0.5,但朴素"回归
+    长期均值"基线同样 ~0.5(GARCH 增量 −0.02)、5bar 方向命中仅 50.7%≈掷硬币——那 corr 几乎全是"极端波动
+    正常化"的均值回归机械效应,GARCH 动态在方向上不加分。故 garch_vol 只作**水平**预测,**不**据其升/降做择时(精确化 #157)。
     """
     cc = np.asarray(c, dtype=float)
     if cc.size < 3 or not np.all(np.isfinite(cc)):

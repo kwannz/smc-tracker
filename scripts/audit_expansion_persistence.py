@@ -147,6 +147,47 @@ def _fit_garch(series_map: dict[str, np.ndarray]) -> tuple[float, float]:
     return best
 
 
+def _meanrev_direction(series_map: dict[str, np.ndarray], horizons=(5, 10),
+                       ab: tuple[float, float] = (0.10, 0.85)) -> dict:
+    """#181:测 GARCH 均值回归**方向预测**——corr(预测波动变化, 实际波动变化)。
+
+    #179 后系统第一个"波动方向(回落/回升)"前瞻信号:GARCH 能预测"当前高波动→将回落"(EWMA 无回归=预测变化≈0)。
+    诚实对照:朴素"回归长期均值"基线(long_rv−cur)——看 GARCH 动态是否真比"傻回归均值"多给信息;
+    并与 EWMA 对比。**警惕机械性**:actual_change 与 cur 天然负相关(spike 滚出),故同时报 GARCH vs 朴素回归的**增量**。
+    """
+    a, b = ab
+    out: dict[int, dict] = {}
+    for h in horizons:
+        gp, ep, nv, ac = [], [], [], []
+        gsum = (1.0 - (a + b) ** h) / (1.0 - (a + b)) / h
+        for lr in series_map.values():
+            n = lr.size
+            if n < _RV_WIN + h + 5:
+                continue
+            ew = _ewma_fc_series(lr)
+            sig2, vlong = _garch_sig2(lr, a, b)
+            long_rv = np.sqrt(vlong) * 100.0
+            for t in range(_RV_WIN, n - h):
+                if not np.isfinite(ew[t]):
+                    continue
+                cur = float(np.std(lr[t - _RV_WIN + 1:t + 1], ddof=0)) * 100.0
+                realized = float(np.std(lr[t + 1:t + 1 + h], ddof=0)) * 100.0
+                var_next = (1.0 - a - b) * vlong + a * lr[t] ** 2 + b * sig2[t]
+                garch_fc = np.sqrt(vlong + (var_next - vlong) * gsum) * 100.0
+                gp.append(garch_fc - cur); ep.append(ew[t] - cur)
+                nv.append(long_rv - cur); ac.append(realized - cur)
+        if len(ac) > 10:
+            A = np.array(ac)
+            gpa, epa, nva = np.array(gp), np.array(ep), np.array(nv)
+            out[h] = {
+                "garch": float(np.corrcoef(gpa, A)[0, 1]),
+                "ewma": float(np.corrcoef(epa, A)[0, 1]),
+                "naive_revert": float(np.corrcoef(nva, A)[0, 1]),
+                "garch_hit": float(np.mean(np.sign(gpa) == np.sign(A))),
+                "n": len(ac)}
+    return out
+
+
 def _forecast_skill(series_map: dict[str, np.ndarray], horizons=(1, 3, 5, 10),
                     ab: tuple[float, float] | None = None) -> dict:
     """实证波动预测技巧:corr(在t的预测, [t+1,t+h]已实现波动),三法对比 rv持续/EWMA/GARCH(1,1)。
@@ -318,6 +359,16 @@ async def main() -> None:
         print(f"      真实波动聚集应以 #149 口径计:|logret| 自相关 lag-1≈{ac_mean.get(1, 0):.2f}。")
     else:
         print("结论:observed 显著高于 null ⇒ 扩张持续性含真实信号(超出窗口伪影部分)。")
+
+    print("-" * 64)
+    print("【#181 GARCH 均值回归方向预测(15m)】corr(预测波动变化, 实际波动变化)")
+    print("  视野h  GARCH   EWMA    朴素回归  GARCH命中  GARCH−朴素  样本")
+    md = _meanrev_direction(sm)
+    for h in (5, 10):
+        if h in md:
+            d = md[h]
+            print(f"  {h:>3}bar {d['garch']:+.3f}  {d['ewma']:+.3f}  {d['naive_revert']:+.3f}    "
+                  f"{d['garch_hit']:.1%}     {d['garch'] - d['naive_revert']:+.3f}     n={d['n']}")
 
     async with BitgetREST() as cli:
         await _garch_generalization(cli)
