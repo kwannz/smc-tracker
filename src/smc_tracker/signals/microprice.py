@@ -9,13 +9,14 @@ HL l2Book REST 确认格式：{"px":"61106.0","sz":"1.17158","n":14}
 
 三件套（替换静态 orderbook_imbalance，防双计：合并为 book_intent 单一出口）：
 1. queue_imbalance：前 depth 档 size 比（∈[-1,1]，正=买盘排队厚，前瞻看涨）
-2. micro_price：Stoikov micro-price；tilt>0=micro 偏向 ask=买压（前瞻看涨）
+2. micro_price：imbalance 加权中价（Stoikov micro-price 简化版，非 2018 完整估计器）；tilt>0=micro 偏 ask=买压
 3. ofi_delta：Cont-Kukanov-Stoikov L1 OFI 单帧增量（正=净买方订单流增加）
 
 OFITracker：有状态聚合器，窗口内归一化 OFI，作合成前瞻分数。
 """
 from __future__ import annotations
 
+import math
 from collections import defaultdict, deque
 from dataclasses import dataclass, field
 
@@ -41,7 +42,7 @@ def queue_imbalance(bids: list, asks: list, depth: int = 5) -> float:
 
 
 def micro_price(bids: list, asks: list) -> dict[str, float]:
-    """Stoikov micro-price（使用最优档 bid/ask）。
+    """imbalance 加权中价（Stoikov micro-price 的简化最优档版，**非** 2018 完整递归估计器）。
 
     micro = (bid_px*ask_sz + ask_px*bid_sz) / (bid_sz + ask_sz)
     tilt  = (micro - mid) / mid
@@ -96,10 +97,9 @@ def ofi_delta(
     cb_px, cb_sz = cur_bid
     ca_px, ca_sz = cur_ask
 
-    # 任一关键值无效则返回 0
-    import math as _math
+    # 任一关键值无效则返回 0（math 顶层 import，热路径不重复查找）
     for v in (pb_px, pb_sz, pa_px, pa_sz, cb_px, cb_sz, ca_px, ca_sz):
-        if not _math.isfinite(v) or v < 0:
+        if not math.isfinite(v) or v < 0:
             return 0.0
 
     # bid 增量

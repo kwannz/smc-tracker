@@ -214,6 +214,12 @@ D 多空符号 · E 真实 userFills 解析/分类自洽 · F WS webData2==REST 
 > 据 codex-loop 反幻觉纪律保持开放，区别于「已实现但 backlog 写保守」的项（已核实证据后闭合）。
 
 ## 迭代日志
+- 2026-06-26 #126: **微观价格/OFI 数学审计(领先信号数学内核)——核心正确,补诚实/惯例/覆盖**（/loop；Opus 直接执行）。
+  审计 `microprice.py`(book_intent 背后的 OFI/微观价格数学)。**正向结论**:对照 Cont-Kukanov-Stoikov 2014 OFI
+  (e_b/e_a 三分支 + OFI=e_b−e_a)与 imbalance 加权中价定义,**数学正确**;ofi_delta 6 分支已有手算 golden 测试。
+  小改进:① `import math` 从 ofi_delta 函数体提到顶层(热路径惯例,匹配审计同款);② docstring 归属精确化
+  ("Stoikov micro-price 简化加权中价版,非 2018 完整估计器",诚实不夸大);③ 补 ask 同价 sz 变化 golden 测试
+  (完成 ofi ask 三分支覆盖)。全量 **2419 passed, 2 skipped**(零回归)。
 - 2026-06-26 #125: **订单簿挂单墙监控审计:_wall_flap/_spoof_flag 内存泄漏修复(第一优先级领先信号)**（/loop；Opus 直接执行）。
   审计 CLAUDE.md §二第一优先级前瞻信号 `orderbook_monitor.py`(l2Book 挂单意图,持续运行热路径)。**发现真实 P2 泄漏**：
   pull 时只清 `_wall_born`，`_wall_flap`/`_spoof_flag` 以 (coin,side,px浮点) 为键**永不释放** → 长跑无界增长。

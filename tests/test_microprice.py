@@ -176,6 +176,19 @@ def test_ofi_delta_ask_px_up():
     assert abs(delta - 3.0) < 1e-9, f"expected 3.0, got {delta}"
 
 
+def test_ofi_delta_ask_same_px_sz_change():
+    """ask 同价 size 变化 → e_a = cur_ask_sz - prev_ask_sz（补全 ask 三分支覆盖）。
+
+    手算：bid 不变(e_b=0)；prev_ask=(102,3) cur_ask=(102,7) → e_a=7-3=4；ofi=e_b-e_a=-4。
+    ask 挂量增厚=卖压增→ofi 减小，与 ask_px_down 同号(看跌)，符号正确。
+    """
+    delta = ofi_delta((100.0, 5.0), (102.0, 3.0), (100.0, 5.0), (102.0, 7.0))
+    assert abs(delta - (-4.0)) < 1e-9, f"expected -4.0, got {delta}"
+    # 对照：ask 挂量减薄=卖压减→ofi 增大(看涨)
+    delta2 = ofi_delta((100.0, 5.0), (102.0, 7.0), (100.0, 5.0), (102.0, 3.0))
+    assert abs(delta2 - 4.0) < 1e-9, f"expected 4.0, got {delta2}"
+
+
 def test_ofi_delta_invalid_returns_zero():
     """任一 px/sz 无效（负、NaN）→ 返回 0.0。"""
     import math
