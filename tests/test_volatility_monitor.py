@@ -11,7 +11,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from smc_tracker.monitor.volatility_monitor import (
     vol_metrics, pdarray, VolatilityMonitor, volatility_highlights, market_regime,
-    mtf_alignment, vol_percentile, coin_vol_state, vol_term_structure,
+    mtf_alignment, vol_percentile, coin_vol_state, vol_term_structure, ewma_vol,
 )
 
 
@@ -41,6 +41,37 @@ def test_coin_vol_state_deep_discount():
     """多数周期深折价(pd≤0.15) → 深折价。"""
     by_tf = {"15m": _m(pd_pct=0.05), "1H": _m(pd_pct=0.10), "4H": _m(pd_pct=0.5)}
     assert coin_vol_state(by_tf) == "深折价"
+
+
+def test_ewma_vol_matches_riskmetrics_recursion():
+    """ewma_vol = RiskMetrics EWMA(λ=0.94)：对独立纯 Python 递推匹配(seed=首≤20根样本方差,其后 λ 衰减)。"""
+    import math as _m
+    prices = [100.0]
+    for i in range(40):
+        prices.append(prices[-1] * (1.012 if i % 2 == 0 else 1.0 / 1.006))  # 有波动序列
+    r = [_m.log(prices[i] / prices[i - 1]) for i in range(1, len(prices))]
+    lam = 0.94
+    seed_n = min(20, len(r))
+    seed = r[:seed_n]
+    mean = sum(seed) / len(seed)
+    var = sum((x - mean) ** 2 for x in seed) / len(seed)   # 总体方差(ddof=0)
+    for x in r[seed_n:]:
+        var = lam * var + (1.0 - lam) * x * x
+    expected = (var ** 0.5) * 100.0
+    assert abs(ewma_vol(prices) - expected) < 1e-9
+
+
+def test_ewma_vol_more_responsive_than_rv_to_recent_spike():
+    """近端突现波动 → EWMA(近端加权) 比等权 rv 反应更强(灵敏度=选 EWMA 的理由)。"""
+    base = [100.0 + 0.01 * i for i in range(40)]      # 平静段
+    spike = base + [100.4, 103.0, 100.5, 103.2]        # 末尾突现剧烈波动
+    m = vol_metrics([p * 1.001 for p in spike], [p * 0.999 for p in spike], spike)
+    assert m["ewma_vol"] > m["rv"], (m["ewma_vol"], m["rv"])  # EWNA 更快吃进近端 spike
+
+
+def test_ewma_vol_flat_and_insufficient():
+    assert ewma_vol([100.0] * 30) < 1e-6        # 全平 → ~0
+    assert ewma_vol([100.0, 101.0]) == -1.0     # <3 根 → 哨兵
 
 
 def test_atr_is_wilder_rma_not_sma():

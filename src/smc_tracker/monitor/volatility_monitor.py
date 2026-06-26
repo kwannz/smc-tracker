@@ -42,6 +42,30 @@ _TF_MS = {"15m": 900_000, "30m": 1_800_000, "1H": 3_600_000, "4H": 14_400_000,
           "6H": 21_600_000, "12H": 43_200_000, "1D": 86_400_000, "1W": 604_800_000}
 
 
+_RM_LAMBDA = 0.94   # RiskMetrics EWMA 衰减(J.P. Morgan 行业标准)
+
+
+def ewma_vol(c: Any, lam: float = _RM_LAMBDA) -> float:
+    """RiskMetrics EWMA 波动率(%，开源标准)：σ²_t = λ·σ²_{t-1} + (1-λ)·r²_{t-1}。
+
+    近端指数加权，比等权 rv 对新波动更**灵敏**(rv 把 spike 摊薄到 20 根等权)。
+    seed=首 ≤20 根对数收益样本方差，其后逐根 λ 衰减更新。<3 根或含 NaN/inf → -1.0 哨兵。
+
+    **本模块唯一经验证的前瞻量(#153/#154)**：实测波动水平强持续(corr(rv,10bar后rv)=0.73)，
+    EWMA 在 IGARCH 下 h 步预测=当前 σ，故可读作**预期波动水平**——仍是水平非方向(方向短期反转,#152)。
+    """
+    cc = np.asarray(c, dtype=float)
+    if cc.size < 3 or not np.all(np.isfinite(cc)):
+        return -1.0
+    cc = np.clip(cc, 1e-12, None)
+    r = np.diff(np.log(cc))
+    seed_n = min(20, r.size)
+    var = float(np.var(r[:seed_n], ddof=0))
+    for x in r[seed_n:].tolist():
+        var = lam * var + (1.0 - lam) * x * x
+    return math.sqrt(var) * 100.0
+
+
 def _wilder_rma(tr: np.ndarray, n: int) -> float:
     """Wilder RMA 平滑末值=开源标准 ATR(Wilder 1978；TA-Lib/TradingView ta.atr 默认)。
 
@@ -70,7 +94,8 @@ def vol_metrics(h: Any, l: Any, c: Any, *,
 
     返回：rv(已实现波动率=对数收益σ,%)、atr_pct(Wilder ATR/价,%；开源标准 RMA 平滑)、range_pct(当前 bar 区间,%)、
          velocity(近窗%变化=1 阶导)、accel(速度差=2 阶导，前序窗不足时=0 不虚增)、
-         vol_ratio(短窗σ/长窗σ)、regime(压缩/扩张/常态=波动状态，回望确认非预测)。
+         vol_ratio(短窗σ/长窗σ)、regime(压缩/扩张/常态=波动状态，回望确认非预测)、
+         ewma_vol(RiskMetrics EWMA 预期波动水平，本模块唯一前瞻量，#154)。
     数据含 NaN/inf 时返回 {}（数据质量守卫，避免 NaN 污染排名）。
     """
     c = np.asarray(c, dtype=float)
@@ -100,7 +125,8 @@ def vol_metrics(h: Any, l: Any, c: Any, *,
     return {"rv": rv, "atr_pct": atr_pct, "range_pct": range_pct,
             "velocity": velocity, "accel": accel,
             "vol_ratio": vol_ratio, "regime": regime,
-            "vol_pct": vol_percentile(c)}   # 历史波动百分位(HVP，-1=数据不足)
+            "vol_pct": vol_percentile(c),    # 历史波动百分位(HVP，-1=数据不足)
+            "ewma_vol": ewma_vol(c)}         # RiskMetrics EWMA 预期波动水平(唯一前瞻量,#154)
 
 
 def pdarray(h: Any, l: Any, c: Any, *, win: int = _PD_WIN, band: float = 0.03) -> dict:
@@ -473,9 +499,12 @@ class VolatilityMonitor:
                 if vp >= 0:
                     vp_mark = "🔥" if vp >= 0.9 else ("❄️" if vp <= 0.1 else "")
                     vp_str = f" HVP{vp * 100:.0f}%{vp_mark}"
+                # EWMA 预期波动水平(唯一前瞻量,#154)：近端加权,>σ=波动在升、<σ=在降
+                ew = m.get("ewma_vol", -1.0)
+                ew_str = f" EW{ew:.2f}%" if ew >= 0 else ""
                 lines.append(
                     f"  {tf:<4} {vdir}{abs(v):.2f}% a{a:+.2f}{adir}"
-                    f" σ{m['rv']:.2f}%[{m['regime']}] ATR{m['atr_pct']:.2f}% 幅{m['range_pct']:.2f}%"
+                    f" σ{m['rv']:.2f}%[{m['regime']}]{ew_str} ATR{m['atr_pct']:.2f}% 幅{m['range_pct']:.2f}%"
                     f" PD{m['pd_pct'] * 100:.0f}%{m['pd_zone']}{vp_str}"
                 )
         return "\n".join(lines)
