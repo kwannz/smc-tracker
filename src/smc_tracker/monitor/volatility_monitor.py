@@ -502,7 +502,8 @@ class VolatilityMonitor:
                 if vp >= 0:
                     vp_mark = "🔥" if vp >= 0.9 else ("❄️" if vp <= 0.1 else "")
                     vp_str = f" HVP{vp * 100:.0f}%{vp_mark}"
-                # EWMA 预期波动水平(唯一前瞻量,#154)：近端加权,>σ=波动在升、<σ=在降
+                # EWMA 预期波动水平(唯一前瞻量,#154;比σ更准预测未来波动#155)。EW>σ仅描述近端波动高于均值,
+                # **非预示续升**——#157 实测"EW vs σ 升/降"信号对未来波动无净预测力(混淆于水平),勿读作趋势
                 ew = m.get("ewma_vol", -1.0)
                 ew_str = f" EW{ew:.2f}%" if ew >= 0 else ""
                 lines.append(
