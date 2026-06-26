@@ -25,7 +25,7 @@ from .candle_ingest import backfill, detect_and_fill_gap, ingest_ws_closed_bar
 from .volatility_monitor import (VolatilityMonitor, vol_metrics, move_score, pdarray,
                                  volatility_highlights, market_regime, mtf_alignment,
                                  vol_percentile, coin_vol_state, vol_term_structure,
-                                 pick_coins, ewma_vol)
+                                 pick_coins, ewma_vol, garch_vol)
 from .volatility_regime_tracker import VolatilityRegimeTracker
 
 __all__ = [
@@ -63,6 +63,7 @@ __all__ = [
     "vol_term_structure",
     "pick_coins",
     "ewma_vol",
+    "garch_vol",
     "move_score",
     "pdarray",
     "VolatilityRegimeTracker",

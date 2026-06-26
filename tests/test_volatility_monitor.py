@@ -74,6 +74,49 @@ def test_ewma_vol_flat_and_insufficient():
     assert ewma_vol([100.0, 101.0]) == -1.0     # <3 根 → 哨兵
 
 
+def test_garch_vol_matches_variance_targeting_recursion():
+    """garch_vol = GARCH(1,1) 方差目标(ω=(1-α-β)·样本方差)对独立纯 Python 递推匹配。
+
+    σ²_t=ω+α·r²_{t-1}+β·σ²_{t-1};seed=首≤20根样本方差,其后逐根递推,返回**下一bar**预测 σ%。
+    """
+    import math as _m
+    from smc_tracker.monitor.volatility_monitor import garch_vol
+    prices = [100.0]
+    for i in range(40):
+        prices.append(prices[-1] * (1.012 if i % 2 == 0 else 1.0 / 1.006))
+    r = [_m.log(prices[i] / prices[i - 1]) for i in range(1, len(prices))]
+    a, b = 0.10, 0.85
+    mean = sum(r) / len(r)
+    vlong = sum((x - mean) ** 2 for x in r) / len(r)
+    omega = (1.0 - a - b) * vlong
+    seed_n = min(20, len(r))
+    seed = r[:seed_n]
+    sm = sum(seed) / len(seed)
+    sig2 = sum((x - sm) ** 2 for x in seed) / len(seed)
+    for x in r[seed_n:]:
+        sig2 = omega + a * x * x + b * sig2
+    expected = (sig2 ** 0.5) * 100.0
+    assert abs(garch_vol(prices, a, b) - expected) < 1e-9
+
+
+def test_garch_special_case_equals_ewma():
+    """GARCH(α=0.06,β=0.94,α+β=1→ω=0,无均值回归) 退化为 EWMA(λ=0.94)——GARCH 是 EWMA 的母模型。"""
+    from smc_tracker.monitor.volatility_monitor import garch_vol
+    prices = [100.0]
+    for i in range(40):
+        prices.append(prices[-1] * (1.012 if i % 2 == 0 else 1.0 / 1.006))
+    assert abs(garch_vol(prices, 0.06, 0.94) - ewma_vol(prices)) < 1e-9
+
+
+def test_garch_vol_sentinel_and_in_metrics():
+    from smc_tracker.monitor.volatility_monitor import garch_vol
+    assert garch_vol([100.0, 101.0]) == -1.0          # <3 根 → 哨兵
+    assert garch_vol([100.0] * 30) < 1e-6             # 全平 → ~0
+    spike = [100.0 + 0.01 * i for i in range(40)] + [100.4, 103.0, 100.5, 103.2]
+    m = vol_metrics([p * 1.001 for p in spike], [p * 0.999 for p in spike], spike)
+    assert m["garch_vol"] >= 0.0                       # vol_metrics 含 garch_vol 字段
+
+
 def test_atr_is_wilder_rma_not_sma():
     """atr_pct 用开源标准 Wilder RMA(非 SMA-of-TR，#143 交叉验证修正)：对独立 Wilder 递推匹配，且≠SMA。"""
     n = 35

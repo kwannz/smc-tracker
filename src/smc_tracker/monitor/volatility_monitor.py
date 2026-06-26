@@ -17,9 +17,10 @@
     **前瞻价值的不对称(本系统核心结论)——信幅度别信方向**：波动**水平**有真实但**温和短记忆**的持续性
     (#177 null 对照重测纠 #153 偏差：原"扩张后仍扩张90%/lift7.6×/corr0.73"经 null 对照证实**主要是滚动窗重叠机械伪影**——
     打乱 logret 后 null corr 仍 0.711≈observed 0.725、真实增益仅 +0.014≈0；regime 持续超 null 仅 +2.7pp)。
-    **诚实量(须分两个不同对象,#177→#178 修矫枉过正)**：
-    ① 波动**水平预测**(EWMA→未来 h-bar 平均已实现波动)**有扎实技巧**：corr 0.30(1bar)→0.42(5bar)→0.45(10bar)，
-       随视野**上升**(长视野的已实现波动更平滑更可测)——这是系统真实的幅度 edge(GARCH 同理:波动可测、收益不可测)。
+    **诚实量(须分两个不同对象,#177→#178 修矫枉过正,#179 升级模型)**：
+    ① 波动**水平预测**有扎实技巧,**主前瞻量=GARCH(1,1)**(均值回归,#179 各视野胜 EWMA +0.07)：
+       corr 0.38(1bar)→0.49(5bar)→0.53(10bar);EWMA(0.30/0.42/0.45)是其 α+β=1 退化特例,因假设随机游走漏掉回归。
+       随视野**上升**(长视野的已实现波动更平滑更可测)——这是系统真实的幅度 edge(波动可测、收益不可测)。
     ② 逐 **bar |收益| 记忆**(ARCH 标准自相关,#149)**快速衰减**：lag-1≈0.28→lag-10≈0.05(null≈0=真实但短)。
     EWMA 相对朴素 rv-持续增益小且偏长视野(1bar 略输 −0.01、10bar +0.03，#155 温和一致)。**非"90%续/0.73"(那是窗口伪影#177)**；
     而**方向**(velocity/PD)短期反转不可赌(#150-152)。系统定位=测波动水平(可前瞻 corr~0.4)、非择时方向、非"高持续regime"。
@@ -81,6 +82,36 @@ def ewma_vol(c: Any, lam: float = _RM_LAMBDA) -> float:
     return math.sqrt(var) * 100.0
 
 
+# GARCH(1,1) 固定参数(免拟合,可进热路径):#179 实测 25 币 15m 各视野均胜 EWMA +0.07 corr;
+# 固定 α0.10/β0.85(α+β=0.95)稳健 +0.068、网格最优 α0.14/β0.75 同向(+0.08)。Bollerslev 1986。
+_GARCH_A, _GARCH_B = 0.10, 0.85
+
+
+def garch_vol(c: Any, alpha: float = _GARCH_A, beta: float = _GARCH_B) -> float:
+    """GARCH(1,1) 一步预测波动率(%，开源标准 Bollerslev 1986;方差目标 ω=(1-α-β)·样本方差)。
+
+    σ²_t = ω + α·r²_{t-1} + β·σ²_{t-1}，含**均值回归**(回归到长期方差)——比 EWMA(α+β=1、ω=0 假设
+    波动随机游走、永远预测"当前=未来")更准:#179 真实 25 币 15m 各视野 corr 均 **+0.07 优于 EWMA**
+    (1bar0.38/5bar0.49/10bar0.53 vs EWMA 0.30/0.42/0.45;固定参数稳健,网格最优 α0.14/β0.75 同结论)。
+    EWMA 是其 α+β=1 退化特例。返回对**下一 bar**的条件波动预测(前瞻波动水平)。<3 根或 NaN/inf → -1.0。
+    seed=首 ≤20 根样本方差(与 ewma_vol 一致),其后逐根递推。
+    """
+    cc = np.asarray(c, dtype=float)
+    if cc.size < 3 or not np.all(np.isfinite(cc)):
+        return -1.0
+    cc = np.clip(cc, 1e-12, None)
+    r = np.diff(np.log(cc))
+    vlong = float(np.var(r, ddof=0))
+    if vlong <= 0.0:
+        return 0.0
+    omega = (1.0 - alpha - beta) * vlong
+    seed_n = min(20, r.size)
+    sig2 = float(np.var(r[:seed_n], ddof=0))
+    for x in r[seed_n:].tolist():
+        sig2 = omega + alpha * x * x + beta * sig2
+    return math.sqrt(max(sig2, 0.0)) * 100.0
+
+
 def _wilder_rma(tr: np.ndarray, n: int) -> float:
     """Wilder RMA 平滑末值=开源标准 ATR(Wilder 1978；TA-Lib/TradingView ta.atr 默认)。
 
@@ -110,7 +141,7 @@ def vol_metrics(h: Any, l: Any, c: Any, *,
     返回：rv(已实现波动率=对数收益σ,%)、atr_pct(Wilder ATR/价,%；开源标准 RMA 平滑)、range_pct(当前 bar 区间,%)、
          velocity(近窗%变化=1 阶导)、accel(速度差=2 阶导，前序窗不足时=0 不虚增)、
          vol_ratio(短窗σ/长窗σ)、regime(压缩/扩张/常态=波动状态，回望确认非预测)、
-         ewma_vol(RiskMetrics EWMA 预期波动水平，本模块唯一前瞻量，#154)。
+         ewma_vol(RiskMetrics EWMA 预期波动水平,#154)、garch_vol(GARCH(1,1)一步预测,主前瞻量,#179 胜 EWMA +0.07)。
     数据含 NaN/inf 时返回 {}（数据质量守卫，避免 NaN 污染排名）。
     """
     c = np.asarray(c, dtype=float)
@@ -141,7 +172,8 @@ def vol_metrics(h: Any, l: Any, c: Any, *,
             "velocity": velocity, "accel": accel,
             "vol_ratio": vol_ratio, "regime": regime,
             "vol_pct": vol_percentile(c),    # 历史波动百分位(HVP，-1=数据不足)
-            "ewma_vol": ewma_vol(c)}         # RiskMetrics EWMA 预期波动水平(唯一前瞻量,#154)
+            "ewma_vol": ewma_vol(c),         # RiskMetrics EWMA 预期波动水平(#154)
+            "garch_vol": garch_vol(c)}       # GARCH(1,1) 一步预测(均值回归,#179 各视野胜 EWMA +0.07,主前瞻量)
 
 
 def pdarray(h: Any, l: Any, c: Any, *, win: int = _PD_WIN, band: float = 0.03) -> dict:
@@ -519,13 +551,14 @@ class VolatilityMonitor:
                 if vp >= 0:
                     vp_mark = "🔥" if vp >= 0.9 else ("❄️" if vp <= 0.1 else "")
                     vp_str = f" HVP{vp * 100:.0f}%{vp_mark}"
-                # EWMA 预期波动水平(唯一前瞻量,#154;比σ更准预测未来波动#155)。EW>σ仅描述近端波动高于均值,
-                # **非预示续升**——#157 实测"EW vs σ 升/降"信号对未来波动无净预测力(混淆于水平),勿读作趋势
+                # 前瞻波动量:GA=GARCH(1,1)一步预测(主前瞻量,#179 各视野胜 EWMA +0.07)、EW=EWMA(#154)。
+                # 均为**水平**预测(非方向、非趋势);#157 实测"预测 vs σ 升/降"对未来波动无净预测力,勿读作续升。
+                ga = m.get("garch_vol", -1.0)
                 ew = m.get("ewma_vol", -1.0)
-                ew_str = f" EW{ew:.2f}%" if ew >= 0 else ""
+                fc_str = (f" GA{ga:.2f}%" if ga >= 0 else "") + (f" EW{ew:.2f}%" if ew >= 0 else "")
                 lines.append(
                     f"  {tf:<4} {vdir}{abs(v):.2f}% a{a:+.2f}{adir}"
-                    f" σ{m['rv']:.2f}%[{m['regime']}]{ew_str} ATR{m['atr_pct']:.2f}% 幅{m['range_pct']:.2f}%"
+                    f" σ{m['rv']:.2f}%[{m['regime']}]{fc_str} ATR{m['atr_pct']:.2f}% 幅{m['range_pct']:.2f}%"
                     f" PD{m['pd_pct'] * 100:.0f}%{m['pd_zone']}{vp_str}"
                 )
         return "\n".join(lines)
