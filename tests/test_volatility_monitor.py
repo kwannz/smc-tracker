@@ -375,6 +375,29 @@ def test_market_regime_term_breadth():
     assert "近端应激" in mr["label"] and "2/3币" in mr["label"]
 
 
+def test_market_regime_term_denominator_includes_insufficient():
+    """分母 M 须计入 shape='缺'(数据不足)的币，不掩盖覆盖缺口(诚实，修 P2)：
+    2 倒挂 + 1 缺 → '2/3币' 而非旧的乐观 '2/2币'。"""
+    rows = [
+        {"coin": "A", "by_tf": {"15m": {"regime": "扩张", "pd_zone": "均衡"}},
+         "term": {"shape": "倒挂"}},
+        {"coin": "B", "by_tf": {"15m": {"regime": "扩张", "pd_zone": "均衡"}},
+         "term": {"shape": "倒挂"}},
+        {"coin": "C", "by_tf": {"15m": {"regime": "常态", "pd_zone": "均衡"}},
+         "term": {"shape": "缺"}},
+    ]
+    mr = market_regime(rows)
+    assert "近端应激" in mr["label"] and "2/3币" in mr["label"]
+
+
+def test_market_regime_term_all_insufficient_no_label():
+    """全'缺' → tc 全 0，不追加'0/N币'假广度。"""
+    rows = [{"coin": "A", "by_tf": {"15m": {"regime": "常态", "pd_zone": "均衡"}},
+             "term": {"shape": "缺"}}]
+    mr = market_regime(rows)
+    assert "应激" not in mr["label"] and "主导" not in mr["label"]
+
+
 def test_market_regime_term_absent_keeps_label():
     """rows 无 term 键(向后兼容) → 不追加期限广度，label 仅含 regime/PD。"""
     rows = [{"coin": "A", "by_tf": {"15m": {"regime": "压缩", "pd_zone": "折价"}}}]

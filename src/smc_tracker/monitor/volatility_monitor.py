@@ -159,13 +159,15 @@ def market_regime(rows: list[dict]) -> dict:
     rc = {"压缩": 0, "扩张": 0, "常态": 0}
     pc = {"折价": 0, "溢价": 0, "均衡": 0}
     tc = {"倒挂": 0, "平坦": 0, "顺挂": 0}   # 期限结构广度(按币计,非按 cell)
-    n = 0
+    n = n_term = 0
     for r in rows:
         for _tf, m in r.get("by_tf", {}).items():
             n += 1
             rc[m.get("regime", "常态")] = rc.get(m.get("regime", "常态"), 0) + 1
             pc[m.get("pd_zone", "均衡")] = pc.get(m.get("pd_zone", "均衡"), 0) + 1
         sh = (r.get("term") or {}).get("shape")
+        if sh:
+            n_term += 1   # 含"缺"——分母计入数据不足的币，不掩盖覆盖缺口(诚实,修 P2)
         if sh in tc:
             tc[sh] += 1
     if n == 0:
@@ -176,12 +178,12 @@ def market_regime(rows: list[dict]) -> dict:
     pd_lbl = {"折价": "普遍折价(区间下半段)", "溢价": "普遍溢价(区间上半段)", "均衡": "均衡"}[pd_dom]
     label = f"{reg_lbl} {rc[reg_dom]}/{n} · {pd_lbl} {pc[pd_dom]}/{n}"
     # 期限结构广度：仅在主导为可操作的倒挂/顺挂时追加(全市场近端是否普遍应激)
-    nt = sum(tc.values())
-    if nt:
+    if n_term:
         td = max(tc, key=lambda k: tc[k])
-        if td != "平坦":
+        # tc[td]>0 守卫：全"缺"(tc 全 0)时不追加"0/N币"假广度
+        if td != "平坦" and tc[td]:
             tlbl = {"倒挂": "近端应激(期限倒挂)", "顺挂": "远端主导(期限顺挂)"}[td]
-            label += f" · {tlbl} {tc[td]}/{nt}币"
+            label += f" · {tlbl} {tc[td]}/{n_term}币"
     return {"n": n, "regime": rc, "pd": pc, "term": tc, "label": label}
 
 
@@ -241,7 +243,8 @@ def coin_vol_state(by_tf: dict) -> str:
 
 
 # 期限结构阈值：短端/长端归一波动比 >此=倒挂(近端急)，<其倒数=顺挂(远端主导)
-_TS_BACKWARD, _TS_CONTANGO = 1.2, 0.83
+_TS_BACKWARD = 1.2
+_TS_CONTANGO = 1 / _TS_BACKWARD   # 严格倒数(0.8333)，保期限结构上下对称(修 nit)
 
 
 def vol_term_structure(by_tf: dict) -> dict:
