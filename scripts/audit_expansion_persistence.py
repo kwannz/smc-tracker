@@ -187,19 +187,47 @@ def _forecast_skill(series_map: dict[str, np.ndarray], horizons=(1, 3, 5, 10),
     return out
 
 
-async def _fetch(coins: list[str]) -> dict[str, np.ndarray]:
+async def _fetch(coins: list[str], tf: str = _TF, bars: int = _BARS,
+                 cli: BitgetREST | None = None) -> dict[str, np.ndarray]:
     out: dict[str, np.ndarray] = {}
-    async with BitgetREST() as cli:
+    own = cli is None
+    if own:
+        cli = BitgetREST()
+        await cli.__aenter__()
+    try:
         for c in coins:
             try:
-                cs = await cli.klines(f"{c}USDT", _TF, _BARS, coin=c)
+                cs = await cli.klines(f"{c}USDT", tf, bars, coin=c)
                 closes = np.array([k.c for k in cs], dtype=float)
-                if closes.size >= _RV_LONG + _LAG + 50 and np.all(np.isfinite(closes)):
+                if closes.size >= 120 and np.all(np.isfinite(closes)):
                     closes = np.clip(closes, 1e-12, None)
                     out[c] = np.diff(np.log(closes))
             except Exception as e:  # noqa: BLE001
-                print(f"  跳过 {c}: {e}")
+                print(f"  跳过 {c}/{tf}: {e}")
+    finally:
+        if own:
+            await cli.__aexit__(None, None, None)
     return out
+
+
+async def _garch_generalization(cli: BitgetREST) -> None:
+    """#180:验证已上线固定参数 GARCH(α0.10/β0.85)是否跨周期仍胜 EWMA(#179 仅 15m 验证)。
+
+    对 CANONICAL_TIMEFRAMES 子集逐周期测 GARCH−EWMA 预测技巧增益;稀疏周期数据少→诚实标注边界。
+    """
+    print("-" * 64)
+    print("【#180 GARCH 跨周期泛化(固定 α0.10/β0.85,已上线参数)】GARCH−EWMA corr 增益")
+    print("  周期   1bar    5bar    10bar   均值   样本/币")
+    for tf in ("15m", "1H", "4H", "1D"):
+        sm = await _fetch(_COINS, tf=tf, bars=1000, cli=cli)
+        if len(sm) < 5:
+            print(f"  {tf:<5} 数据不足({len(sm)}币),跳过"); continue
+        fs = _forecast_skill(sm, ab=(0.10, 0.85))
+        g = {h: fs[h]["garch_corr"] - fs[h]["ewma_corr"] for h in (1, 5, 10) if h in fs}
+        avg = float(np.mean(list(g.values()))) if g else 0.0
+        nbar = int(np.mean([v.size for v in sm.values()]))
+        print(f"  {tf:<5} {g.get(1, 0):+.3f}  {g.get(5, 0):+.3f}  {g.get(10, 0):+.3f}  "
+              f"{avg:+.3f}  {len(sm)}币×{nbar}")
 
 
 def _agg(series_map: dict[str, np.ndarray], shuffle_seed: int | None = None):
@@ -290,6 +318,9 @@ async def main() -> None:
         print(f"      真实波动聚集应以 #149 口径计:|logret| 自相关 lag-1≈{ac_mean.get(1, 0):.2f}。")
     else:
         print("结论:observed 显著高于 null ⇒ 扩张持续性含真实信号(超出窗口伪影部分)。")
+
+    async with BitgetREST() as cli:
+        await _garch_generalization(cli)
 
 
 if __name__ == "__main__":
