@@ -108,6 +108,7 @@ async def main():
     # 不相交桶(避免重叠计数掩盖非单调性):=1 / =2 / ≥3
     buckets = {"单庄(=1)": {h: [] for h in _HZ}, "双庄(=2)": {h: [] for h in _HZ},
                "多庄(≥3)": {h: [] for h in _HZ}}
+    percoin = defaultdict(lambda: {"solo": {h: [] for h in _HZ}, "cons": {h: [] for h in _HZ}})
     for (coin, is_long), evs in groups.items():
         if coin not in px:
             continue
@@ -130,6 +131,39 @@ async def main():
                          (drift[coin][hk] if is_long else -drift[coin][hk])) * 100.0
                 bk = "单庄(=1)" if deg == 1 else ("双庄(=2)" if deg == 2 else "多庄(≥3)")
                 buckets[bk][hk].append(alpha)
+                # 币内配对(消除币种选择混淆,#188教训):同币内 solo(=1) vs cons(≥2)
+                percoin[coin]["solo" if deg == 1 else "cons"][hk].append(alpha)
+
+    # 币内配对差:每币(cons_mean − solo_mean),跨币等权聚合→不被单币主导(#188核心修复)
+    print("-" * 70)
+    print("【币内配对(消除币种选择混淆,#188核心修复)=决定性估计量】每币 cons(≥2)−solo(=1) alpha 差,跨币等权")
+    wc = {}
+    for hk in _HZ:
+        diffs = []
+        for coin, d in percoin.items():
+            so, co = d["solo"][hk], d["cons"][hk]
+            if len(so) >= 8 and len(co) >= 5:           # 该币两组都够样本
+                diffs.append(float(np.mean(co)) - float(np.mean(so)))
+        if len(diffs) >= 4:
+            da = np.array(diffs)
+            pos = int((da > 0).sum())
+            wc[hk] = (float(da.mean()), float(np.median(da)), pos, len(diffs))
+            print(f"  {hk}: {len(diffs)}币  均差 {da.mean():+.3f}pp / 中位 {np.median(da):+.3f}pp / "
+                  f"{pos}/{len(diffs)}币为正")
+        else:
+            print(f"  {hk}: 合格币不足({len(diffs)})——共识事件太稀疏,无法币内配对")
+    # 决定性结论(币内配对优先于池化桶——后者被币种选择污染)
+    w = wc.get("24h")
+    if w:
+        mean_d, med_d, pos, ncoin = w
+        coinflip = abs(med_d) < 0.5 and 0.35 <= pos / ncoin <= 0.65
+        if coinflip:
+            print(f"  ★决定性:币内配对 24h 中位差 {med_d:+.2f}pp、{pos}/{ncoin}币为正(≈掷硬币)⇒"
+                  "**共识放大≈0(了结#188悬案)**;每庄入场仍有#186领先性,但共识不额外放大,勿按庄数加权当更强。")
+        elif med_d > 0.5 and pos / ncoin > 0.65:
+            print(f"  ★决定性:币内配对 24h 中位差 {med_d:+.2f}pp、{pos}/{ncoin}币为正⇒共识确放大(币内稳健)。")
+        else:
+            print(f"  ★币内配对 24h 中位 {med_d:+.2f}pp、{pos}/{ncoin}币为正——方向弱/混合,仍需更多币。")
 
     rng = np.random.default_rng(7)
 
