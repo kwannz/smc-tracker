@@ -136,6 +136,35 @@ def market_regime(rows: list[dict]) -> dict:
     return {"n": n, "regime": rc, "pd": pc, "label": label}
 
 
+# 多周期一致性阈值：主导方向占比 ≥ 此值才判明确多/空，否则分歧
+_ALIGN_TH = 0.7
+
+
+def mtf_alignment(by_tf: dict) -> dict:
+    """单币跨周期速度一致性（MTF trend alignment）：各周期 velocity 同向=高确信，冲突=分歧。纯函数。
+
+    返回 {bias:多/空/分歧, aligned:主导方向周期数, total:非零周期数, score:主导占比[0,1]}。
+    score 越接近 1 越一致（开源 MTF 趋势对齐思路：多周期共振方向 > 单周期噪声）。
+    """
+    up = down = 0
+    for m in by_tf.values():
+        v = m.get("velocity", 0.0)
+        if v > 0:
+            up += 1
+        elif v < 0:
+            down += 1
+    total = up + down
+    if total == 0:
+        return {"bias": "分歧", "aligned": 0, "total": 0, "score": 0.0}
+    dominant = max(up, down)
+    score = dominant / total
+    if score >= _ALIGN_TH:
+        bias = "多" if up >= down else "空"
+    else:
+        bias = "分歧"
+    return {"bias": bias, "aligned": dominant, "total": total, "score": score}
+
+
 class VolatilityMonitor:
     """逐周期读已采 K 线算波动+PD 指标，按运动分排序出当前在动的监控清单币。"""
 
@@ -176,6 +205,7 @@ class VolatilityMonitor:
                 continue
             rows.append({"coin": coin,
                          "score": max(move_score(m) for m in by_tf.values()),
+                         "align": mtf_alignment(by_tf),
                          "by_tf": by_tf})
         rows.sort(key=lambda r: r["score"], reverse=True)
         return rows
@@ -204,7 +234,11 @@ class VolatilityMonitor:
                 f"{x['coin']}/{x['tf']}({x['pd_zone']}{x['pd_pct'] * 100:.0f}%)"
                 for x in hl["extreme_pd"]))
         for r in rows[:top]:
-            lines.append(f"━ {r['coin']:<8} 运动分 {r['score']:.1f}")
+            al = r.get("align") or {"bias": "分歧", "aligned": 0, "total": 0}
+            bias_mark = {"多": "🟢多", "空": "🔴空", "分歧": "⚪分歧"}[al["bias"]]
+            lines.append(
+                f"━ {r['coin']:<8} 运动分 {r['score']:.1f}"
+                f" · {bias_mark}({al['aligned']}/{al['total']}周期一致)")
             for tf in self.timeframes:
                 m = r["by_tf"].get(tf)
                 if not m:

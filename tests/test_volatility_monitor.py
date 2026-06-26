@@ -11,6 +11,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from smc_tracker.monitor.volatility_monitor import (
     vol_metrics, pdarray, VolatilityMonitor, volatility_highlights, market_regime,
+    mtf_alignment,
 )
 
 
@@ -198,3 +199,31 @@ def test_market_regime_dominant():
 def test_market_regime_empty():
     mr = market_regime([])
     assert mr["n"] == 0 and mr["label"] == ""
+
+
+def test_mtf_alignment_all_up():
+    """各周期速度同向上 → 多头一致，aligned=total。"""
+    by_tf = {"15m": {"velocity": 1.0}, "1H": {"velocity": 2.0}, "4H": {"velocity": 0.5}}
+    a = mtf_alignment(by_tf)
+    assert a["bias"] == "多" and a["aligned"] == 3 and a["total"] == 3
+    assert a["score"] == 1.0
+
+
+def test_mtf_alignment_all_down():
+    by_tf = {"15m": {"velocity": -1.0}, "1H": {"velocity": -2.0}}
+    a = mtf_alignment(by_tf)
+    assert a["bias"] == "空" and a["aligned"] == 2
+
+
+def test_mtf_alignment_mixed():
+    """方向冲突 → 分歧，score<1。"""
+    by_tf = {"15m": {"velocity": 2.0}, "1H": {"velocity": -2.0}, "4H": {"velocity": 1.0}}
+    a = mtf_alignment(by_tf)
+    assert a["bias"] == "分歧"
+    assert a["aligned"] == 2 and a["total"] == 3   # 多数为多(2/3)
+    assert a["score"] < 1.0
+
+
+def test_mtf_alignment_empty():
+    a = mtf_alignment({})
+    assert a["bias"] == "分歧" and a["total"] == 0 and a["score"] == 0.0

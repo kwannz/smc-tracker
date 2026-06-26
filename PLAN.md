@@ -213,6 +213,12 @@ D 多空符号 · E 真实 userFills 解析/分类自洽 · F WS webData2==REST 
 > 据 codex-loop 反幻觉纪律保持开放，区别于「已实现但 backlog 写保守」的项（已核实证据后闭合）。
 
 ## 迭代日志
+- 2026-06-26 #118: **多周期速度一致性 mtf_alignment(MTF 趋势对齐=确信度)**（/loop；Opus 直接执行，Sonnet 额度耗尽）。
+  `mtf_alignment(by_tf)` 纯函数：统计各周期 velocity 同向占比 → bias(多/空/分歧,≥70% 占比判明确)+aligned/total+score；
+  接入 rank() 每币 `align` + CLI 每币标题行 🟢多/🔴空(N/M周期一致) + dashboard 矩阵币格。
+  开源 MTF 趋势对齐思路：多周期共振方向 > 单周期噪声(高确信 vs 整理)。真实数据实证：三大币 🔴空(7/7一致)
+  全周期空头共振(印证 #112 普遍折价)。信号粒度补全：币×周期→币(动向/一致性)→市场(态势)。模块 254 行。
+  TDD 4 例；全量 **2363 passed, 2 skipped**(零回归)。
 - 2026-06-26 #117: **cli.py handler 拆分到 cli_commands.py(928→590，两文件均≤800)**（Sonnet 执行/Opus 复核收尾）。
   13 个 `_cmd_*` handler 迁出 → `cli_commands.py`(362)；cli.py import 回来(零孤儿)。**关键坑(Sonnet 识别)**：
   `_cmd_poll`/`_cmd_evaluate`/`_cmd_cycle` 依赖被测试 `patch("smc_tracker.cli._poll_once_async")` 的 async helper，
