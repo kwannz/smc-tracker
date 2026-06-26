@@ -310,7 +310,8 @@ class PollMonitor:
         # 跟庄：近窗净流向越阈值
         builds = sorted([(c, n) for c, n in flow.items() if abs(n) >= self.min_flow_usd],
                         key=lambda x: abs(x[1]), reverse=True)
-        lines.append(f"\n🐋 庄群近窗主动建仓 {len(builds)} 条：")
+        # #186 操作化:轮询=高延迟路径→短线 edge 对延迟敏感(1h延迟4h归零),宜瞄 24h 长持(1h延迟仍+0.81%)
+        lines.append(f"\n🐋 庄群近窗主动建仓 {len(builds)} 条（慢跟宜24h长持·短线edge延迟敏感#186）：")
         for coin, net in builds[:8]:
             d = "净买🟢" if net > 0 else "净卖🔴"
             lines.append(f"  {coin} {d} ${abs(net):,.0f}")
