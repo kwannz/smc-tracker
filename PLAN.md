@@ -214,6 +214,14 @@ D 多空符号 · E 真实 userFills 解析/分类自洽 · F WS webData2==REST 
 > 据 codex-loop 反幻觉纪律保持开放，区别于「已实现但 backlog 写保守」的项（已核实证据后闭合）。
 
 ## 迭代日志
+- 2026-06-26 #161: **「审计每个方位」收口:21确认发现全部裁决处理(20修+1诚实不动),8批 TDD 修复**（用户指令;Opus 裁决修复）。
+  8方位编队 29发现→对抗证伪→21确认。逐批 TDD 修复(全量 **2455 passed·0 skipped**·零回归,8批均推 origin):
+  **4 P1 全修**:①配置热加载明文 bot_token/webhook 泄露→_cmp 脱敏;②address_dossier avg_hold_sec 频率冒充持仓时长(scalper误判whale)→复用 reconstruct 真实持仓段;
+    ③pump_radar 1h标定喂5m(24h标签/命中率张冠李戴)→推真实周期+非标定TF标注未验证;④SQLite多线程共享连接并发事务崩溃丢sm_events→RLock+_txn()串行化8处写事务。
+  **14 P2 全修**:4张时序表无界增长→补保留;pump lift×2虚高→分离;dump/pump桶混→分桶;3处死代码删(ticker_board N+1/address_txs/build_meme_markets);
+    _safe_float自造重复→复用util;review 14次全表COUNT→record()返bool累加;vol板+correlation O(W²)阻塞事件循环→to_thread;KNN/busy_timeout/short setup 永久skip或恒真断言→真断言。
+  **3 nit**:docstring周期列表/atr2恒真断言 已修;27处防御性skip 仅修永久skip那个,余26休眠守卫不投机批量转(误转非确定用例致flaky,#138/#146纪律)。
+  教训:十六轮穷尽验证的波动模块零真bug,几乎没碰的周边模块藏4个P1——深度≠广度,多agent并行照亮串行注意力盲区;"幽灵覆盖"(恒真断言/永久skip)比缺测试更危险。
 - 2026-06-26 #160: **「审计每个方位」8方位并行审计编队 → 21确认发现,逐批修复中**（用户指令;Opus编排Workflow+裁决修复）。
   含外置盘闪断3次(本会话)→ 把源码复制到内置盘稳定副本供编队读(规避卷抖动)→ 重挂载 + diskutil 恢复法。用户授权「3」:推送 origin 离机备份(53提交,单点风险清零)。
   Workflow:8方位(正确性/诚实§二/健壮/安全/数据/性能并发/架构DRY/测试质量)并行审计→逐发现对抗证伪→Opus裁决。37 agent,29发现,**21确认(0 P0/4 P1/14 P2/3 nit)**。
