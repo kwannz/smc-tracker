@@ -134,6 +134,8 @@ class HLOrderbookMonitor:
 
         # 待落库墙事件缓冲：row = (ts, coin, side, kind, px, notional)
         self._buffer: list[tuple] = []
+        # 最近一帧 ts（供 flush 周期清理死墙状态，防长跑内存泄漏）
+        self._last_ts: int = 0
         # 统计
         self.frames_seen = 0
         self.walls_seen = 0
@@ -162,6 +164,7 @@ class HLOrderbookMonitor:
         asks = levels[1] or []
         ts = int(_f(data.get("time")))
         self.frames_seen += 1
+        self._last_ts = ts          # 供 flush 周期清理死墙状态
         self._has_ws_frame.add(coin)
 
         # C.1: 维护 OFI + micro_price + queue_imbalance（扩展 _imbalance）
@@ -227,6 +230,27 @@ class HLOrderbookMonitor:
 
             # 更新状态（on_wall_signal=None 时不触发回调但仍更新状态）
             self._walls[coin][side] = cur
+
+    def _prune_stale(self, now_ms: int) -> int:
+        """清理「墙已消失且超 flap_window_ms 无活动」的墙状态键，防长跑内存泄漏（C.5）。
+
+        修复：原 pull 仅清 _wall_born，_wall_flap/_spoof_flag 永不释放 → 按 (coin,side,px浮点) 无界增长。
+        安全约束：仅清死键——墙当前不存在(已 pull) **且** 最近 flap 已超窗口(不再贡献 spoof 计数)；
+        存活墙(仍在 self._walls)与近期活跃键保留，spoof 检测与 confirming_wall 不受影响。
+        返回清理键数。
+        """
+        cutoff = now_ms - self.flap_window_ms
+        stale: list[tuple[str, str, float]] = []
+        for key, q in list(self._wall_flap.items()):
+            coin, side, px = key
+            alive = px in self._walls.get(coin, {}).get(side, {})
+            if not alive and (not q or q[-1] < cutoff):
+                stale.append(key)
+        for key in stale:
+            self._wall_flap.pop(key, None)
+            self._spoof_flag.pop(key, None)
+            self._wall_born.pop(key, None)
+        return len(stale)
 
     def _update_spoof_flag(self, key: tuple[str, str, float], now_ts: int) -> None:
         """C.5: 根据近 flap_window_ms 内的 build/pull 次数更新 spoof 标记。"""
@@ -349,7 +373,12 @@ class HLOrderbookMonitor:
 
     # ---- 落库 ----
     def flush(self) -> int:
-        """墙事件缓冲批量落库，清空缓冲；返回落库行数。store=None 时仅清空缓冲。"""
+        """墙事件缓冲批量落库，清空缓冲；返回落库行数。store=None 时仅清空缓冲。
+
+        顺带周期清理死墙状态（_prune_stale），防长跑 _wall_flap/_spoof_flag 无界增长。
+        """
+        if self._last_ts > 0:
+            self._prune_stale(self._last_ts)   # 周期 GC 死墙状态（防内存泄漏）
         if not self._buffer:
             return 0
         rows = self._buffer

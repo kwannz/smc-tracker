@@ -214,6 +214,12 @@ D 多空符号 · E 真实 userFills 解析/分类自洽 · F WS webData2==REST 
 > 据 codex-loop 反幻觉纪律保持开放，区别于「已实现但 backlog 写保守」的项（已核实证据后闭合）。
 
 ## 迭代日志
+- 2026-06-26 #125: **订单簿挂单墙监控审计:_wall_flap/_spoof_flag 内存泄漏修复(第一优先级领先信号)**（/loop；Opus 直接执行）。
+  审计 CLAUDE.md §二第一优先级前瞻信号 `orderbook_monitor.py`(l2Book 挂单意图,持续运行热路径)。**发现真实 P2 泄漏**：
+  pull 时只清 `_wall_born`，`_wall_flap`/`_spoof_flag` 以 (coin,side,px浮点) 为键**永不释放** → 长跑无界增长。
+  **修复**:`_prune_stale(now_ms)` 只清「墙已消失 且 超 flap_window_ms 无活动」的死键(保留存活墙+近期 spoof 检测)，
+  `_on_l2book` 记 `_last_ts`，`flush` 周期 GC。TDD 暴露泄漏测试(100 价位 build→pull 后 prune)。全部 spoof 测试不破。
+  全量 **2418 passed, 2 skipped**(零回归)。
 - 2026-06-26 #124: **K线数据地基审计:gap 检测纪元对齐 bug 修复(波动追踪数据基石)**（/loop；Opus 直接执行）。
   审计从未覆盖的 K 线采集/摄入管线(喂养所有波动/谐波/BB 信号)。**实证发现真实 bug**:`detect_and_fill_gap`
   用 `(now//gran)*gran` 算当前 bar 假设纪元(周四)对齐,但 Bitget 日线 16:00 UTC、周线周日 16:00 UTC 按 UTC+8 日界对齐

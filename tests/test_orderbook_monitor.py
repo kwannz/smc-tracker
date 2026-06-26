@@ -259,7 +259,37 @@ def test_confirming_wall_picks_largest_notional():
     assert result["notional"] == 3_000_000.0
 
 
-if __name__ == "__main__":
-    import pytest
+def test_prune_stale_clears_dead_wall_state_no_memory_leak():
+    """C.5 防内存泄漏：墙在多个价位 build→pull 后，超 flap_window_ms 无活动的死键应被清理。
 
-    raise SystemExit(pytest.main([__file__, "-v"]))
+    回归：原实现 pull 只清 _wall_born，_wall_flap/_spoof_flag 永不释放 → 长跑无界增长。
+    修复：_prune_stale 清理「墙已消失且超窗口无活动」的键；存活墙与近期 flap 保留。
+    """
+    ws = _FakeWS()
+    mon = HLOrderbookMonitor(["BTC"], ws, min_wall_usd=200_000.0, flap_window_ms=30_000)
+
+    def _small(ts: int) -> dict:
+        bids = [_lv(50000.0 - i, 0.1) for i in range(20)]  # 无墙
+        asks = [_lv(50001.0 + i, 0.1) for i in range(20)]
+        return {"coin": "BTC", "time": ts, "levels": [bids, asks]}
+
+    def _wall(px: float, ts: int) -> dict:
+        bids = [_lv(50000.0 - i, 0.1) for i in range(9)]
+        bids.append(_lv(px, 100.0))                        # 大墙 notional=px*100 ≫ 阈值
+        asks = [_lv(50001.0 + i, 0.1) for i in range(20)]
+        return {"coin": "BTC", "time": ts, "levels": [bids, asks]}
+
+    # 100 个不同价位各 build 一帧再 pull → 累积 100 个历史价位键
+    for i in range(100):
+        mon._on_l2book(_wall(40000.0 + i, 100 + i * 200), 0)
+        mon._on_l2book(_small(100 + i * 200 + 100), 0)
+
+    grew = len(mon._wall_flap)
+    assert grew >= 50, f"应累积大量历史 flap 键(泄漏前提)，实际={grew}"
+
+    # 推进到所有历史 flap 都超出窗口 → prune 应清掉死键
+    far_future = 100 + 100 * 200 + 30_000 + 1
+    pruned = mon._prune_stale(far_future)
+    assert pruned > 0
+    assert len(mon._wall_flap) < grew, "prune 后死键应显著减少"
+    assert len(mon._spoof_flag) <= len(mon._wall_flap), "spoof_flag 同步清理"
