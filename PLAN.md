@@ -214,6 +214,13 @@ D 多空符号 · E 真实 userFills 解析/分类自洽 · F WS webData2==REST 
 > 据 codex-loop 反幻觉纪律保持开放，区别于「已实现但 backlog 写保守」的项（已核实证据后闭合）。
 
 ## 迭代日志
+- 2026-06-26 #143: **指标数值对照独立参考 → 修 ATR 偏离开源标准(SMA-of-TR→Wilder RMA)**（/loop；Opus 验证+修正）。
+  首次用**外部真相源**(我没写的纯Python std + 标准Wilder公式)裁判波动指标,补单测盲区("代码符合作者意图"≠"作者意图符合标准")。
+  对照5币真实数据:rv(Δ~1e-14)、velocity(Δ0)、HVP(∈[0,1]) **数值精确**——十轮首次有外部背书。
+  但 **atr_pct 是 SMA-of-TR,比开源标准 Wilder ATR(TA-Lib/TradingView 默认)系统性高 10~19%**(BTC+15/ETH+19/SOL+10/DOGE+18%)。
+  指令"按照开源案例" → ATR 就该是 Wilder。修:加 `_wilder_rma`(seed=SMA其后 RMA 递推),atr_pct 改用之。
+  真实数据:修后 atr_pct 与 Wilder 参考 Δ=0.0(全币精确)。TDD +1(对独立 Wilder 递推匹配且≠SMA);全量 **2448 passed**(零回归)。
+  教训:单测验证不了"作者的理解本身偏离标准"——测试和实现共享同一错误前提会一起绿;需外部真相源裁判。
 - 2026-06-26 #142: **第三消费者(推送)选币语义核查 + 前摄锁住有意分歧**（/loop；Opus 验证+文档加固）。
   续 #141:波动板三消费者(dashboard/CLI/opt-in推送)中,推送 `_periodic_volatility_board` 也独立选币(get_monitored_coins)。
   核查判定:**推送故意保持清单严格,绝不能用 pick_coins**——推送是主动通知,清单空=用户不想要,fallback到波动币会

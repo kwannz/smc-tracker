@@ -33,12 +33,29 @@ _TF_MS = {"15m": 900_000, "30m": 1_800_000, "1H": 3_600_000, "4H": 14_400_000,
           "6H": 21_600_000, "12H": 43_200_000, "1D": 86_400_000, "1W": 604_800_000}
 
 
+def _wilder_rma(tr: np.ndarray, n: int) -> float:
+    """Wilder RMA 平滑末值=开源标准 ATR(Wilder 1978；TA-Lib/TradingView ta.atr 默认)。
+
+    seed=前 n 根 TR 的 SMA，其后 ATR_t=(ATR_{t-1}·(n-1)+TR_t)/n（含全历史指数衰减权，非仅近 n 根等权
+    平均的 SMA-of-TR——后者在近端剧烈期系统性偏高 10~19%，见 #143 交叉验证）。数据不足→退化可用窗 SMA。
+    """
+    sz = tr.size
+    if sz == 0:
+        return 0.0
+    if sz <= n:
+        return float(np.mean(tr))
+    a = float(np.mean(tr[:n]))
+    for t in tr[n:].tolist():
+        a = (a * (n - 1) + t) / n
+    return a
+
+
 def vol_metrics(h: Any, l: Any, c: Any, *,
                 rv_win: int = _RV_WIN, vel_win: int = _VEL_WIN,
                 rv_long_win: int = _RV_LONG) -> dict:
     """单周期 HLC → 波动专业指标（numpy 向量化）。数据 <3 根返回 {}。（open 不参与，故不收）
 
-    返回：rv(已实现波动率=对数收益σ,%)、atr_pct(真实波幅均值/价,%)、range_pct(当前 bar 区间,%)、
+    返回：rv(已实现波动率=对数收益σ,%)、atr_pct(Wilder ATR/价,%；开源标准 RMA 平滑)、range_pct(当前 bar 区间,%)、
          velocity(近窗%变化=1 阶导)、accel(速度差=2 阶导，前序窗不足时=0 不虚增)、
          vol_ratio(短窗σ/长窗σ)、regime(压缩/扩张/常态=波动状态，回望确认非预测)。
     数据含 NaN/inf 时返回 {}（数据质量守卫，避免 NaN 污染排名）。
@@ -57,7 +74,7 @@ def vol_metrics(h: Any, l: Any, c: Any, *,
     prev = cc[:-1]
     tr = np.maximum.reduce([hi[1:] - lo[1:], np.abs(hi[1:] - prev), np.abs(lo[1:] - prev)])
     last = cc[-1]
-    atr_pct = float(np.mean(tr[-rv_win:]) / last) * 100.0
+    atr_pct = float(_wilder_rma(tr, rv_win) / last) * 100.0  # 开源标准 Wilder ATR(非 SMA-of-TR，修#143)
     range_pct = float((hi[-1] - lo[-1]) / last) * 100.0
     k = min(vel_win, n - 1)
     velocity = float((cc[-1] - cc[-1 - k]) / cc[-1 - k]) * 100.0

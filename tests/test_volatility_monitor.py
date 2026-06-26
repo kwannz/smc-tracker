@@ -43,6 +43,24 @@ def test_coin_vol_state_deep_discount():
     assert coin_vol_state(by_tf) == "深折价"
 
 
+def test_atr_is_wilder_rma_not_sma():
+    """atr_pct 用开源标准 Wilder RMA(非 SMA-of-TR，#143 交叉验证修正)：对独立 Wilder 递推匹配，且≠SMA。"""
+    n = 35
+    h = [100 + i * 0.5 + (2.0 if i % 3 == 0 else 0.0) for i in range(n)]
+    l = [100 + i * 0.5 - (2.0 if i % 3 == 0 else 0.0) for i in range(n)]
+    c = [100 + i * 0.5 for i in range(n)]
+    m = vol_metrics(h, l, c)
+    tr = [max(h[i] - l[i], abs(h[i] - c[i - 1]), abs(l[i] - c[i - 1])) for i in range(1, n)]
+    win = 20
+    atr = sum(tr[:win]) / win                       # 独立 Wilder 参考(seed=SMA，其后 RMA 递推)
+    for t in tr[win:]:
+        atr = (atr * (win - 1) + t) / win
+    expected = atr / c[-1] * 100
+    assert abs(m["atr_pct"] - expected) < 1e-9       # 匹配 Wilder 开源标准
+    sma = (sum(tr[-win:]) / win) / c[-1] * 100
+    assert abs(m["atr_pct"] - sma) > 1e-6            # 确实≠旧的 SMA-of-TR(确认修正生效)
+
+
 def test_coin_vol_state_normal_and_empty():
     assert coin_vol_state({"15m": _m()}) == "常态"
     assert coin_vol_state({}) == "常态"
