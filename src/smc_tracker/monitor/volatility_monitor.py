@@ -68,7 +68,8 @@ def vol_metrics(h: Any, l: Any, c: Any, *,
         accel = 0.0
     return {"rv": rv, "atr_pct": atr_pct, "range_pct": range_pct,
             "velocity": velocity, "accel": accel,
-            "vol_ratio": vol_ratio, "regime": regime}
+            "vol_ratio": vol_ratio, "regime": regime,
+            "vol_pct": vol_percentile(c)}   # 历史波动百分位(HVP，-1=数据不足)
 
 
 def pdarray(h: Any, l: Any, c: Any, *, win: int = _PD_WIN, band: float = 0.03) -> dict:
@@ -87,6 +88,30 @@ def pdarray(h: Any, l: Any, c: Any, *, win: int = _PD_WIN, band: float = 0.03) -
     pd = (price - lo) / rng
     zone = "溢价" if pd > 0.5 + band else ("折价" if pd < 0.5 - band else "均衡")
     return {"pd_pct": pd, "pd_zone": zone}
+
+
+def vol_percentile(c: Any, *, win: int = _RV_WIN, lookback: int = 120) -> float:
+    """历史波动率百分位（HVP，开源 TradingView 思路）：当前滚动 rv 在近 lookback 根历史 rv 分布中的位次。
+
+    返回 ∈[0,1]（1=当前波动处历史最高位=异常剧烈；0=历史最低=极度平静）；
+    数据不足(<win+3 根有效 logret)或含 NaN/inf → -1.0 哨兵（不冒充百分位，诚实标注）。
+    校准维度：补 rv(绝对值)/vol_ratio(变化方向) 之外的「当前波动 vs 自身历史」相对水平。
+    """
+    cc = np.asarray(c, dtype=float)
+    if cc.size < win + 3 or not np.all(np.isfinite(cc)):
+        return -1.0
+    cc = np.clip(cc, 1e-12, None)
+    logret = np.diff(np.log(cc))
+    n = logret.size
+    if n < win + 1:
+        return -1.0
+    # 滚动 rv 序列（每个窗口末位算 σ）；n≤~120 廉价，直接列表推导
+    rvs = np.array([float(np.std(logret[i - win:i], ddof=0)) for i in range(win, n + 1)])
+    rvs = rvs[-lookback:]
+    if rvs.size < 3:
+        return -1.0
+    cur = rvs[-1]
+    return float(np.mean(rvs <= cur))   # 含自身的百分位秩 ∈[0,1]
 
 
 def move_score(m: dict) -> float:
@@ -289,9 +314,15 @@ class VolatilityMonitor:
                 v, a = m["velocity"], m["accel"]
                 vdir = "🟢↑" if v >= 0 else "🔴↓"
                 adir = "加速" if a * v > 0 else ("减速" if a * v < 0 else "—")
+                vp = m.get("vol_pct", -1.0)
+                # HVP：当前波动 vs 自身历史分位(🔥≥90% 异常剧烈 / ❄️≤10% 极静蓄势 / 无标记常态)；-1=数据不足略
+                vp_str = ""
+                if vp >= 0:
+                    vp_mark = "🔥" if vp >= 0.9 else ("❄️" if vp <= 0.1 else "")
+                    vp_str = f" HVP{vp * 100:.0f}%{vp_mark}"
                 lines.append(
                     f"  {tf:<4} {vdir}{abs(v):.2f}% a{a:+.2f}{adir}"
                     f" σ{m['rv']:.2f}%[{m['regime']}] ATR{m['atr_pct']:.2f}% 幅{m['range_pct']:.2f}%"
-                    f" PD{m['pd_pct'] * 100:.0f}%{m['pd_zone']}"
+                    f" PD{m['pd_pct'] * 100:.0f}%{m['pd_zone']}{vp_str}"
                 )
         return "\n".join(lines)

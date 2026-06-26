@@ -11,8 +11,36 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from smc_tracker.monitor.volatility_monitor import (
     vol_metrics, pdarray, VolatilityMonitor, volatility_highlights, market_regime,
-    mtf_alignment,
+    mtf_alignment, vol_percentile,
 )
+
+
+def test_vol_percentile_high_when_recent_spike():
+    """近端波动放大 → 当前 rv 处历史高位,百分位接近 1（开源 HVP 思路）。"""
+    import math
+    calm = [100.0] * 100
+    spike = [100.0 + (3.0 if i % 2 else -3.0) for i in range(20)]   # 末段剧震
+    p = vol_percentile(calm + spike)
+    assert 0.0 <= p <= 1.0
+    assert p > 0.8, f"近端剧震应处波动高位, got {p}"
+
+
+def test_vol_percentile_low_when_recent_calm():
+    """近端平静 → 当前 rv 处历史低位,百分位接近 0。"""
+    spike = [100.0 + (3.0 if i % 2 else -3.0) for i in range(100)]
+    calm = [100.0] * 30
+    p = vol_percentile(spike + calm)
+    assert p < 0.3, f"近端平静应处波动低位, got {p}"
+
+
+def test_vol_percentile_insufficient_data_sentinel():
+    """数据不足 → 返回 -1.0 哨兵(不冒充百分位)。"""
+    assert vol_percentile([100.0, 101.0, 102.0]) == -1.0
+
+
+def test_vol_percentile_nan_sentinel():
+    """含 NaN → -1.0(数据质量守卫)。"""
+    assert vol_percentile([100.0] * 50 + [float("nan")] + [100.0] * 50) == -1.0
 
 
 def _ohlc(closes):

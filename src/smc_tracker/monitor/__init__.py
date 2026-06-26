@@ -23,7 +23,8 @@ from .candle_collector import BitgetCandleCollector
 from .harmonic_candle_ws import HarmonicCandleWS, _parse_candle_row, _is_bar_closed, _TF_TO_CHANNEL
 from .candle_ingest import backfill, detect_and_fill_gap, ingest_ws_closed_bar
 from .volatility_monitor import (VolatilityMonitor, vol_metrics, move_score, pdarray,
-                                 volatility_highlights, market_regime, mtf_alignment)
+                                 volatility_highlights, market_regime, mtf_alignment,
+                                 vol_percentile)
 from .volatility_regime_tracker import VolatilityRegimeTracker
 
 __all__ = [
@@ -56,6 +57,7 @@ __all__ = [
     "volatility_highlights",
     "market_regime",
     "mtf_alignment",
+    "vol_percentile",
     "move_score",
     "pdarray",
     "VolatilityRegimeTracker",

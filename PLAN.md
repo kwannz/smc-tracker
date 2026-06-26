@@ -214,6 +214,12 @@ D 多空符号 · E 真实 userFills 解析/分类自洽 · F WS webData2==REST 
 > 据 codex-loop 反幻觉纪律保持开放，区别于「已实现但 backlog 写保守」的项（已核实证据后闭合）。
 
 ## 迭代日志
+- 2026-06-26 #133: **波动率历史百分位 HVP(开源 TradingView HVP；校准维度)**（/loop；Opus 直接执行，功能侧）。
+  审计战役收口后转功能。加 `vol_percentile(c)` 纯函数：当前滚动 rv 在近 120 根历史 rv 分布中的位次∈[0,1]
+  (数据不足/NaN→-1 哨兵诚实标注)。补 rv(绝对值)/vol_ratio(变化方向)之外的「当前波动 vs 自身历史」校准维度。
+  接入 vol_metrics(vol_pct) + CLI 板(HVP%🔥≥90异常/❄️≤10极静) + dashboard 矩阵格 + 图例。真实数据实证:
+  BTC 1H/4H HVP 97%/99%🔥(刚剧跌处历史高位,σ绝对值看不出而百分位一眼可见)。模块 328 行(守800)。
+  TDD 4 例(高位/低位/数据不足/NaN哨兵);全量 **2431 passed, 2 skipped**(零回归)。
 - 2026-06-26 #132: **收尾审计 solana/llm——稳健,修 SOL 供应量 NaN 污染守卫(审计战役收口)**（/loop；Opus 直接执行）。
   审计剩余子系统:`llm/codex_client.py`(子进程封装)**稳健**——create_subprocess_exec(*argv) 非 shell(无注入)、
   提示词走 stdin、超时 kill+wait+reap、全异常优雅降级。`solana.py` 整体稳健(退避/限流/供应变化检测顺序对),
