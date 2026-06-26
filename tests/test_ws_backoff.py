@@ -1,4 +1,7 @@
-"""WS 重连退避纯函数单测：防重连风暴(连接成功即重置 → 稳定才重置)。"""
+"""WS 重连退避纯函数单测：防重连风暴(连接成功即重置 → 稳定才重置)。
+
+reconnect_backoff 为 hl/okx/bitget 三 WS 客户端共享(util.py 单一真相源)。
+"""
 from __future__ import annotations
 
 import sys
@@ -6,7 +9,16 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from smc_tracker.hyperliquid.ws_client import _reconnect_backoff, _STABLE_CONN_SEC
+from smc_tracker.util import reconnect_backoff as _reconnect_backoff
+from smc_tracker.util import WS_STABLE_CONN_SEC as _STABLE_CONN_SEC
+
+
+def test_shared_by_all_three_ws_clients():
+    """三 WS 客户端(hl/okx/bitget)均引用 util.reconnect_backoff(零孤儿 + 防同款 bug 复发)。"""
+    from smc_tracker.hyperliquid.ws_client import _reconnect_backoff as hl_fn
+    from smc_tracker.okx.ws_client import _reconnect_backoff as okx_fn
+    from smc_tracker.bitget.ws_client import _reconnect_backoff as bg_fn
+    assert hl_fn is okx_fn is bg_fn is _reconnect_backoff
 
 
 def test_stable_connection_resets_backoff():

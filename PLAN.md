@@ -214,6 +214,11 @@ D 多空符号 · E 真实 userFills 解析/分类自洽 · F WS webData2==REST 
 > 据 codex-loop 反幻觉纪律保持开放，区别于「已实现但 backlog 写保守」的项（已核实证据后闭合）。
 
 ## 迭代日志
+- 2026-06-26 #128: **三 WS 客户端重连风暴统一修复 + DRY 到 util(数据摄入地基)**（/loop；Opus 直接执行）。
+  审计确认 okx/bitget WS 客户端有与 hl **同款** copy-paste 重连风暴 bug(连接成功即 backoff=1.0)。
+  **DRY 修复**:`_reconnect_backoff` 从 hl 移到 `util.reconnect_backoff`(单一真相源,避免 okx 跨包 import hl),
+  三客户端(hl/okx/bitget)统一引用 + run() 应用稳定性门控(存活≥30s 才重置)。补"三客户端共享同一函数"测试
+  (零孤儿 + 防同款 bug 各自复发)。全量 **2424 passed, 2 skipped**(零回归)。
 - 2026-06-26 #127: **WS 重连风暴根因修复(数据摄入地基)+ 工作树异常恢复**（/loop；Opus 直接执行）。
   ① **环境异常**:外部进程(同步/挂载)把磁盘工作树整体还原成 loop#101 旧快照(46删+66改),Desktop 路径 TCC 权限拒绝。
   git HEAD(#126)完整,逐项确证工作树无独有内容后 `git restore --source=HEAD` 整树恢复,全量 2419 passed 验证零丢失。

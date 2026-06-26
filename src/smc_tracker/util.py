@@ -1,9 +1,27 @@
-"""共享工具：安全数值解析 + 时间格式（消除跨模块重复，统一数据质量）。"""
+"""共享工具：安全数值解析 + 时间格式 + WS 重连退避（消除跨模块重复，统一数据质量）。"""
 from __future__ import annotations
 
 import math
 import time
 from typing import Any
+
+# WS 连接存活 ≥ 此秒数才视为「稳定」→ 断开后重置退避；否则继续指数增长（防重连风暴）
+WS_STABLE_CONN_SEC = 30.0
+
+
+def reconnect_backoff(
+    conn_elapsed_sec: float, current_backoff: float, max_backoff: float,
+    stable_sec: float = WS_STABLE_CONN_SEC,
+) -> tuple[float, float]:
+    """WS 重连退避决策（纯函数，三 WS 客户端 hl/okx/bitget 共用）：返回 (本次 sleep 秒, 下次退避基数)。
+
+    根因修复（防重连风暴）：**不在「连接成功」时重置退避，而在「连接稳定」时**。
+    server 接受连接后立即断（限流/维护）的失败模式下，若每次连上即重置退避，会形成
+    1s 间隔无限重连风暴（自我 DoS）。仅当连接存活 ≥ stable_sec 才重置为 1.0，
+    否则保持 current_backoff 继续指数增长（×2，封顶 max_backoff）。
+    """
+    base = 1.0 if conn_elapsed_sec >= stable_sec else current_backoff
+    return base, min(base * 2.0, max_backoff)
 
 
 def to_float(x: Any, default: float = 0.0) -> float:

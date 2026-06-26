@@ -18,6 +18,8 @@ from typing import Any, Awaitable, Callable
 import orjson
 import websockets
 
+from ..util import reconnect_backoff as _reconnect_backoff  # WS 重连退避（共享，防风暴）
+
 log = logging.getLogger("bitget.ws")
 
 # handler(arg: dict, data: list, recv_ns: int)
@@ -72,11 +74,12 @@ class BitgetWSClient:
         self._running = True
         backoff = 1.0
         while self._running:
+            conn_start = time.monotonic()    # 本轮连接起始，用于稳定性判定（防重连风暴）
             try:
                 async with websockets.connect(self.ws_url, ping_interval=None,
                                               max_queue=2048, open_timeout=10) as conn:
                     self._conn = conn
-                    backoff = 1.0
+                    # 不在连接成功时重置退避（避免「连上即断」反复清零形成风暴）
                     self._last_pong_ns = time.monotonic_ns()   # 连上即重置看门狗
                     log.info("Bitget WS 已连接")
                     await self._send(list(self._subs))
@@ -94,8 +97,11 @@ class BitgetWSClient:
                 self._conn = None
             if not self._running:
                 break
-            await asyncio.sleep(backoff)
-            backoff = min(backoff * 2, self.reconnect_max_backoff_sec)
+            # 稳定连接断开→重置退避；瞬断→继续指数增长（防风暴），共享 util.reconnect_backoff
+            elapsed = time.monotonic() - conn_start
+            sleep_sec, backoff = _reconnect_backoff(
+                elapsed, backoff, self.reconnect_max_backoff_sec)
+            await asyncio.sleep(sleep_sec)
 
     async def stop(self) -> None:
         self._running = False
