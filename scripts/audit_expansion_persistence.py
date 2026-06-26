@@ -96,6 +96,54 @@ def _abs_logret_autocorr(logret: np.ndarray, lags=(1, 5, 10, 20)) -> dict[int, f
     return out
 
 
+def _ewma_fc_series(logret: np.ndarray, lam: float = 0.94) -> np.ndarray:
+    """单遍 EWMA σ% 预测序列(匹配 volatility_monitor.ewma_vol 的 seed/λ 递推)。
+
+    fc[t]=用 logret[:t+1] 在 t 时刻可得的 EWMA 波动率(%),即"在 t 对未来波动的预测"。
+    seed=首 20 logret 样本方差,其后逐根 var=λ·var+(1-λ)·r²。
+    """
+    n = logret.size
+    fc = np.full(n, np.nan)
+    if n < 3:
+        return fc
+    seed_n = min(20, n)
+    var = float(np.var(logret[:seed_n], ddof=0))
+    fc[seed_n - 1] = np.sqrt(var) * 100.0
+    for t in range(seed_n, n):
+        var = lam * var + (1.0 - lam) * logret[t - 1] ** 2
+        fc[t] = np.sqrt(var) * 100.0
+    return fc
+
+
+def _forecast_skill(series_map: dict[str, np.ndarray], horizons=(1, 3, 5, 10)) -> dict:
+    """实证 EWMA 预测技巧随视野衰减:corr(在t的预测, [t+1,t+h]已实现波动),对照 rv 持续性基线。
+
+    诚实立(#177 配套):破完 90% 伪影,正面量化系统真实前瞻能力——EWMA 在哪个视野真有技巧。
+    """
+    out: dict[int, dict] = {}
+    for h in horizons:
+        ew_a, rv_a, real_a = [], [], []
+        for lr in series_map.values():
+            fc = _ewma_fc_series(lr)
+            n = lr.size
+            if n < _RV_WIN + h + 5:
+                continue
+            for t in range(_RV_WIN, n - h):
+                if not np.isfinite(fc[t]):
+                    continue
+                # h=1 的"已实现波动"=|单bar收益|(std 单点=0 退化);h>1 用窗口 σ
+                realized = (abs(float(lr[t + 1])) if h == 1
+                            else float(np.std(lr[t + 1:t + 1 + h], ddof=0))) * 100.0
+                rv_now = float(np.std(lr[t - _RV_WIN + 1:t + 1], ddof=0)) * 100.0
+                ew_a.append(fc[t]); rv_a.append(rv_now); real_a.append(realized)
+        if len(real_a) > 10:
+            R = np.array(real_a)
+            ew_c = float(np.corrcoef(np.array(ew_a), R)[0, 1])
+            rv_c = float(np.corrcoef(np.array(rv_a), R)[0, 1])
+            out[h] = {"ewma_corr": ew_c, "rv_corr": rv_c, "n": len(real_a)}
+    return out
+
+
 async def _fetch(coins: list[str]) -> dict[str, np.ndarray]:
     out: dict[str, np.ndarray] = {}
     async with BitgetREST() as cli:
@@ -176,6 +224,15 @@ async def main() -> None:
     for L in (1, 5, 10, 20):
         if L in ac_mean:
             print(f"  lag-{L:<2}: {ac_mean[L]:+.3f}")
+    print("-" * 64)
+    print("【立:EWMA 预测技巧随视野(#177 配套,正面量化真实前瞻能力)】")
+    print("  视野h  EWMA_corr  rv持续基线  EWMA增益   样本")
+    fs = _forecast_skill(sm)
+    for h in (1, 3, 5, 10):
+        if h in fs:
+            d = fs[h]
+            print(f"  {h:>3}bar  {d['ewma_corr']:+.3f}     {d['rv_corr']:+.3f}     "
+                  f"{d['ewma_corr'] - d['rv_corr']:+.3f}    n={d['n']}")
     print("=" * 64)
     art = (o_persist - n_persist) < 0.10 and (o_corr - n_corr) < 0.10
     if art:

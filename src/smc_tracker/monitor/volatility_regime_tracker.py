@@ -52,10 +52,10 @@ class VolatilityRegimeTracker:
         if not events:
             return ""
         from ..util import fmt_ts  # noqa: PLC0415
-        # 诚实标注：扩张是波动已放大的*当前态确认*(非方向预测)。#177 null 对照纠 #153:
-        # 原"90%续/0.73"是滚动窗重叠机械伪影(真实增益≈0),波动只有近端**弱短记忆**
-        # (|logret|自相关 lag-1≈0.28→lag-10≈0.05);方向仍不定(方向类皆~0)。与 vol 板同口径。
-        lines = [f"🔶 波动扩张确认 [{fmt_ts(now_ms)}] 压缩→放量（已放大·波动弱短记忆≠90%续·方向不定#177）"]
+        # 诚实标注：扩张是波动已放大的*当前态确认*(非方向预测)。#177 null 对照纠 #153"90%续/0.73"窗口伪影;
+        # #178 立:波动**水平**可前瞻(EWMA→未来h-bar平均波动 corr 0.30@1bar→0.45@10bar=真实幅度edge),
+        # 但逐bar|收益|记忆快衰减(0.28→0.05)、方向仍不定(方向类皆~0)。与 vol 板同口径。
+        lines = [f"🔶 波动扩张确认 [{fmt_ts(now_ms)}] 压缩→放量（已放大·波动水平可前瞻corr~0.4·非90%续·方向不定#178）"]
         for e in events:
             lines.append(
                 f"  {e['coin']}/{e['tf']} 放量 速度{e['velocity']:+.2f}% (σ比 {e['vol_ratio']:.2f})"
