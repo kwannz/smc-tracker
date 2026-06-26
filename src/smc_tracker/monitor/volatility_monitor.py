@@ -56,6 +56,8 @@ def ewma_vol(c: Any, lam: float = _RM_LAMBDA) -> float:
     EWMA 在 IGARCH 下 h 步预测=当前 σ，故可读作**预期波动水平**——仍是水平非方向(方向短期反转,#152)。
     #155 自我证伪：EWMA 比等权 rv **更准预测未来已实现波动**(150币 corr 0.414 vs rv 0.387、MAE 更小、
     76% 币 EWMA 更优)，改进温和但一致——前瞻宣称有实测背书，非仅"行业标准"。
+    #159 泛化:优势在 15m/1H/4H/1D **全周期 better-or-equal、从不更差**(15m+0.029/4H+0.038 最强，1D+0.010 边际
+    ≈rv,因稀疏周期种子占比大)，故全周期适用;唯 1D 及更稀疏周期 EW≈σ,优势可忽略。
     """
     cc = np.asarray(c, dtype=float)
     if cc.size < 3 or not np.all(np.isfinite(cc)):
