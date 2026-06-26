@@ -100,7 +100,7 @@ async function load(){
  var fr='';
  if(fresh>0){var ageMin=Math.round((Date.now()-fresh)/60000);
    fr='🕒 数据更新至 '+new Date(fresh).toLocaleString()+(ageMin>30?' ⚠️陈旧'+ageMin+'分钟':'')+'<br>';}
- var mkt=(j.market&&j.market.label)?'📊 市场态势: '+j.market.label+'<br>':'';
+ var mkt=(j.market&&j.market.label)?'📊 监控集态势: '+j.market.label+'<br>':'';
  document.getElementById('hl').innerHTML=fr+mkt+hlbar(j.highlights);
  if(!coins.length){document.getElementById('box').textContent='暂无数据（监控清单为空或采集器未填 K 线）';return;}
  var h='<table><thead><tr><th>币</th><th>分</th>';

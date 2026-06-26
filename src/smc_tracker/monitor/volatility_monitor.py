@@ -149,7 +149,10 @@ def volatility_highlights(rows: list[dict], *, max_each: int = 5) -> dict:
 
 
 def market_regime(rows: list[dict]) -> dict:
-    """聚合全监控集逐周期 regime/PD → 市场级波动态势（市场广度/regime）。纯函数。
+    """聚合**展示币集**逐周期 regime/PD → 监控集级波动态势（广度/regime）。纯函数。
+
+    诚实(修 #140)：聚合限于传入的 rows(监控清单币或空清单时的近24h最剧烈币)，是**选择性样本**非
+    代表性全市场样本——空清单 fallback 下币偏向高波动，故标签用"监控集态势"不夸大全市场代表性。
 
     返回 {n, regime:{压缩,扩张,常态}, pd:{折价,溢价,均衡}, label}。
     label：主导 regime + 主导 PD（如"蓄势(压缩) 12/21 · 普遍折价(区间下半段) 15/21"）；n=0 时 label=""。
@@ -365,7 +368,7 @@ class VolatilityMonitor:
         # 市场级态势：把矩阵聚合成全市场波动广度
         mr = market_regime(rows)
         if mr["label"]:
-            lines.append(f"📊 市场态势: {mr['label']}")
+            lines.append(f"📊 监控集态势: {mr['label']}")  # 聚合限于展示币集，非全市场样本(诚实)
         # 动向摘要：把矩阵综合成可操作情报
         hl = volatility_highlights(rows)
         if hl["squeeze"]:
