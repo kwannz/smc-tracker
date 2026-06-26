@@ -362,7 +362,9 @@ class PeriodicTasksMixin:
                         log.warning("谐波 detect_and_fill_gap 批量失败: %s", _gap_exc)
 
                 rows = await self.harmonic_monitor.refresh(now)
-                card = self.harmonic_monitor.render(rows, now)
+                # 减噪(用户#):推送只发 confidence≥0.75 的 setup(🟡较强+,OOS +0.6R↑/#165);
+                # ◆边际(<0.75,+0.2R,最大桶)滤掉不推,仍落库供 dashboard 按需看(push严格pull全显,#142)。
+                card = self.harmonic_monitor.render(rows, now, min_conf=0.75)
                 if card:
                     print(card)
                     self._push_harmonic(card)   # 谐波系统专用独立飞书（与 HL 分开）

@@ -2069,3 +2069,35 @@ def test_conf_tier_oos_grounded_boundaries():
     assert _conf_tier(0.90) == "🟢强" and _conf_tier(0.85) == "🟢强"
     assert _conf_tier(0.84) == "🟡较强" and _conf_tier(0.75) == "🟡较强"
     assert _conf_tier(0.74) == "◆边际" and _conf_tier(0.70) == "◆边际"   # 0.7最常见桶,OOS期望最低
+
+
+def test_render_min_conf_gate_filters_marginal_setups():
+    """减噪门控(减少噪音指令):render(min_conf=0.75) 滤掉 ◆边际(conf<0.75)setup;默认 0.0 全显。
+
+    边际 setup(OOS +0.2R/胜率39.8%/最大桶)不进推送通道,仍可在 dashboard 全显(push严格pull全显,#142)。
+    """
+    from smc_tracker.signals.trade_setup import TradeSetup
+    setup = TradeSetup(
+        coin="BTC", tf="4H", direction="long", pattern="Gartley",
+        completed=True, entry_lo=60200.0, entry_hi=60650.0,
+        stop=59000.0, target1=62500.0, target2=65000.0, rr=2.0,
+        fib_note="XA-Fib=0.618", knn_supports=True, knn_note="样本足",
+        position_qty=0.03, position_notional=1959.0,
+        confidence=0.65, note="边际", src_key="C|Gartley|long|60200.0",
+    )
+    rows = [{
+        "coin": "BTC", "symbol": "BTCUSDT", "price": 62500.0, "tf": "4H",
+        "completed": [{
+            "pattern": "Gartley", "direction": "bull",
+            "prz": (60200.0, 60650.0), "completed": True,
+            "confidence": 0.65, "confluence": 2,
+            "points": {"D": (99, 60200.0)}, "setup": setup,
+        }],
+        "forming": [],
+    }]
+    monitor = HarmonicMonitor(
+        coin_to_symbol={"BTC": "BTCUSDT"}, timeframes=["4H"],
+        bars=300, order=3, tol=0.05, top_n=10,
+    )
+    assert monitor.render(rows, _NOW_MS, min_conf=0.0) is not None        # 全显:边际仍出
+    assert monitor.render(rows, _NOW_MS, min_conf=0.75) is None           # 推送门控:边际滤光→无卡片

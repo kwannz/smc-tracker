@@ -510,8 +510,12 @@ class HarmonicMonitor:
 
         return result
 
-    def render(self, rows: list[dict], now_ms: int) -> str | None:
+    def render(self, rows: list[dict], now_ms: int, min_conf: float = 0.0) -> str | None:
         """渲染谐波形态前瞻卡片（按币种分组，多周期并列）。
+
+        min_conf>0：**减噪门控**——只渲染 confidence≥min_conf 的 setup(其余剔除)。推送侧传 0.75(只发
+        🟡较强+，OOS 实测 +0.6R↑/#165)，滤掉 ◆边际(conf<0.75,+0.2R,胜率39.8%,最大桶 n=7087);
+        拉取/dashboard 用 0.0 全显(push 严格、pull 全显;同 #142)。
 
         新格式：
           - 按 coin 分组，每币一块（`━━ {coin}  {badge}  现价{price} ━━`）
@@ -553,13 +557,13 @@ class HarmonicMonitor:
                 if price > 0:
                     coin_data[coin]["price"] = price
 
-            # 每行（每币每 tf）各取 top _PER_COIN_TF_CAP（按 confidence 降序）
+            # 每行（每币每 tf）各取 top _PER_COIN_TF_CAP（按 confidence 降序）；min_conf 减噪门控先过滤
             row_completed = sorted(
-                r.get("completed") or [],
+                [h for h in (r.get("completed") or []) if (h.get("confidence") or 0.0) >= min_conf],
                 key=lambda h: h["confidence"], reverse=True,
             )[:_PER_COIN_TF_CAP]
             row_forming = sorted(
-                r.get("forming") or [],
+                [h for h in (r.get("forming") or []) if (h.get("confidence") or 0.0) >= min_conf],
                 key=lambda h: h["confidence"], reverse=True,
             )[:_PER_COIN_TF_CAP]
 
@@ -568,6 +572,8 @@ class HarmonicMonitor:
             for h in row_forming:
                 coin_data[coin]["items"].append(("forming", tf, h))
 
+        # 减噪：min_conf 过滤后无 setup 的币剔除(不渲染空块)
+        coin_data = {k: v for k, v in coin_data.items() if v["items"]}
         if not coin_data:
             return None
 
