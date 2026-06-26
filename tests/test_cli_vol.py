@@ -42,6 +42,27 @@ def test_vol_empty_watchlist_no_data(tmp_path, capsys):
     assert "无可显示币" in capsys.readouterr().out
 
 
+def test_vol_skill_reports_forecast_corr(tmp_path, capsys):
+    """#182 vol --skill:在已存 K 线上实测 GARCH/EWMA 预测技巧并打印(生产 alpha 验证)。"""
+    import math
+    db = str(tmp_path / "t.db")
+    s = Store(Path(db))
+    s.add_monitored_coins([("BTC", "BTCUSDT", 1, "")])
+    # 200 根带波动聚集的 K 线(交替强/弱波动段),供 forecast_skill 算技巧
+    px, rows = 100.0, []
+    for i in range(200):
+        step = 0.03 if (i // 20) % 2 == 0 else 0.005   # 波动 regime 切换
+        px *= math.exp(step if i % 2 == 0 else -step)
+        rows.append(("BTC", "15m", i * 900_000, px, px, px, px, 1.0))
+    s.upsert_candles(rows)
+    s.close()
+    ap = build_parser()
+    args = ap.parse_args(["vol", "--tf", "15m", "--skill", "--db", db])
+    args.handler(args)
+    out = capsys.readouterr().out
+    assert "波动预测技巧实测" in out and "GA" in out   # 报告含 GARCH 技巧
+
+
 def test_vol_empty_watchlist_falls_back_to_collected(tmp_path, capsys):
     """空清单但 DB 有 K 线 → fallback 出板(与 dashboard 共用 pick_coins，不再死胡同，#141)。"""
     db = str(tmp_path / "t.db")

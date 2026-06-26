@@ -70,20 +70,27 @@ def _cmd_signals(args: argparse.Namespace) -> None:
 
 
 def _cmd_vol(args: argparse.Namespace) -> None:
-    """实时波动追踪板：监控清单币按速度+加速度领先信号排序（读 DB 已采 K 线，无网络）。"""
+    """实时波动追踪板：监控清单币按速度+加速度领先信号排序（读 DB 已采 K 线，无网络）。
+
+    --skill：生产 alpha 验证(#182)——在自己追踪的币上实测 GARCH/EWMA 预测技巧(corr 预测 vs 已实现波动),
+    核对 #179 的 edge 是否真在你的数据上成立。读已存 K 线,无网络。
+    """
     try:
         from .storage import Store
         from .monitor.volatility_monitor import VolatilityMonitor, pick_coins
 
         store = Store(Path(args.db))
-        # 与 dashboard 共用选币：有清单用清单，清单空则取近 24h 最剧烈币(消除两前端分叉，#141)
         coins = pick_coins(store)
         if not coins:
             print("[vol] 无可显示币（采集器尚未填 K 线；可 `watch add BTC ETH` 指定关注币）")
             store.close()
             return
-        tfs = [t.strip() for t in args.tf.split(",") if t.strip()]
-        mon = VolatilityMonitor(coins, tfs or ["15m"], store)
+        tfs = [t.strip() for t in args.tf.split(",") if t.strip()] or ["15m"]
+        if getattr(args, "skill", False):
+            _print_vol_skill(store, coins, tfs)
+            store.close()
+            return
+        mon = VolatilityMonitor(coins, tfs, store)
         now = int(time.time() * 1000)
         card = mon.render(mon.rank(now), now, top=args.top)
         print(card or "[vol] 暂无足够 K 线数据（采集器尚未填满，稍后再试）")
@@ -91,6 +98,29 @@ def _cmd_vol(args: argparse.Namespace) -> None:
     except Exception as exc:
         print(f"[vol] 出错：{exc}", file=sys.stderr)
         sys.exit(1)
+
+
+def _print_vol_skill(store, coins: list, tfs: list) -> None:
+    """实测并打印波动预测技巧(GARCH/EWMA/rv 对已实现波动的 corr)——生产 alpha 验证 #182。"""
+    from .monitor.volatility_monitor import forecast_skill
+
+    print(f"📈 波动预测技巧实测（{len(coins)}币 × {len(tfs)}周期，读已存 K 线）")
+    print("   GARCH=系统主前瞻量(#179)、EWMA=#154、rv=朴素持续基线；corr(在t的预测, 未来h-bar已实现波动)")
+    for tf in tfs:
+        seqs = []
+        for c in coins:
+            cs = store.get_candles(c, tf, limit=3000)
+            if len(cs) >= 90:
+                seqs.append([k.c for k in cs])
+        sk = forecast_skill(seqs, horizons=(1, 5, 10)) if seqs else {}
+        if not sk:
+            print(f"  {tf:<4} 数据不足（需更多已采 K 线）")
+            continue
+        parts = [f"{h}bar GA{sk[h]['garch']:+.2f}/EW{sk[h]['ewma']:+.2f}/rv{sk[h]['rv']:+.2f}"
+                 for h in (1, 5, 10) if h in sk]
+        n = sk[next(iter(sk))]["n"]
+        print(f"  {tf:<4} {'  '.join(parts)}  (n={n})")
+    print("   读法:GA>EW>rv 且为正=GARCH 预测有真技巧(#179在15m最强);近0=该周期/币集无可测波动结构。")
 
 
 def _cmd_watch(args: argparse.Namespace) -> None:

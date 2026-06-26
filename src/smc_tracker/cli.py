@@ -460,6 +460,8 @@ def build_parser() -> argparse.ArgumentParser:
     p_vol.add_argument("--tf", default="15m", metavar="TF",
                        help="周期（逗号分隔多个，逐周期展示，默认 15m）")
     p_vol.add_argument("--top", type=int, default=15, metavar="N", help="最多展示 N 币（默认 15）")
+    p_vol.add_argument("--skill", action="store_true",
+                       help="生产 alpha 验证(#182):实测自己追踪币上 GARCH/EWMA 预测技巧(corr 预测vs已实现波动)")
     p_vol.add_argument("--db", default=_DEFAULT_DB, metavar="PATH",
                        help=f"SQLite 数据库路径（默认 {_DEFAULT_DB}）")
     p_vol.set_defaults(handler=_cmd_vol)

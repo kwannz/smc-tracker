@@ -116,6 +116,68 @@ def garch_vol(c: Any, alpha: float = _GARCH_A, beta: float = _GARCH_B) -> float:
     return math.sqrt(max(sig2, 0.0)) * 100.0
 
 
+def _fc_series(r: np.ndarray, alpha: float, beta: float, omega: float) -> np.ndarray:
+    """一步条件波动 σ% 预测序列(统一递推:GARCH=方差目标 ω;EWMA=ω0/α0.06/β0.94 退化)。
+
+    fc[t]=在 t 可得的对下一 bar 的预测(seed=首≤20根样本方差,与 ewma_vol/garch_vol 一致)。
+    """
+    n = r.size
+    fc = np.full(n, np.nan)
+    if n < 3:
+        return fc
+    seed_n = min(20, n)
+    var = float(np.var(r[:seed_n], ddof=0))
+    fc[seed_n - 1] = math.sqrt(max(var, 0.0)) * 100.0
+    for t in range(seed_n, n):
+        var = omega + alpha * r[t - 1] * r[t - 1] + beta * var
+        fc[t] = math.sqrt(max(var, 0.0)) * 100.0
+    return fc
+
+
+def forecast_skill(closes_seq: Any, horizons: tuple = (1, 5, 10),
+                   ab: tuple[float, float] = (_GARCH_A, _GARCH_B)) -> dict:
+    """实测系统**实际输出**的波动预测技巧:corr(在t的1步预测, [t+1,t+h]已实现波动),GARCH/EWMA/rv 三法。
+
+    生产 alpha 验证(#182):把 #177-181 审计操作化为 runtime 能力——`vol --skill` 在用户**自己追踪的币**上
+    (读已存 K 线)持续核对 garch_vol/ewma_vol 是否真有 #179 的技巧。canonical 单一真相源(audit 脚本可复用)。
+    closes_seq=可迭代的 closes 数组(多 (coin,tf) 池化);返回 {h:{garch,ewma,rv,n}};数据不足该序列跳过,全空→{}。
+    h=1 已实现波动用 |单bar收益|(std 单点=0 退化)。
+    """
+    a, b = ab
+    hs = tuple(horizons)
+    col = {h: {"g": [], "e": [], "v": [], "r": []} for h in hs}
+    for c in closes_seq:
+        cc = np.asarray(c, dtype=float)
+        if cc.size < _RV_WIN + max(hs) + 6 or not np.all(np.isfinite(cc)):
+            continue
+        cc = np.clip(cc, 1e-12, None)
+        r = np.diff(np.log(cc))
+        vlong = float(np.var(r, ddof=0))
+        if vlong <= 0.0:
+            continue
+        gfc = _fc_series(r, a, b, (1.0 - a - b) * vlong)
+        efc = _fc_series(r, 1.0 - _RM_LAMBDA, _RM_LAMBDA, 0.0)
+        for h in hs:
+            for t in range(_RV_WIN, r.size - h):
+                if not np.isfinite(gfc[t]):
+                    continue
+                realized = (abs(float(r[t + 1])) if h == 1
+                            else float(np.std(r[t + 1:t + 1 + h], ddof=0))) * 100.0
+                rvn = float(np.std(r[t - _RV_WIN + 1:t + 1], ddof=0)) * 100.0
+                col[h]["g"].append(gfc[t]); col[h]["e"].append(efc[t])
+                col[h]["v"].append(rvn); col[h]["r"].append(realized)
+    out: dict[int, dict] = {}
+    for h in hs:
+        R = np.asarray(col[h]["r"])
+        if R.size > 10:
+            out[h] = {
+                "garch": float(np.corrcoef(col[h]["g"], R)[0, 1]),
+                "ewma": float(np.corrcoef(col[h]["e"], R)[0, 1]),
+                "rv": float(np.corrcoef(col[h]["v"], R)[0, 1]),
+                "n": int(R.size)}
+    return out
+
+
 def _wilder_rma(tr: np.ndarray, n: int) -> float:
     """Wilder RMA 平滑末值=开源标准 ATR(Wilder 1978；TA-Lib/TradingView ta.atr 默认)。
 

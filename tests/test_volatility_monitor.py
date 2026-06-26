@@ -117,6 +117,33 @@ def test_garch_vol_sentinel_and_in_metrics():
     assert m["garch_vol"] >= 0.0                       # vol_metrics 含 garch_vol 字段
 
 
+def test_forecast_skill_detects_predictable_vol():
+    """#182 forecast_skill:对**有波动聚集**的合成序列,GARCH/EWMA 预测与已实现波动正相关(技巧>0);
+    对 IID 序列(无聚集)技巧≈0。生产实测(vol --skill)与 audit 脚本共用的 canonical 实现。"""
+    import numpy as _np
+    from smc_tracker.monitor.volatility_monitor import forecast_skill
+    rng = _np.random.default_rng(7)
+    # 波动聚集序列:vol 在高/低 regime 间缓慢切换(GARCH 类)
+    vol = 0.01
+    rets = []
+    for _ in range(1500):
+        vol = 0.9 * vol + 0.1 * (0.03 if rng.random() < 0.02 else 0.005)
+        rets.append(rng.normal(0, vol))
+    closes = 100.0 * _np.exp(_np.cumsum(rets))
+    sk = forecast_skill([closes], horizons=(5,))
+    assert sk[5]["garch"] > 0.1 and sk[5]["ewma"] > 0.1   # 聚集 → 预测有技巧
+    assert sk[5]["n"] > 100
+    # IID(无聚集)→ 技巧≈0
+    iid = 100.0 * _np.exp(_np.cumsum(rng.normal(0, 0.01, 1500)))
+    sk2 = forecast_skill([iid], horizons=(5,))
+    assert abs(sk2[5]["garch"]) < 0.12                   # 无聚集 → 近 0
+
+
+def test_forecast_skill_empty_on_insufficient():
+    from smc_tracker.monitor.volatility_monitor import forecast_skill
+    assert forecast_skill([[100.0, 101.0, 102.0]], horizons=(5,)) == {}
+
+
 def test_atr_is_wilder_rma_not_sma():
     """atr_pct 用开源标准 Wilder RMA(非 SMA-of-TR，#143 交叉验证修正)：对独立 Wilder 递推匹配，且≠SMA。"""
     n = 35
