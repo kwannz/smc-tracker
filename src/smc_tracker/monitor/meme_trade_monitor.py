@@ -16,12 +16,12 @@ HL trades 语义（已实证）：
 from __future__ import annotations
 
 import logging
-import math
 from collections import defaultdict
 from typing import Any, Callable
 
 from ..hyperliquid.ws_client import HyperliquidWSClient, Subscription
 from ..storage import Store
+from ..util import to_float as _f  # 统一安全数值解析（顶层 import，惯例）
 
 log = logging.getLogger("monitor.meme")
 
@@ -195,6 +195,3 @@ class MemeTradeMonitor:
 
     def all_coin_net(self) -> dict[str, float]:
         return dict(self._coin_net)
-
-
-from ..util import to_float as _f  # 统一安全数值解析
