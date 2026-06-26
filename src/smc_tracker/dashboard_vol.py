@@ -47,7 +47,7 @@ def render_volatility_page() -> str:
  .up{color:#3fb950} .dn{color:#f85149} .prem{background:#3a1d1d} .disc{background:#16301d} .eq{color:#8b949e}
  .note{color:#8b949e;font-size:12px}
 </style></head><body>
-<h1>🌀 实时波动追踪 <span class="note">逐周期 速度·PD溢价折价·波动状态·HVP（绿=折价/买区 红=溢价/卖区；🔸压缩 🔶扩张；HVP=波动率历史百分位 🔥≥90%异常剧烈 ❄️≤10%极静蓄势；期限结构(√t归一,回望非预测) ⏫倒挂=近端波动相对急 ⏬顺挂=远端主导）</span></h1>
+<h1>🌀 实时波动追踪 <span class="note">逐周期 速度·PD溢价折价·波动状态·HVP（绿=折价/区间下半段 红=溢价/区间上半段(位置描述非买卖信号,#151实测溢价无反转)；🔸压缩 🔶扩张；HVP=波动率历史百分位 🔥≥90%异常剧烈 ❄️≤10%极静蓄势；期限结构(√t归一,回望非预测) ⏫倒挂=近端波动相对急 ⏬顺挂=远端主导）</span></h1>
 <div id="hl" class="note"></div>
 <div id="box" class="note">加载中…</div>
 <script>
