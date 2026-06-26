@@ -52,8 +52,9 @@ class VolatilityRegimeTracker:
         if not events:
             return ""
         from ..util import fmt_ts  # noqa: PLC0415
-        # 诚实标注（修 P1-4）：扩张是波动已放大的*确认*，非领先预测；压缩→放量是同步转换信号
-        lines = [f"🔶 波动扩张确认 [{fmt_ts(now_ms)}] 压缩→放量（波动已放大，同步信号非预测）"]
+        # 诚实标注：扩张是波动已放大的*确认*(非方向预测)；但实测 90% 续高波动(#153,lift7.6×)→
+        # 有真前瞻价值(系统第一号 edge),与 vol 板 #173 一致;方向仍不定(方向类信号皆~0)。
+        lines = [f"🔶 波动扩张确认 [{fmt_ts(now_ms)}] 压缩→放量（已放大·实测90%续高波动·方向不定#153）"]
         for e in events:
             lines.append(
                 f"  {e['coin']}/{e['tf']} 放量 速度{e['velocity']:+.2f}% (σ比 {e['vol_ratio']:.2f})"
