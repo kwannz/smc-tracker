@@ -50,6 +50,23 @@ def test_harmonic_backtest_runs_no_repaint():
     assert all(t.entry_idx >= 0 for t in res.trades)  # no-repaint:entry_idx 有效
 
 
+def test_sfg_consensus_and_require_sfg_filter():
+    """#203 充分使用 SFG:sfg_consensus 返回零前视共识 bias;require_sfg 过滤后交易 ≤ 不过滤。"""
+    from smc_tracker.backtest import harmonic_backtest
+    from smc_tracker.backtest.harmonic import sfg_consensus
+    from smc_tracker.models import Candle
+    px, cs = 100.0, []
+    for i in range(220):
+        px *= math.exp(0.025 * math.sin(i / 7.0))
+        cs.append(Candle("BTC", "1H", i * 3_600_000, (i + 1) * 3_600_000,
+                         px, px * 1.012, px * 0.988, px, 1.0, 0))
+    bias = sfg_consensus(cs)
+    assert len(bias) == len(cs) and all(abs(b) <= 10.0 for b in bias)   # 10 因子 ∈[-10,10]
+    base = harmonic_backtest("BTC", "1H", cs)
+    filt = harmonic_backtest("BTC", "1H", cs, require_sfg=True)
+    assert len(filt.trades) <= len(base.trades)        # SFG 确认只减不增入场
+
+
 def test_backtest_harmonic_flag(tmp_path, capsys):
     db = str(tmp_path / "h.db")
     s = Store(Path(db))

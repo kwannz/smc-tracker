@@ -11,9 +11,29 @@ from __future__ import annotations
 
 from typing import Any
 
+import numpy as np
+
 from ..indicators.harmonic_state import HarmonicState
+from ..indicators.sfg import (lrsd_series, gpi_series, vap_series, pdbb_series,
+                              pivot_series, ami_series, atr2_series, msfvg_series,
+                              ai_st_series, dmha_series)
 from ..signals.trade_setup import build_setups
 from .engine import Backtester, BacktestResult
+
+# 充分使用 SFG(用户#):10 因子各 [-1,+1],reversal 系与谐波反转入场对齐;ai_st 趋势系
+_SFG_FACTORS = (lrsd_series, gpi_series, vap_series, pdbb_series, pivot_series,
+                ami_series, atr2_series, msfvg_series, ai_st_series, dmha_series)
+
+
+def sfg_consensus(candles: list[Any]) -> np.ndarray:
+    """10 个 SFG 因子的 nan-safe **共识 bias** 序列(零前视尾对齐,长度 n)。>0 看多/<0 看空。
+
+    充分使用全部 SFG 因子(非仅喂≈随机 KNN):作谐波 setup 入场确认,回测裁决其是否真提升 edge。
+    """
+    if len(candles) < 6:
+        return np.zeros(len(candles))
+    stack = np.vstack([np.asarray(f(candles), dtype=float) for f in _SFG_FACTORS])
+    return np.nansum(stack, axis=0)         # 暖机 nan → 该因子贡献 0
 
 
 def harmonic_backtest(
@@ -26,15 +46,18 @@ def harmonic_backtest(
     max_wait_bars: int = 48,
     order: int = 2,
     tol: float = 0.07,
+    require_sfg: bool = False,
 ) -> BacktestResult:
     """对一段历史 K 线回测谐波 completed setup。返回 BacktestResult（含 freqtrade 式绩效）。
 
     min_conf：仅回测综合置信 ≥ 此阈值的 setup（对齐 #169 谐波推送 min_conf≥0.75 的减噪门控）。
-    no-repaint：每个 setup 的 entry_idx = 其形态在重放中**首次完成的那根**,模拟从下一根起。
+    require_sfg：要求 **SFG 10 因子共识** 与 setup 方向一致才入场（充分使用 SFG;回测可对比是否提升 edge）。
+    no-repaint：每个 setup 的 entry_idx = 其形态在重放中**首次完成的那根**,模拟从下一根起;SFG 共识零前视尾对齐。
     """
     state = HarmonicState(order=order, tol=tol)
     seen: set[str] = set()
     signals: list[dict] = []
+    bias = sfg_consensus(candles) if require_sfg else None
     for i, c in enumerate(candles):
         res = state.update(c)
         if not res.get("completed"):
@@ -46,6 +69,11 @@ def harmonic_backtest(
                 continue
             if s.confidence < min_conf:
                 continue
+            # SFG 共识确认:long 需 bias>0、short 需 bias<0(充分使用 SFG 作入场过滤)
+            if bias is not None:
+                b = float(bias[i])
+                if (s.direction == "long" and b <= 0) or (s.direction == "short" and b >= 0):
+                    continue
             seen.add(s.src_key)
             entry = (s.entry_lo + s.entry_hi) / 2.0
             signals.append({

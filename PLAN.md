@@ -214,6 +214,12 @@ D 多空符号 · E 真实 userFills 解析/分类自洽 · F WS webData2==REST 
 > 据 codex-loop 反幻觉纪律保持开放，区别于「已实现但 backlog 写保守」的项（已核实证据后闭合）。
 
 ## 迭代日志
+- 2026-06-27 #203: **充分使用 SFG(用户#):10 因子共识作谐波入场确认过滤器(非仅喂≈随机KNN)**（ralph loop 续;Opus build+待回测裁决）。
+  用户指令"充分使用SFG"——原 SFG 10因子只喂 KNN(≈随机方向,无edge)。本轮让 SFG 产生真实价值:`sfg_consensus(candles)` 对全 10 因子(各[-1,1],reversal系与谐波反转对齐)
+  做 nan-safe 共识 bias(零前视尾对齐);谐波回测 `--require-sfg`:仅当 SFG 共识与 setup 方向一致才入场。回测可对比 require_sfg on/off 是否提升谐波 edge(诚实:数据裁决,不预设)。
+  TDD:sfg_consensus 零前视∈[-10,10] + require_sfg 过滤后交易≤不过滤。全量2491 passed,84行≤800,零孤儿。
+  教训:"充分使用"一个被验证≈随机的输入(KNN),不是更努力喂它,而是把它的成分(SFG因子)抽出来用在有结构的地方(谐波反转确认)+让回测验证是否真有用。
+
 - 2026-06-27 #200: **传导一致性:#199 range-GARCH 升级传到 dashboard(σ→GR),修两呈现面口径分裂**（/loop;Opus 发现即修,#174一致性）。
   #199 把 CLI vol 板主前瞻量从 GA(标准GARCH)换成 GR(range-GARCH,实测最优),但 dashboard /volatility 还显示旧 σ→GA=两主呈现面口径分裂(#174铁律:同结论所有路径一致)。
   数据已在 state(vol_metrics 含 garch_range,实证契约确认),改 dashboard_vol cell σ→GA→**σ→GR**(读 m.garch_range,回退 garch_vol)+ 表头标 range-GARCH 主前瞻量#199。
