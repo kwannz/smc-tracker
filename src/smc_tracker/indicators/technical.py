@@ -31,6 +31,12 @@ def sma(x: np.ndarray, n: int) -> np.ndarray:
 
 
 def ema(x: np.ndarray, n: int) -> np.ndarray:
+    """指数移动均线（α=2/(n+1)）。**首值种子**(out[0]=x[0] 起递推)——经典开源约定。
+
+    与 TA-Lib 的 SMA 种子约定在 warmup 期不同，但种子影响指数衰减：足够数据后末值差极小
+    (#145 交叉验证：5 币 MACD 末值最大 Δ0.8%、多数 <0.1%)。两者皆标准约定，非 bug——
+    勿因"对 TA-Lib 不为零"误判。MACD/信号线均基于本函数，故同口径自洽。
+    """
     out = np.full(len(x), np.nan)
     m = len(x)
     if m == 0:

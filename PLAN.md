@@ -214,6 +214,12 @@ D 多空符号 · E 真实 userFills 解析/分类自洽 · F WS webData2==REST 
 > 据 codex-loop 反幻觉纪律保持开放，区别于「已实现但 backlog 写保守」的项（已核实证据后闭合）。
 
 ## 迭代日志
+- 2026-06-26 #145: **续对开源标准验证核心指标(Stoch/BB/CCI/MACD)→ 全合标准,锁定 EMA 种子约定**（/loop；Opus 验证+文档锁定）。
+  对独立 canonical 参考交叉验证:Stochastic %K Δ=0.0、Bollinger 上轨 Δ~1e-11(ddof=0 总体std正确)、CCI Δ~1e-12 **全精确**。
+  MACD 微小分歧(5币末值最大Δ0.8%多数<0.1%)纯是 **EMA 种子约定**(本系统首值种子 vs TA-Lib SMA种子)——种子影响指数衰减,
+  足够数据后末值差<1%,两者皆开源标准约定**非 bug**(差点据此误报,正是读懂约定才免误判)。无新 bug。
+  前摄给 ema() 加 docstring 锁定首值种子约定+量化的<1%差异,防未来"对TA-Lib不为零"误报。纯注释,全量 **2448 passed**(零回归)。
+  教训:不同库的"标准"在 warmup/种子上合法地不同;验证前先读懂代码声称的约定,对**对应**参考比,否则把约定差误判成 bug。
 - 2026-06-26 #144: **顺 bug 家族线交叉验证 Wilder 全家(RSI/ATR/ADX/atr2)→ 全精确,#143 bug 确认孤立**（/loop；Opus 验证+文档锁定）。
   Wilder 平滑家族(ATR/RSI/ADX/DMI 同用 RMA,朴素实现都易误用 SMA)——发现 ATR bug 后沿家族线查兄弟。
   对独立 canonical 参考交叉验证主 TA 层(technical.py):RSI Δ=0.0、ATR Δ=0.0(5币全精确);`_wilder`(seed=SMA+RMA递推)正确;
