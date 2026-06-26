@@ -140,6 +140,39 @@ def parkinson_vol(h: Any, l: Any, win: int = _RV_WIN) -> float:
     return math.sqrt(max(var, 0.0)) * 100.0
 
 
+def garch_range_vol(h: Any, l: Any, c: Any,
+                    alpha: float = _GARCH_A, beta: float = _GARCH_B) -> float:
+    """range-based GARCH(1,1) 一步预测波动率(%)——吃 **Parkinson 每-bar 方差 PK²**(比 r² 噪声小~5×)
+    而非单根收益平方 r²(Alizadeh-Brandt-Diebold 2002)。σ²_t=ω+α·PK²_{t-1}+β·σ²_{t-1},方差目标 ω。
+
+    第一性:GARCH 的 α·r² 把"上一根 bar 真实方差"用单根收益平方代理,噪声极大(bar 波动大却收平→r²≈0 低估);
+    改用 Parkinson PK²(高低幅,#197-198 实证 5× 更高效无偏)喂同一动态→更干净燃料→更准预测。
+    **#199 真实加密实证:胜标准 garch_vol 每视野 +0.008~0.043 corr**(10bar 0.572 vs 0.529),系统最优前瞻量。
+    需 H/L/C(vol_metrics 已有);<3 根/长度不齐/非法 → -1.0 哨兵。seed=首≤20根收益样本方差(与 garch_vol 一致)。
+    """
+    cc = np.asarray(c, dtype=float)
+    hi = np.asarray(h, dtype=float)
+    lo = np.asarray(l, dtype=float)
+    if cc.size < 3 or hi.size != cc.size or lo.size != cc.size:
+        return -1.0
+    if not (np.all(np.isfinite(cc)) and np.all(np.isfinite(hi)) and np.all(np.isfinite(lo))):
+        return -1.0
+    cc = np.clip(cc, 1e-12, None)
+    r = np.diff(np.log(cc))                              # len N-1
+    vlong = float(np.var(r, ddof=0))
+    if vlong <= 0.0:
+        return 0.0
+    omega = (1.0 - alpha - beta) * vlong
+    # PK² 每 bar=(ln H/L)²/(4ln2);对齐 r(r[i]=bar i+1 收益 → 配 bar i+1 的 PK²=pk2[i+1])
+    pk2 = np.log(np.clip(hi, 1e-12, None) / np.clip(lo, 1e-12, None)) ** 2 / (4.0 * math.log(2.0))
+    innov = pk2[1:]                                      # len N-1,对齐 r
+    seed_n = min(20, r.size)
+    sig2 = float(np.var(r[:seed_n], ddof=0))
+    for x in innov[seed_n:].tolist():
+        sig2 = omega + alpha * x + beta * sig2
+    return math.sqrt(max(sig2, 0.0)) * 100.0
+
+
 def _fc_series(r: np.ndarray, alpha: float, beta: float, omega: float) -> np.ndarray:
     """一步条件波动 σ% 预测序列(统一递推:GARCH=方差目标 ω;EWMA=ω0/α0.06/β0.94 退化)。
 
@@ -263,8 +296,9 @@ def vol_metrics(h: Any, l: Any, c: Any, *,
             "vol_ratio": vol_ratio, "regime": regime,
             "vol_pct": vol_percentile(c),    # 历史波动百分位(HVP，-1=数据不足)
             "ewma_vol": ewma_vol(c),         # RiskMetrics EWMA 预期波动水平(#154)
-            "garch_vol": garch_vol(c),       # GARCH(1,1) 一步预测(均值回归,主前瞻量;胜 EWMA 周期依赖#180:15m+0.078/4H·1D+0.02/1H≈中性)
-            "pk_vol": parkinson_vol(h, l)}   # Parkinson 高低幅波动(#197,比 close-to-close rv 效率高~5×;用已有 OHLC 的 H/L)
+            "garch_vol": garch_vol(c),       # 标准 GARCH(1,1)(吃 r²;胜 EWMA #180)
+            "pk_vol": parkinson_vol(h, l),   # Parkinson 高低幅波动(#197-198,比 close-to-close rv 效率高~5×·实证更优)
+            "garch_range": garch_range_vol(h, l, c)}  # range-GARCH(吃 PK²,#199 最优前瞻量:胜标准 GARCH 每视野 +0.01~0.04)
 
 
 def pdarray(h: Any, l: Any, c: Any, *, win: int = _PD_WIN, band: float = 0.03) -> dict:
@@ -644,12 +678,12 @@ class VolatilityMonitor:
                     vp_str = f" HVP{vp * 100:.0f}%{vp_mark}"
                 # 前瞻波动量:GA=GARCH(1,1)一步预测(主前瞻量,胜 EWMA 周期依赖#180:15m+0.078)、EW=EWMA(#154)。
                 # 均为**水平**预测(非方向、非趋势);#157 实测"预测 vs σ 升/降"对未来波动无净预测力,勿读作续升。
-                ga = m.get("garch_vol", -1.0)
-                ew = m.get("ewma_vol", -1.0)
+                gr = m.get("garch_range", -1.0)
                 pk = m.get("pk_vol", -1.0)
-                # PK=Parkinson 高低幅波动(比 σ close-to-close 效率高~5×,#197);GA/EW=前瞻预测(#180/154)。
+                # PK=Parkinson 高低幅波动(realized,比 σ close-to-close 效率高~5× #198);
+                # GR=range-GARCH 一步预测(主前瞻量,#199 实测最优:吃 PK² 胜标准 GARCH/EWMA)。
                 fc_str = ((f" PK{pk:.2f}%" if pk >= 0 else "")
-                          + (f" GA{ga:.2f}%" if ga >= 0 else "") + (f" EW{ew:.2f}%" if ew >= 0 else ""))
+                          + (f" GR{gr:.2f}%" if gr >= 0 else ""))
                 lines.append(
                     f"  {tf:<4} {vdir}{abs(v):.2f}% a{a:+.2f}{adir}"
                     f" σ{m['rv']:.2f}%[{m['regime']}]{fc_str} ATR{m['atr_pct']:.2f}% 幅{m['range_pct']:.2f}%"

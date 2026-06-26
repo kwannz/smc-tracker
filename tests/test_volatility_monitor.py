@@ -151,6 +151,41 @@ def test_parkinson_vol_sentinel_and_in_metrics():
     assert m["pk_vol"] >= 0.0                           # vol_metrics 含 pk_vol 字段
 
 
+def test_garch_range_vol_matches_recursion():
+    """range-GARCH(吃 Parkinson PK² 而非 r²)对独立纯 Python 递推匹配。
+    σ²_{t}=ω+α·PK²_{t-1}+β·σ²_{t-1};PK²=每 bar(ln H/L)²/(4ln2),对齐收益序列。"""
+    import math as _m
+    from smc_tracker.monitor.volatility_monitor import garch_range_vol
+    c = [100.0]
+    for i in range(40):
+        c.append(c[-1] * (1.012 if i % 2 == 0 else 1.0 / 1.006))
+    h = [x * 1.004 for x in c]
+    l = [x * 0.997 for x in c]
+    r = [_m.log(c[i] / c[i - 1]) for i in range(1, len(c))]
+    pk2 = [_m.log(h[i] / l[i]) ** 2 / (4 * _m.log(2)) for i in range(len(c))]
+    innov = pk2[1:]                                    # 对齐 r
+    a, b = 0.10, 0.85
+    vlong = sum((x - sum(r) / len(r)) ** 2 for x in r) / len(r)
+    omega = (1 - a - b) * vlong
+    seed_n = min(20, len(r))
+    seed = r[:seed_n]
+    sm = sum(seed) / len(seed)
+    sig2 = sum((x - sm) ** 2 for x in seed) / len(seed)
+    for x in innov[seed_n:]:
+        sig2 = omega + a * x + b * sig2
+    expected = (sig2 ** 0.5) * 100.0
+    assert abs(garch_range_vol(h, l, c, a, b) - expected) < 1e-9
+
+
+def test_garch_range_vol_sentinel_and_in_metrics():
+    from smc_tracker.monitor.volatility_monitor import garch_range_vol
+    assert garch_range_vol([100.0], [99.0], [100.0]) == -1.0   # <3 根 → 哨兵
+    assert garch_range_vol([100.0] * 30, [100.0] * 30, [100.0] * 30) < 1e-6  # 全平 → ~0
+    spike = [100.0 + 0.01 * i for i in range(40)] + [100.4, 103.0, 100.5, 103.2]
+    m = vol_metrics([p * 1.005 for p in spike], [p * 0.995 for p in spike], spike)
+    assert m["garch_range"] >= 0.0                     # vol_metrics 含 garch_range 字段
+
+
 def test_forecast_skill_detects_predictable_vol():
     """#182 forecast_skill:对**有波动聚集**的合成序列,GARCH/EWMA 预测与已实现波动正相关(技巧>0);
     对 IID 序列(无聚集)技巧≈0。生产实测(vol --skill)与 audit 脚本共用的 canonical 实现。"""

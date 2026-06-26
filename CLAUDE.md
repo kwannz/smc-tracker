@@ -37,7 +37,8 @@
     · 波动**水平预测**有**扎实技巧**,主前瞻量=**GARCH(1,1)**(均值回归;EWMA #178 是其 α+β=1 退化特例,假设随机游走漏掉回归);
       胜 EWMA **周期依赖(#180 跨周期泛化)**:15m+0.078最强(corr 0.38/0.49/0.53@1/5/10bar)、4H/1D+0.02、1H≈中性+0.002(短周期获益最大,数据多→回归估计准);
       逐 bar |收益|记忆快衰减(#149 ARCH 自相关 lag-1≈0.28→lag-10≈0.05,null≈0)。生产实测工具:`vol --skill`(#182)在自己币集核对、dashboard σ→GA 呈现(#183)。
-      **波动估计量(#197-198)**:`parkinson_vol`(高低幅,Parkinson 1980)比 close-to-close rv 效率高~5×;**#198 真实加密实证**:基本无偏(pk/rv≈1.01,插针未虚高)、预测未来波动每视野胜 rv +0.02~0.05 corr⇒理论兑现。vol 板渲染 σ→PK→GA→EW。
+      **波动估计量(#197-199,build+validate)**:`parkinson_vol`(高低幅 Parkinson 1980)比 close-to-close rv 效率高~5×;**#198 真实加密实证**:基本无偏(pk/rv≈1.01)、预测未来波动每视野胜 rv +0.02~0.05。
+      **主前瞻量升级=`garch_range_vol`(range-GARCH,吃 PK² 而非 r²,Alizadeh-Brandt-Diebold 2002)**:**#199 实证胜标准 GARCH 每视野 +0.01~0.04 corr**(10bar 0.572 vs 0.529)——更干净燃料喂 GARCH 动态=最优。vol 板渲染 σ→PK→**GR**。脚本 scripts/audit_parkinson_efficiency.py。
       ⚠️#177 null 对照纠 #153 偏差:原"扩张90%续/rv自相关0.73/lift7.6×"是**滚动窗重叠机械伪影**(null 0.711≈observed 0.725,真实增益+0.014≈0,非高持续);
       #178 修矫枉过正:水平预测 corr~0.4 真实(别贬成噪声)、逐bar记忆才快衰减——两个对象别混。脚本 scripts/audit_expansion_persistence.py 可复现。
     · pump/dump 规则(极端动量)样本外 lift 12-71×(#162-164，已无偏重校准)。

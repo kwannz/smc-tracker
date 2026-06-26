@@ -214,6 +214,13 @@ D 多空符号 · E 真实 userFills 解析/分类自洽 · F WS webData2==REST 
 > 据 codex-loop 反幻觉纪律保持开放，区别于「已实现但 backlog 写保守」的项（已核实证据后闭合）。
 
 ## 迭代日志
+- 2026-06-27 #199: **构建(validate后):range-GARCH 升级系统第一前瞻量——吃 Parkinson PK² 而非 r²,实证胜标准 GARCH**（/loop;Opus 综合两线索 build+validate）。
+  #198 显示 Parkinson(当前估计)预测未来波动 corr 0.50≈GARCH 0.53;综合问:用更干净的 Parkinson 方差喂 GARCH 引擎会不会更准?先实证(铁律):
+  scripts/audit_parkinson_efficiency.py 加 range-GARCH(吃 PK²)vs 标准 GARCH(吃 r²)。真实20币15m:**range-GARCH 每视野胜 +0.008~0.043 corr**(1/5/10bar:0.40/0.54/0.57 vs 0.39/0.50/0.53)——理论兑现。
+  构建:`garch_range_vol(h,l,c)`(方差目标 GARCH 吃 PK²=高低幅每bar方差,Alizadeh-Brandt-Diebold 2002)→vol_metrics "garch_range"→导出→vol板渲染 σ→PK→**GR**(取代GA为主前瞻量,GR严格优于GA)。
+  TDD:递推对独立计算匹配+哨兵+字段(2测)。全量2475 passed,692行≤800,零孤儿。第一性:r²是单根收益平方=bar真实方差的高噪声代理,PK²(5×更高效)喂同一GARCH动态=更干净燃料→更准。
+  教训:两条 build 线索(Parkinson估计+GARCH预测)交汇出"换燃料"的综合改进,直击系统第一edge;仍先实证后构建,理论兑现(同#198,异#186)。
+
 - 2026-06-27 #198: **验证自己的 build:Parkinson(#197)在真实加密上实证更优——理论这次兑现(对比#186被证伪)**（/loop;Opus build后必validate,用对待别人结论的怀疑对待自己）。
   #197 用开源理论(Parkinson 5×高效)加了估计量,但 campaign 纪律:理论须真实数据验证(加密插针可能虚高高低幅)。负责任地验自己的蛋:scripts/audit_parkinson_efficiency.py
   真实20币15m,滚动 rv vs pk 各与未来 h-bar 已实现波动相关(同target公平)+查偏置。铁证:

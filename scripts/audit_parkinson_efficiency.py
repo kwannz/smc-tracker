@@ -30,6 +30,22 @@ _HZ = (1, 5, 10)
 _COINS = ["BTC", "ETH", "SOL", "XRP", "DOGE", "BNB", "ADA", "AVAX", "LINK", "TRX",
           "DOT", "LTC", "BCH", "NEAR", "APT", "ARB", "OP", "SUI", "INJ", "TIA"]
 _PK_FACTOR = 1.0 / (4.0 * np.log(2.0))
+_GA, _GB = 0.10, 0.85          # GARCH 固定参数(同生产)
+
+
+def _garch_fc(innov: np.ndarray, vlong: float, a: float = _GA, b: float = _GB) -> np.ndarray:
+    """GARCH(1,1) 一步预测 σ% 序列,吃 innovation 序列(标准=r²,range=PK²)。
+
+    σ²_{t+1}=ω+α·innov[t]+β·σ²_t,ω=(1-α-β)·vlong。fc[t]=在 t 对下一 bar 的预测。
+    """
+    omega = (1.0 - a - b) * vlong
+    n = innov.size
+    fc = np.empty(n)
+    sig2 = vlong
+    for t in range(n):
+        sig2 = omega + a * innov[t] + b * sig2
+        fc[t] = sig2
+    return np.sqrt(np.maximum(fc, 0.0)) * 100.0
 
 
 async def _fetch(coins):
@@ -48,8 +64,8 @@ async def _fetch(coins):
 
 
 def main_sync(cm):
-    # 池化所有币的 (rv_t, pk_t, future_realized_h)
-    cols = {h: {"rv": [], "pk": [], "real": []} for h in _HZ}
+    # 池化所有币的 (rv_t, pk_t, future_realized_h) + GARCH 标准/range
+    cols = {h: {"rv": [], "pk": [], "gstd": [], "grng": [], "real": []} for h in _HZ}
     pk_over_rv = []
     for c, (close, hi, lo) in cm.items():
         if np.any(close <= 0) or np.any(lo <= 0):
@@ -68,7 +84,13 @@ def main_sync(cm):
         # 偏置比
         valid = (rv > 1e-9)
         pk_over_rv.extend((pk[valid] / rv[valid]).tolist())
-        # future realized(close-to-close over next h),t 对应 logret 位置 (W-1 + i)
+        # GARCH 标准(吃 r²)vs range(吃 PK²)——对齐 logret(len n)
+        vlong = float(np.var(logret, ddof=0))
+        std_innov = logret * logret                         # r²
+        rng_innov = lr2[1:] * _PK_FACTOR                    # PK² 每 bar,对齐 logret
+        g_std = _garch_fc(std_innov, vlong)                 # len n,fc[t]=对 bar t+1 预测
+        g_rng = _garch_fc(rng_innov, vlong)
+        # future realized(close-to-close over next h),i 对应 rv 的索引,logret 位置 t=W-1+i
         for h in _HZ:
             for i in range(m):
                 t = _W - 1 + i           # logret 末位
@@ -76,7 +98,9 @@ def main_sync(cm):
                     break
                 fr = float(np.std(logret[t + 1:t + 1 + h], ddof=0)) * 100.0 if h > 1 \
                     else abs(float(logret[t + 1])) * 100.0
-                cols[h]["rv"].append(rv[i]); cols[h]["pk"].append(pk[i]); cols[h]["real"].append(fr)
+                cols[h]["rv"].append(rv[i]); cols[h]["pk"].append(pk[i])
+                cols[h]["gstd"].append(g_std[t]); cols[h]["grng"].append(g_rng[t])
+                cols[h]["real"].append(fr)
 
     print("=" * 64)
     print(f"#198 Parkinson vs close-to-close rv 预测未来波动(真实 {len(cm)} 币 15m)")
@@ -91,6 +115,17 @@ def main_sync(cm):
             pc = float(np.corrcoef(cols[h]["pk"], R)[0, 1])
             better += pc > rc
             print(f"  {h:>3}bar  {rc:+.3f}   {pc:+.3f}   {pc - rc:+.3f}   n={R.size}")
+    print("-" * 64)
+    print("#199 range-GARCH(吃 PK²)vs 标准 GARCH(吃 r²)预测未来波动:")
+    print("  视野h  标准GARCH  range-GARCH  range−标准  样本")
+    g_better = 0
+    for h in _HZ:
+        R = np.array(cols[h]["real"])
+        if R.size > 50:
+            sc = float(np.corrcoef(cols[h]["gstd"], R)[0, 1])
+            rc = float(np.corrcoef(cols[h]["grng"], R)[0, 1])
+            g_better += rc > sc
+            print(f"  {h:>3}bar  {sc:+.3f}     {rc:+.3f}      {rc - sc:+.3f}    n={R.size}")
     print("-" * 64)
     bias = np.median(pk_over_rv)
     if better >= 2 and 0.9 <= bias <= 1.15:
