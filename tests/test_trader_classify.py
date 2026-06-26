@@ -33,6 +33,16 @@ class TestClassifyWhale:
         )
         assert r["type"] == "whale"
 
+    def test_p0_zero_hold_blocks_whale_even_for_huge_account(self):
+        """P0 根因回归：avg_hold_sec=0(build_dossier 修复前的永久值) → 即使 $10M 大户也判不出 whale。
+
+        这正是 P0 bug 的危害——dossier 不返回 avg_hold_sec 时该值恒为 0，
+        whale 硬门槛(account>=$5M AND hold>=4h)永不满足，抓庄核心能力结构性失效。
+        修复后 build_dossier 计算真实 avg_hold_sec，whale 判定恢复(见 test_large_account_long_hold)。
+        """
+        r = classify_trader(account_value=10_000_000.0, avg_hold_sec=0.0, n_trades=5)
+        assert r["type"] != "whale", "avg_hold_sec=0 时不应判 whale(P0 根因)"
+
     def test_very_large_account_days_hold(self):
         """超大资金($50M) + 持仓7天 → whale，高庄分。"""
         r = classify_trader(

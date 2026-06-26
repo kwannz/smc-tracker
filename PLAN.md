@@ -203,16 +203,25 @@ D 多空符号 · E 真实 userFills 解析/分类自洽 · F WS webData2==REST 
 - [x] **dashboard 维度完整 + 行情维度清理**（#97 闭合）：dashboard 已 **16 个 panel**（健康/准确率/交易所资金流/
       聪明钱净流向/鲸鱼信号/地址排行/庄家集团/OKX 强平·跨所·HL 挂单墙/链上转账…）覆盖全核心维度；
       并按用户#要求**移除 `行情监控板` 面板 + `renderTickerBoard` 死函数**（价/涨跌幅/费率/OI 不需要，后端数据保留）。
-- [~] **文件 800 行约束债务（#102 诚实追踪）**：用户#要求「每文件 ≤800 行」，现 5 文件超标 ——
-      `dashboard.py` 4190 / `app.py` 1956 / `db.py` 1187 / `cli.py` 896 / `onchain/exchange_flow.py` 826。
-      新增代码已严守（`volatility_monitor.py` 107 行）；巨文件拆分回归风险高、非单轮 MVP，**保持开放分轮渐进拆**
-      （优先 dashboard.py 按 render/build/handler 三层切分）。
+- [x] **文件 800 行约束债务（#102 建立 → #111-121 全部闭合）**：用户#「每文件 ≤800 行」**已 100% 达成**。
+      经 11 轮渐进治理：dashboard.py 4190→552（4 渲染模块迁出 + 4 HTML 模板外置 templates/*.html + 数据层拆 + common 叶子）；
+      app.py 2010→781（拆 EventHandlersMixin/PeriodicTasksMixin/PeriodicDataMixin 三 mixin）；db.py 1218→747（SCHEMA→schema.sql
+      + CandleStoreMixin）；cli.py 928→590（handler→cli_commands.py）；exchange_flow.py 826→677（BlockstreamClient 拆出）。
+      **实证(#123)：全项目 141 源文件全部 ≤800，最大 app.py 781。** 全程零回归（2415 passed）。
 
 > 闭合规则：完成项改 `[x]` 并在迭代日志记 `#NN`；新发现的未闭合项追加到本列表（保持「后续功能追踪」常态化）。
 > 诚实边界：环境约束（alpha 实时验证）与公开数据固有局限（热钱包低估/未确认交易所地址）**不假闭合**，
 > 据 codex-loop 反幻觉纪律保持开放，区别于「已实现但 backlog 写保守」的项（已核实证据后闭合）。
 
 ## 迭代日志
+- 2026-06-26 #123: **全系统并行审计修复(39确认含P0)+ 800行债务闭合 + P0端到端验证**（用户#：不计成本并行 agent）。
+  ① **波动子系统审计**(6维对抗验证→24确认)+ **9子系统并行审计编队**(55 agent,45原始→39确认:1 P0+13 P1)。
+  ② **8 fixer 并行修复**(文件归属零冲突)：P0 discovery whale判定恢复(build_dossier 算 avg_hold_sec)、notify NULL崩溃+
+     限速永久禁用、correlation lift序被抹除、review诚实裂缝、harmonic死状态、bollinger off-by-one、momentum越零不重置等。
+     新增47测试；Opus复跑全量 **2415 passed** 零回归。
+  ③ **P0端到端实证**：$8M长持仓账户修复后正确判 whale(score44.3)、修复前永判 mixed——抓庄核心能力真实恢复。
+  ④ **800行债务闭合**(#111-121 已全部达标,本轮实证141文件全≤800,关闭过时 backlog 项)。
+  ⑤ 清理冗余旧快照 /Users/zhaoleon/smc_local(loop#101非git副本,逐项核对无独有数据后删,释放1.1G)。
 - 2026-06-26 #122: **波动板数据新鲜度(诚实标注，实时板不静默展示陈旧)**（/loop；Opus 直接执行）。
   先自查波动系统死代码：9 个产出字段(rv/atr/range/velocity/accel/vol_ratio/regime/pd_pct/pd_zone)全多处消费，
   无"算而不渲"(#113 era 问题已修干净)。加 `VolatilityMonitor._latest_bar_ms`(guarded latest_candle_ms，无能力→0)
