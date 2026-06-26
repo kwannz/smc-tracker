@@ -206,9 +206,16 @@ class TestWorkFirstStructure:
     """
 
     def _method_while_body(self, method_name: str) -> list[ast.stmt]:
-        """返回指定方法 while body 的语句列表。"""
-        import smc_tracker.app as app_mod
-        src = Path(inspect.getfile(app_mod)).read_text(encoding="utf-8")
+        """返回指定方法 while body 的语句列表。
+
+        mixin 重构后方法可能定义在 app_handlers.py / app_periodic.py 中，
+        用 inspect.getfile(method) 取实际定义文件，而非硬编码 app.py。
+        """
+        from smc_tracker.app import TradingSystem
+        method = getattr(TradingSystem, method_name, None)
+        if method is None:
+            return []
+        src = Path(inspect.getfile(method)).read_text(encoding="utf-8")
         tree = ast.parse(src)
         for node in ast.walk(tree):
             if isinstance(node, ast.AsyncFunctionDef) and node.name == method_name:

@@ -213,6 +213,14 @@ D 多空符号 · E 真实 userFills 解析/分类自洽 · F WS webData2==REST 
 > 据 codex-loop 反幻觉纪律保持开放，区别于「已实现但 backlog 写保守」的项（已核实证据后闭合）。
 
 ## 迭代日志
+- 2026-06-26 #121: **🎯 app.py 拆 3 mixin → 全项目 141 源文件全部 ≤800 达标**（Sonnet 执行/Opus 复核）。
+  app.py(2010，最后违规)拆: `app_handlers.py::EventHandlersMixin`(400，事件回调 _on_*/_push/_emit)+
+  `app_periodic.py::PeriodicTasksMixin`(459，看板/TA/采集类 periodic)+ `app_periodic_data.py::PeriodicDataMixin`(422，
+  聪明钱/链上/研判类 periodic)；`TradingSystem(EventHandlersMixin,PeriodicTasksMixin,PeriodicDataMixin)`，
+  __init__/_seed/run/stop/_DB_RETAIN 留 app.py(**781**)。方法逐字移动零行为变化，MRO 解析 self.*。
+  测试 `test_audit_fixes.py::_method_while_body` 跟随改 `inspect.getfile(method)`(方法迁文件，断言逻辑不动；
+  Opus 核实 line258 assert body 防空过，非削弱)。Opus 复核：复跑 2363 passed、四文件全≤800、无循环、MRO 方法全可达。
+  **里程碑：dashboard/cli/db/onchain/app 全部巨文件治理完成，最大源文件 781<800。** 全量 **2363 passed, 2 skipped**。
 - 2026-06-26 #120: **exchange_flow.py BlockstreamClient 拆出(826→677)——≤800 仅剩 app.py 一个违规**（/loop；Opus 直接执行）。
   自包含的 BTC HTTP 客户端 `BlockstreamClient`(~145 行，仅依赖 aiohttp/asyncio + 2 常量)抽成
   `onchain/exchange_flow_btc.py`(163)；exchange_flow.py re-import 回来(onchain/__init__ + test import 路径全兼容)。
