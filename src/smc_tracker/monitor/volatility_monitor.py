@@ -42,7 +42,8 @@ _TF_MS = {"15m": 900_000, "30m": 1_800_000, "1H": 3_600_000, "4H": 14_400_000,
           "6H": 21_600_000, "12H": 43_200_000, "1D": 86_400_000, "1W": 604_800_000}
 
 
-_RM_LAMBDA = 0.94   # RiskMetrics EWMA 衰减(J.P. Morgan 行业标准)
+_RM_LAMBDA = 0.94   # RiskMetrics EWMA 衰减(J.P.Morgan 行业标准；#156 在 15m 数据校验:λ∈[0.88,0.99] 扫描，
+                    # 0.94 对多数币近最优——更低 λ mean corr 略高但仅 45% 币个体更优(均值被离群币拉高),不稳健,故不动)
 
 
 def ewma_vol(c: Any, lam: float = _RM_LAMBDA) -> float:
