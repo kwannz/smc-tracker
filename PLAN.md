@@ -214,6 +214,15 @@ D 多空符号 · E 真实 userFills 解析/分类自洽 · F WS webData2==REST 
 > 据 codex-loop 反幻觉纪律保持开放，区别于「已实现但 backlog 写保守」的项（已核实证据后闭合）。
 
 ## 迭代日志
+- 2026-06-27 #197: **构建(开源案例):加 Parkinson(1980)高低幅波动估计——比 close-to-close rv 效率高~5×,榨已有 OHLC**（/loop;Opus 从验证 pivot 回构建,TDD）。
+  20轮验证后 pivot 回真正"完成开发"(指令本意)。第一性发现真实缺口:rv 纯 close-to-close、只用 C,丢弃每根 bar 的 H/L 内部波动信息;
+  而 vol_metrics(h,l,c) 已收 H/L 却只用于 ATR。开源标准 Parkinson(1980)用高低 range,同样本方差比 close-to-close 小~5×(更高效=估计更准噪声更小)——
+  对已验证"vol 幅度才是真 edge"(#149/#177)的系统,更准的波动估计是最地基改进(GARCH/regime/HVP 全建其上)。加密 24/7 无隔夜跳空正是 Parkinson 假设最适用场景。
+  实现:`parkinson_vol(h,l)` σ²=mean((ln H/L)²)/(4ln2)(只需已有 H/L,无需改签名/threading open)→vol_metrics "pk_vol" 字段→导出→vol 板渲染 σ→**PK**→GA→EW。
+  TDD:①公式对独立计算匹配;②**校准测试**(已知σ模拟bar内GBM取H/L,Parkinson无偏恢复σ±12%——验1/(4ln2)因子,漏掉会偏高);③哨兵/字段。
+  真实数据确认:BTC σ0.28/PK0.34(15m)、σ2.50/PK2.35(1D)同尺度小差异=正确无偏。全量2473 passed(+3),655行≤800,零孤儿。
+  教训:验证 campaign 收口后,"完成开发"指令要求 pivot 回构建;真正的开源案例改进=把已有却未用的数据(OHLC 的 H/L),用标准估计量(Parkinson)榨出 5× 效率,非 gilding 非已证伪信号。
+
 - 2026-06-27 #196: **端到端真实数据冒烟:19轮改动(#177-195)叠加后核心能力确认端到端工作**（/loop;Opus 集成验证,非合成单测）。
   单测全绿(2470)但用合成数据,从未在真实"Bitget取数→落库→vol板算GARCH→渲染"全链路验证 #179 GARCH/#189 retry/#183 渲染 等改动叠加后通不通。本轮跑 verify_vol_chain BTC/ETH/SOL:
   ① 真实取数 7 周期全覆盖;② vol 板正确渲染 σ→GA(GARCH)→EW(EWMA) 三量;③ **GARCH 均值回归生产中可见起作用**:BTC 1W σ5.20%→GA6.28%、ETH 1W σ6.31%→GA8.65%(刚−21%/−25%周线大跌→GARCH预测波动续高向长期方差回归,EWMA仅回声σ)——#179 edge 真实数据现形;④ regime/PD/HVP/期限结构全工作,链路通。

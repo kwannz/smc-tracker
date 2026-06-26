@@ -116,6 +116,27 @@ def garch_vol(c: Any, alpha: float = _GARCH_A, beta: float = _GARCH_B) -> float:
     return math.sqrt(max(sig2, 0.0)) * 100.0
 
 
+def parkinson_vol(h: Any, l: Any, win: int = _RV_WIN) -> float:
+    """Parkinson(1980) 高低幅波动估计(%)——用 bar 内 high-low range,比 close-to-close rv **效率高 ~5×**
+    (同样本噪声更小、估计更准)。σ²=mean_win((ln H/L)²)/(4·ln2);返回 σ%(与 rv 同尺度可比)。
+
+    第一性:close-to-close rv 只用收盘价、丢弃 bar 内波动信息;高低幅含一根 bar 内真实摆动幅度→更高效估计。
+    1/(4ln2) 是无偏缩放因子(GBM 下 E[(ln H/L)²]=4ln2·σ²);漏掉它会系统性偏高。加密 24/7 无隔夜跳空,
+    Parkinson 假设(连续交易、无跳空、无漂移)在加密最适用。<2 根或非法 H/L(≤0 或 H<L)全无 → -1.0 哨兵。
+    """
+    hi = np.asarray(h, dtype=float)
+    lo = np.asarray(l, dtype=float)
+    if hi.size < 2 or not (np.all(np.isfinite(hi)) and np.all(np.isfinite(lo))):
+        return -1.0
+    hi_w, lo_w = hi[-win:], lo[-win:]
+    mask = (hi_w > 0) & (lo_w > 0) & (hi_w >= lo_w)
+    if not mask.any():
+        return -1.0
+    lr = np.log(hi_w[mask] / lo_w[mask])
+    var = float(np.mean(lr * lr)) / (4.0 * math.log(2.0))
+    return math.sqrt(max(var, 0.0)) * 100.0
+
+
 def _fc_series(r: np.ndarray, alpha: float, beta: float, omega: float) -> np.ndarray:
     """一步条件波动 σ% 预测序列(统一递推:GARCH=方差目标 ω;EWMA=ω0/α0.06/β0.94 退化)。
 
@@ -239,7 +260,8 @@ def vol_metrics(h: Any, l: Any, c: Any, *,
             "vol_ratio": vol_ratio, "regime": regime,
             "vol_pct": vol_percentile(c),    # 历史波动百分位(HVP，-1=数据不足)
             "ewma_vol": ewma_vol(c),         # RiskMetrics EWMA 预期波动水平(#154)
-            "garch_vol": garch_vol(c)}       # GARCH(1,1) 一步预测(均值回归,主前瞻量;胜 EWMA 周期依赖#180:15m+0.078/4H·1D+0.02/1H≈中性)
+            "garch_vol": garch_vol(c),       # GARCH(1,1) 一步预测(均值回归,主前瞻量;胜 EWMA 周期依赖#180:15m+0.078/4H·1D+0.02/1H≈中性)
+            "pk_vol": parkinson_vol(h, l)}   # Parkinson 高低幅波动(#197,比 close-to-close rv 效率高~5×;用已有 OHLC 的 H/L)
 
 
 def pdarray(h: Any, l: Any, c: Any, *, win: int = _PD_WIN, band: float = 0.03) -> dict:
@@ -621,7 +643,10 @@ class VolatilityMonitor:
                 # 均为**水平**预测(非方向、非趋势);#157 实测"预测 vs σ 升/降"对未来波动无净预测力,勿读作续升。
                 ga = m.get("garch_vol", -1.0)
                 ew = m.get("ewma_vol", -1.0)
-                fc_str = (f" GA{ga:.2f}%" if ga >= 0 else "") + (f" EW{ew:.2f}%" if ew >= 0 else "")
+                pk = m.get("pk_vol", -1.0)
+                # PK=Parkinson 高低幅波动(比 σ close-to-close 效率高~5×,#197);GA/EW=前瞻预测(#180/154)。
+                fc_str = ((f" PK{pk:.2f}%" if pk >= 0 else "")
+                          + (f" GA{ga:.2f}%" if ga >= 0 else "") + (f" EW{ew:.2f}%" if ew >= 0 else ""))
                 lines.append(
                     f"  {tf:<4} {vdir}{abs(v):.2f}% a{a:+.2f}{adir}"
                     f" σ{m['rv']:.2f}%[{m['regime']}]{fc_str} ATR{m['atr_pct']:.2f}% 幅{m['range_pct']:.2f}%"

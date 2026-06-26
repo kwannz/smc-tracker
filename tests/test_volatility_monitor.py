@@ -117,6 +117,40 @@ def test_garch_vol_sentinel_and_in_metrics():
     assert m["garch_vol"] >= 0.0                       # vol_metrics 含 garch_vol 字段
 
 
+def test_parkinson_vol_matches_formula():
+    """Parkinson(1980)高低幅波动:σ²=mean((ln H/L)²)/(4ln2)——对独立纯 Python 计算匹配。"""
+    import math as _m
+    from smc_tracker.monitor.volatility_monitor import parkinson_vol
+    h = [101.0, 102.5, 103.0, 101.8, 104.0]
+    l = [100.0, 100.5, 101.2, 100.9, 101.0]
+    lr2 = [_m.log(h[i] / l[i]) ** 2 for i in range(len(h))]
+    expected = (sum(lr2) / len(lr2) / (4 * _m.log(2))) ** 0.5 * 100.0
+    assert abs(parkinson_vol(h, l, win=5) - expected) < 1e-9
+
+
+def test_parkinson_vol_calibrated_to_true_sigma():
+    """关键:用已知 per-bar σ 模拟 bar 内 GBM 取 H/L,Parkinson 应**无偏**恢复 σ
+    (验证 1/(4ln2) 缩放因子正确——漏掉它会系统性偏高)。"""
+    import numpy as _np
+    from smc_tracker.monitor.volatility_monitor import parkinson_vol
+    rng = _np.random.default_rng(0)
+    true_sigma, m = 0.02, 60
+    hs, ls = [], []
+    for _ in range(3000):
+        path = _np.exp(_np.cumsum(rng.normal(0, true_sigma / _np.sqrt(m), m)))
+        hs.append(float(path.max())); ls.append(float(path.min()))
+    pk = parkinson_vol(hs, ls, win=3000) / 100.0
+    assert abs(pk - true_sigma) / true_sigma < 0.12    # 3000 bar 内应 ±12% 内（无偏标志）
+
+
+def test_parkinson_vol_sentinel_and_in_metrics():
+    from smc_tracker.monitor.volatility_monitor import parkinson_vol
+    assert parkinson_vol([100.0], [99.0]) == -1.0      # <2 根 → 哨兵
+    spike = [100.0 + 0.01 * i for i in range(40)] + [100.4, 103.0, 100.5, 103.2]
+    m = vol_metrics([p * 1.005 for p in spike], [p * 0.995 for p in spike], spike)
+    assert m["pk_vol"] >= 0.0                           # vol_metrics 含 pk_vol 字段
+
+
 def test_forecast_skill_detects_predictable_vol():
     """#182 forecast_skill:对**有波动聚集**的合成序列,GARCH/EWMA 预测与已实现波动正相关(技巧>0);
     对 IID 序列(无聚集)技巧≈0。生产实测(vol --skill)与 audit 脚本共用的 canonical 实现。"""
