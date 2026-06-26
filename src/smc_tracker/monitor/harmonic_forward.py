@@ -37,6 +37,7 @@ from typing import Callable
 from ..signals.coin_profile import CoinSignalProfile, build_profile
 from ..signals.funding_extreme import funding_extreme_signal
 from ..signals.oi_velocity import oi_directional_velocity
+from ..util import to_float as _safe_float   # 复用单一源(修审计P2:原自造重复;util 无循环依赖,同包 harmonic_monitor 已用)
 
 # ── OI 信号归一化基（5% 方向化 OI 变化 → tanh≈0.76）
 _OI_SCALE = 0.05
@@ -57,15 +58,6 @@ _DIV_PX_MAX_CHANGE: float = 0.01   # 同期价格涨幅 < 1% 算"滞"
 _DIVERGENCE_SIGNAL: float = 0.80
 
 
-def _safe_float(v: object) -> float:
-    """安全转 float，无效值（None/NaN/inf）→ 0.0（util.to_float 逻辑，不引入循环依赖）。"""
-    try:
-        f = float(v)  # type: ignore[arg-type]
-        if math.isnan(f) or math.isinf(f):
-            return 0.0
-        return f
-    except (TypeError, ValueError):
-        return 0.0
 
 
 def _oi_acceleration(oi_deque: deque, scale: float = _OI_SCALE) -> float:

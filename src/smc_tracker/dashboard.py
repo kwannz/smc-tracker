@@ -126,48 +126,8 @@ def build_dashboard_state(store: Any, now_ms: int, window_ms: int = 3_600_000) -
     whale_signals = [_row_to_dict(r, ["ts", "label", "coin", "direction", "notional", "px"])
                      for r in ws_rows]
 
-    # ---- 行情监控板（ticker_board）——从 bitget_oi 表聚合最新行情 ----
-    # bitget_oi 表只有 symbol/coin/oi_size/oi_usd/mark_px/funding/ts（无 chg24/last_px，
-    # 这两个字段仅在内存 _latest 快照中），所以 dashboard 直接用 mark_px 作为价格。
-    # chg24 best-effort：用同 symbol「最新 mark_px 对比近 24h 前最早一行 mark_px」估算，算不出置 None。
-    ticker_board: list[dict] = []
-    try:
-        # 步骤 1：取每 symbol 最新一行（ts=MAX(ts)）
-        latest_rows = _safe_rows(
-            conn,
-            "SELECT symbol, coin, mark_px, funding, oi_usd, ts FROM bitget_oi "
-            "WHERE (symbol, ts) IN (SELECT symbol, MAX(ts) FROM bitget_oi GROUP BY symbol) "
-            "ORDER BY oi_usd DESC",
-        )
-        for r in latest_rows:
-            symbol, coin, mark_px, funding, oi_usd, ts = r
-            if not mark_px or float(mark_px) <= 0:
-                continue
-            # best-effort chg24：查该 symbol 24h 前最近一条 mark_px
-            chg24: float | None = None
-            since_24h = (now_ms - 86_400_000)
-            old_rows = _safe_rows(
-                conn,
-                "SELECT mark_px FROM bitget_oi "
-                "WHERE symbol=? AND ts>=? AND ts<=? "
-                "ORDER BY ts ASC LIMIT 1",
-                (symbol, since_24h, now_ms - 82_800_000),  # 23~24h 前
-            )
-            if old_rows and old_rows[0][0]:
-                old_px = float(old_rows[0][0])
-                new_px = float(mark_px)
-                if old_px > 0:
-                    chg24 = (new_px - old_px) / old_px
-            ticker_board.append({
-                "symbol": symbol,
-                "coin": coin or symbol,
-                "price": float(mark_px),
-                "funding": float(funding) if funding is not None else 0.0,
-                "oi_usd": float(oi_usd) if oi_usd is not None else 0.0,
-                "chg24": chg24,  # 可能为 None（表里无足够历史数据时）
-            })
-    except Exception:  # noqa: BLE001 — 表不存在/结构不对时返回 []
-        ticker_board = []
+    # 注：原 ticker_board(行情监控板)计算已删除——前端无消费者 + 每 symbol 一次 chg24 子查询(N+1)，
+    # 属死计算(修审计 P2)。行情维度由 /volatility 等专用板覆盖。
 
     # ---- 交易所资金流（exchange_flows 表，每个交易所最新一行）----
     # 按 (exchange, MAX(ts)) 取最新行，按 abs(net) 降序（净流量绝对值大的优先展示）
@@ -277,7 +237,6 @@ def build_dashboard_state(store: Any, now_ms: int, window_ms: int = 3_600_000) -
         "onchain": onchain,
         "pump_alerts": whale_signals,   # whale_signals 双用
         "whale_signals": whale_signals,
-        "ticker_board": ticker_board,
         "exchange_flows": ef_rows,
         "wallet_portfolio": wallet_portfolio,
         "okx_signals": okx_signals,

@@ -30,29 +30,6 @@ class BlockstreamClient:
     def __init__(self, base_url: str = _DEFAULT_BASE_URL) -> None:
         self.base_url = base_url.rstrip("/")
 
-    async def address_txs(
-        self,
-        session: aiohttp.ClientSession,
-        addr: str,
-    ) -> list[dict]:
-        """GET /address/{addr}/txs → 最近交易列表（最多 25 笔，已确认+未确认混合）。
-
-        超时/非 200/异常均返回 []（log.warning 记录，不向上抛，保证优雅降级）。
-
-        注意：本方法只取首页 ≤25 笔，保留以供向后兼容。
-        生产路径请用 address_txs_window（支持分页，24h 覆盖精度更高）。
-        """
-        url = f"{self.base_url}/address/{addr}/txs"
-        try:
-            async with session.get(url, timeout=aiohttp.ClientTimeout(total=15)) as resp:
-                if resp.status != 200:
-                    log.warning("blockstream /txs 非200 addr=%s status=%s", addr, resp.status)
-                    return []
-                return await resp.json(content_type=None)
-        except Exception as exc:  # noqa: BLE001 — 网络/超时/解析等各类异常统一降级
-            log.warning("blockstream /txs 失败 addr=%s: %s", addr, exc)
-            return []
-
     async def address_txs_window(
         self,
         session: aiohttp.ClientSession,

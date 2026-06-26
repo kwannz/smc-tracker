@@ -363,78 +363,20 @@ def _store_with_bitget_oi() -> tuple:
     return s, now_ms
 
 
-def test_ticker_board_section_has_data():
-    """ticker_board section：插入 bitget_oi 后应有数据，且 price/funding 正确。"""
-    s, now_ms = _store_with_bitget_oi()
-    state = build_dashboard_state(s, now_ms, window_ms=3_600_000)
-    s.close()
-
-    board = state.get("ticker_board", [])
-    assert isinstance(board, list), f"ticker_board 应为 list，实际 {type(board)}"
-    assert len(board) >= 1, "ticker_board 应有数据（已插入 bitget_oi 行）"
-
-    # 找 BONKUSDT 行
-    bonk_row = next((r for r in board if r["symbol"] == "BONKUSDT"), None)
-    assert bonk_row is not None, "ticker_board 应含 BONKUSDT"
-
-    # price 应等于最新 mark_px=0.0836
-    assert abs(bonk_row["price"] - 0.0836) < 1e-9, f"price 期望 0.0836，实得 {bonk_row['price']}"
-    # funding 应等于 0.0001
-    assert abs(bonk_row["funding"] - 0.0001) < 1e-9, f"funding 期望 0.0001，实得 {bonk_row['funding']}"
-    # coin 字段
-    assert bonk_row["coin"] == "BONK", f"coin 期望 'BONK'，实得 {bonk_row['coin']}"
-
-
-def test_ticker_board_chg24_best_effort():
-    """chg24 best-effort：有 24h 前历史时计算正确，无历史时为 None。"""
-    s, now_ms = _store_with_bitget_oi()
-    state = build_dashboard_state(s, now_ms, window_ms=3_600_000)
-    s.close()
-
-    board = state.get("ticker_board", [])
-
-    # BONKUSDT：有 old_ts（约 23.3h 前 mark_px=0.0800），chg24 = (0.0836-0.0800)/0.0800
-    bonk = next((r for r in board if r["symbol"] == "BONKUSDT"), None)
-    assert bonk is not None
-    if bonk["chg24"] is not None:
-        expected_chg = (0.0836 - 0.0800) / 0.0800   # ≈ 0.045
-        assert abs(bonk["chg24"] - expected_chg) < 1e-6, (
-            f"chg24 期望 ≈{expected_chg:.4f}，实得 {bonk['chg24']}"
-        )
-    # 可接受 None（边界条件下 old 行不在 23~24h 窗口内时）
-
-    # PEPEUSDT：只有最新一行，无 24h 历史 → chg24 应为 None
-    pepe = next((r for r in board if r["symbol"] == "PEPEUSDT"), None)
-    assert pepe is not None
-    assert pepe["chg24"] is None, f"PEPEUSDT 无历史时 chg24 应为 None，实得 {pepe['chg24']}"
-
-
-def test_ticker_board_empty_on_no_oi_data():
-    """无 bitget_oi 数据时 ticker_board 应为空列表，不抛异常。"""
-    s = _store_empty()
-    state = build_dashboard_state(s, 1_700_000_000_000)
-    s.close()
-
-    board = state.get("ticker_board", None)
-    assert board is not None, "state 应含 ticker_board 键"
-    assert isinstance(board, list), f"ticker_board 应为 list，实际 {type(board)}"
-    assert board == [], f"无数据时 ticker_board 应为 []，实际 {board}"
-
-
 def test_render_html_omits_ticker_board_panel():
-    """render_html **不再含**「行情监控板」面板（用户#要求：价/涨跌幅/费率/OI 不需要，聚焦 HL）。
+    """render_html **不含**「行情监控板」面板，且 build_dashboard_state **不再产出** ticker_board。
 
-    诚实标注：后端 build_dashboard_state 仍产出 ticker_board 数据（供 /health 等复用，见
-    test_ticker_board_section_has_data），仅前端面板移除——降噪，与推送侧 push_ticker_board 默认关一致。
+    修审计 P2：ticker_board(行情监控板)前端无任何消费者 + 每 symbol 一次 chg24 子查询(N+1)，
+    已整体删除(原 docstring「供 /health 复用」经核实为虚假声明，无消费方)。本测试守护其不复活。
     """
     s, now_ms = _store_with_bitget_oi()
     state = build_dashboard_state(s, now_ms)
     s.close()
 
     html = render_html(state)
-    assert "行情监控板" not in html, "render_html 不应再含「行情监控板」面板（已按用户要求移除）"
+    assert "行情监控板" not in html, "render_html 不应含「行情监控板」面板"
     assert "renderTickerBoard" not in html, "renderTickerBoard 死函数应已移除"
-    assert state.get("ticker_board") is not None, "后端 ticker_board 数据应保留（其它消费方依赖）"
+    assert "ticker_board" not in state, "ticker_board 死计算应已删除(前端无消费者+N+1)"
 
 
 # ---------------------------------------------------------------------------

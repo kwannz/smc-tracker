@@ -43,18 +43,3 @@ def normalize(symbol: str) -> str:
         if s.startswith(p) and len(s) > len(p):
             return s[len(p):]
     return s
-
-
-def build_meme_markets(hl_perp_coins: list[str], bitget_bases: set[str]) -> list[str]:
-    """求交集，返回需在 Hyperliquid 监控的 meme 永续币名（HL 命名）。
-
-    hl_perp_coins: Hyperliquid 永续币名列表（如 ['BTC','kPEPE','WIF',...]）
-    bitget_bases:  Bitget 永续基础币集合（如 {'BTC','PEPE','1000BONK',...}）
-    """
-    bitget_norm = {normalize(b) for b in bitget_bases}
-    out = []
-    for coin in hl_perp_coins:
-        n = normalize(coin)
-        if n in MEME_BASES and n in bitget_norm:
-            out.append(coin)
-    return sorted(out)
