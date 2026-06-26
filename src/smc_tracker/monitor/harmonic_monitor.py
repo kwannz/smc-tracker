@@ -32,6 +32,19 @@ from ..util import fmt_px, fmt_ts, to_float as _to_float
 
 log = logging.getLogger("harmonic_monitor")
 
+
+def _conf_tier(conf: float) -> str:
+    """confidence → 样本外实测质量分层(#165:1.26万setup·价格先碰target1还是stop)。
+
+    期望悬崖在 0.8：≥0.85(~0.9桶) OOS 83%胜率/+1.5R=🟢强；[0.75,0.85)(~0.8桶)+0.64R=🟡较强；
+    <0.75(0.6-0.7桶,最常见但期望最低 +0.2R)=◆边际。让用户即知 raw 置信背后的真实期望档位。
+    """
+    if conf >= 0.85:
+        return "🟢强"
+    if conf >= 0.75:
+        return "🟡较强"
+    return "◆边际"
+
 # 实证结论（A1）：在 _SEMA=4 下运行多轮 0 次 429；逐步提并发至 8/10 实测：
 #   8 并发：多轮测试无 429（Bitget 公开 K 线接口速率宽松）；
 #   10 并发：偶发 429（高负载大周期回填时触发）；
@@ -660,7 +673,7 @@ class HarmonicMonitor:
                             f" 目标{fmt_px(setup.target1)}/{fmt_px(setup.target2)}"
                             f" rr{setup.rr:.1f}"
                             f" 仓位{qty_str}({notional_str})"
-                            f" 置信{int(setup.confidence * 100)}%"
+                            f" 置信{int(setup.confidence * 100)}%{_conf_tier(setup.confidence)}"
                             f" KNN{knn_flag}"
                             f"{of_inline}"
                             f"{crab_note}"

@@ -2056,3 +2056,16 @@ class TestRenderCoinGrouped:
         assert card is not None
         assert "📊订单流✓" in card, f"按币分组下订单流确认应显示，卡片:\n{card}"
         assert "bid" in card, "long 方向确认含 bid"
+        # confidence=0.81 → 样本外质量分层「🟡较强」(#165:[0.75,0.85)桶 OOS +0.64R)应随置信显示
+        assert "🟡较强" in card, f"置信 0.81 应显示 OOS 分层🟡较强，卡片:\n{card}"
+
+
+def test_conf_tier_oos_grounded_boundaries():
+    """confidence→质量分层(#165 OOS期望悬崖在0.8):≥0.85强(+1.5R)/[0.75,0.85)较强(+0.64R)/<0.75边际(+0.2R)。
+
+    让用户即知 raw 置信背后的真实期望档位——发现(0.7桶最常见却期望最低)即修(显示),非仅记录(#164教训)。
+    """
+    from smc_tracker.monitor.harmonic_monitor import _conf_tier
+    assert _conf_tier(0.90) == "🟢强" and _conf_tier(0.85) == "🟢强"
+    assert _conf_tier(0.84) == "🟡较强" and _conf_tier(0.75) == "🟡较强"
+    assert _conf_tier(0.74) == "◆边际" and _conf_tier(0.70) == "◆边际"   # 0.7最常见桶,OOS期望最低
