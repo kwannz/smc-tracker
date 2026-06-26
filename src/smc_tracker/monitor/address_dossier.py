@@ -96,17 +96,18 @@ async def build_dossier(address: str, info: Any, store: Any, now_ms: int, *,
     except Exception:  # noqa: BLE001
         flagged = False
 
-    # ⑦ avg_hold_sec：从已平仓 fills 估算平均持仓时长（P0修复：原先缺此字段导致 whale 判定永久失效）
-    # 算法：取所有已平仓 fill（closed_pnl≠0）的时间戳，用 [max-min]/n_closed 估算生命周期；
-    # 样本过少(<2)时回退0，不抛。
+    # ⑦ avg_hold_sec：真实平均持仓时长——复用 position_lifecycle.reconstruct 得各 coin 当前持仓段 open_ms，
+    # 取 (now_ms-open_ms)/1000 均值(同 wallet_portfolio 正确做法)。**修审计 P1**：原「平仓时间跨度÷笔数」
+    # 是交易频率倒数(平仓间隔)非持仓时长，会把快进快出 scalper 误判为持仓型 whale。
+    # flat(无当前持仓)→0：诚实标注「无可测持仓段」，不冒充。
     avg_hold_sec: float = 0.0
     try:
-        closed_fills = [f for f in raw_fills if f.closed_pnl != 0]
-        n_closed = len(closed_fills)
-        if n_closed >= 2:
-            ts_list = [f.time_ms for f in closed_fills]
-            span_ms = max(ts_list) - min(ts_list)
-            avg_hold_sec = to_float(span_ms / n_closed / 1000.0)  # 转换为秒，拒 NaN/inf
+        from .position_lifecycle import reconstruct  # noqa: PLC0415 — 惰性避循环导入
+        holds = [(now_ms - lc.open_ms) / 1000.0
+                 for lc in reconstruct(raw_fills, now_ms).values()
+                 if lc.open_ms > 0 and now_ms > lc.open_ms]
+        if holds:
+            avg_hold_sec = to_float(sum(holds) / len(holds))
     except Exception:  # noqa: BLE001
         avg_hold_sec = 0.0
 
