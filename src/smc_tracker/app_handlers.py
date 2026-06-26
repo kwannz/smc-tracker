@@ -347,7 +347,11 @@ class EventHandlersMixin:
         if sig.ts - self._div_seen.get(key, 0) < self._DIV_COOLDOWN_MS:
             return
         self._div_seen[key] = sig.ts
-        msg = (f"[{_ts(sig.ts)}] {sig.fmt()}{self._price_tag(sig.coin)}"
+        # 实测 edge 标注(#170 不对称样本外):吸筹/逼空(bullish)超基线+0.83pp有迹象;分销(bearish)弱~0。
+        # 让用户即知该信哪侧——透明(#166)而非把噪声与信号对称地一起推。
+        edge_mark = (" ✅实测有edge(逼空+0.83pp,小样本)" if sig.direction == "bullish"
+                     else " ⚠️分销侧实测弱(~0,当弱提示)")
+        msg = (f"[{_ts(sig.ts)}] {sig.fmt()}{self._price_tag(sig.coin)}{edge_mark}"
                + self.efficacy.label_of("背离"))
         print(msg)
         self._emit("divergence", msg)
