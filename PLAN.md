@@ -214,6 +214,11 @@ D 多空符号 · E 真实 userFills 解析/分类自洽 · F WS webData2==REST 
 > 据 codex-loop 反幻觉纪律保持开放，区别于「已实现但 backlog 写保守」的项（已核实证据后闭合）。
 
 ## 迭代日志
+- 2026-06-26 #129: **supervisor 退避指数无界增长修复(韧性层)**（/loop；Opus 直接执行）。
+  审计周期任务监督器 `supervisor.py`(支撑全部数据采集的容错层,busy-loop 已修)。发现 `_calc_backoff` 用
+  `2**error_count`,任务永久失败时 error_count 无限增长→每轮计算千位大整数(CPU 浪费),而退避值早已封顶。
+  **修复**:夹住指数(`min(error_count,32)`)而非仅夹结果——base×2^32≈4.3e9 远超任何 max_backoff,必被夹,行为不变。
+  TDD 钉住指数封顶 + 大 error_count 不膨胀 + 行为一致。全量 **2425 passed, 2 skipped**(零回归)。
 - 2026-06-26 #128: **三 WS 客户端重连风暴统一修复 + DRY 到 util(数据摄入地基)**（/loop；Opus 直接执行）。
   审计确认 okx/bitget WS 客户端有与 hl **同款** copy-paste 重连风暴 bug(连接成功即 backoff=1.0)。
   **DRY 修复**:`_reconnect_backoff` 从 hl 移到 `util.reconnect_backoff`(单一真相源,避免 okx 跨包 import hl),

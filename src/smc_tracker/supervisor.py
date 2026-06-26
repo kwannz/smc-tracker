@@ -18,8 +18,12 @@ def _calc_backoff(error_count: int, base_backoff: float, max_backoff: float) -> 
     """计算第 error_count 次（从 0 起）错误后的退避秒数（指数，封顶 max_backoff）。
 
     error_count=0 → base_backoff；1 → 2×base；n → min(2^n * base, max_backoff)。
+    **夹住指数(非仅夹结果)**：任务永久失败时 error_count 无限增长，原 `2**error_count`
+    会计算千位大整数(每轮浪费 CPU)，而结果早已封顶 max_backoff。指数封顶 32
+    （base×2^32 ≈ 4.3e9 远超任何合理 max_backoff，必被 min 夹住），行为完全不变。
     """
-    return min(base_backoff * (2 ** error_count), max_backoff)
+    exp = error_count if error_count < 32 else 32
+    return min(base_backoff * (2 ** exp), max_backoff)
 
 
 async def supervise(

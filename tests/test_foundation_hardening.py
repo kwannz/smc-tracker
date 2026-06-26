@@ -308,6 +308,20 @@ def test_oi_window_matches_db_oi_change(tmp_path):
 # T5  supervise 重启 + 退避
 # ─────────────────────────────────────────────────────────────────────────────
 
+def test_calc_backoff_exponential_capped_and_bounded():
+    """_calc_backoff：指数退避 + 封顶 max + 大 error_count 不产生大整数膨胀(degenerate 永久失败防护)。"""
+    from smc_tracker.supervisor import _calc_backoff
+    assert _calc_backoff(0, 1.0, 60.0) == 1.0
+    assert _calc_backoff(1, 1.0, 60.0) == 2.0
+    assert _calc_backoff(3, 1.0, 60.0) == 8.0
+    assert _calc_backoff(6, 1.0, 60.0) == 60.0   # 2^6=64 → 封顶 60
+    # 巨大 error_count：仍精确封顶 max，且内部指数被夹(无千位大整数运算)
+    assert _calc_backoff(5_000, 1.0, 60.0) == 60.0
+    assert _calc_backoff(1_000_000, 1.0, 60.0) == 60.0
+    # 指数夹在 32：base×2^32 远超 max，结果与 error_count≥32 任意值一致(行为不变)
+    assert _calc_backoff(32, 1.0, 60.0) == _calc_backoff(999, 1.0, 60.0)
+
+
 @pytest.mark.asyncio
 async def test_supervise_retries_on_exception():
     """factory 抛 ValueError 前 3 次，第 4 次永久挂起等取消 → 验证被调用 ≥3 次。
