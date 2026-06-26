@@ -26,7 +26,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from smc_tracker.hyperliquid.info_client import HyperliquidInfo  # noqa: E402
 from smc_tracker.monitor.whale_discovery import fetch_leaderboard_rows  # noqa: E402
 
-_SAMPLE_ADDR = 50
+_SAMPLE_ADDR = 80
 _MIN_ACCT = 300_000.0
 _LOOKBACK_D = 30
 _BAR_MS = 900_000
@@ -131,33 +131,48 @@ async def main():
                 bk = "单庄(=1)" if deg == 1 else ("双庄(=2)" if deg == 2 else "多庄(≥3)")
                 buckets[bk][hk].append(alpha)
 
-    print("=" * 64)
-    print(f"共识强度审计:前瞻 alpha(扣币种漂移,%)按共识度(同币同向 4h 窗内不同庄数,**不相交桶**)")
-    print(f"  {'共识度':<12}" + "".join(f"{h:>14}" for h in _HZ))
-    means = {}
+    rng = np.random.default_rng(7)
+
+    def boot_ci(a, b, k=3000):
+        """bootstrap 90% CI of mean(a)−mean(b)。CI 排除 0 = 统计可区分。"""
+        a, b = np.array(a), np.array(b)
+        d = [rng.choice(a, a.size).mean() - rng.choice(b, b.size).mean() for _ in range(k)]
+        return float(np.percentile(d, 5)), float(np.percentile(d, 95))
+
+    print("=" * 70)
+    print("共识强度审计:前瞻 alpha(扣币种漂移,%)按共识度(同币同向 4h 窗内不同庄数,**不相交桶**)")
+    print("  抗噪:均值(离群敏感) vs **中位数(稳健)** —— 中位也非单调才是真,只均值尖叫=离群幻觉")
+    print(f"  {'共识度':<12}" + "".join(f"{h+'均/中位':>20}" for h in _HZ))
+    md = {}
     for bk in ("单庄(=1)", "双庄(=2)", "多庄(≥3)"):
         cells = []
         for hk in _HZ:
             v = buckets[bk][hk]
-            m = np.mean(v) if len(v) > 15 else float("nan")
-            means[(bk, hk)] = (m, len(v))
-            cells.append(f"{m:+.3f}%(n{len(v)})" if len(v) > 15 else "—")
-        print(f"  {bk:<12}" + "".join(f"{c:>14}" for c in cells))
-    print("-" * 64)
-    s, two, three = (means.get(("单庄(=1)", "24h"), (float('nan'), 0))[0],
-                     means.get(("双庄(=2)", "24h"), (float('nan'), 0))[0],
-                     means.get(("多庄(≥3)", "24h"), (float('nan'), 0))[0])
-    if not np.isnan(s) and not np.isnan(two):
-        if two > s + 0.1 and (np.isnan(three) or three < two - 0.1):
-            print(f"结论:**非单调**——双庄 {two:+.2f}% > 单庄 {s:+.2f}%(共识有信息),但 多庄≥3 {three:+.2f}% 反塌回单庄水平")
-            print("      ⇒'庄越多越强'**证伪**(拥挤反转或小样本);共识(≥2)有据但**勿把 ≥3 强共识当最强加码**。")
-        elif two > s + 0.1:
-            print(f"结论:双庄 {two:+.2f}% > 单庄 {s:+.2f}% 且 ≥3 {three:+.2f}% 续高 ⇒ 共识单调放大,假设成立。")
+            if len(v) > 15:
+                md[(bk, hk)] = (float(np.mean(v)), float(np.median(v)), v)
+                cells.append(f"{np.mean(v):+.2f}/{np.median(v):+.2f}(n{len(v)})")
+            else:
+                cells.append("—")
+        print(f"  {bk:<12}" + "".join(f"{c:>20}" for c in cells))
+    print("-" * 70)
+    # 严格拷问 24h:双庄 vs 单庄的 bootstrap CI + 中位数是否也非单调
+    g1 = md.get(("单庄(=1)", "24h")); g2 = md.get(("双庄(=2)", "24h")); g3 = md.get(("多庄(≥3)", "24h"))
+    if g1 and g2:
+        lo, hi = boot_ci(g2[2], g1[2])
+        med_nonmono = g2[1] > g1[1] + 0.05 and (g3 is None or g3[1] < g2[1] - 0.05)
+        excl0 = lo > 0 or hi < 0   # CI 排除 0(任一侧)
+        side = "正向(双庄更强)" if lo > 0 else ("负向(双庄更弱)" if hi < 0 else "跨0")
+        print(f"  双庄−单庄(24h) bootstrap 90%CI = [{lo:+.2f}, {hi:+.2f}]pp  ({side})")
+        print(f"  中位数非单调(双庄>单庄且>≥3)? {'是' if med_nonmono else '否'}")
+        # ⚠跨运行不稳定>单次CI:共识事件集中少数币,哪些币(candle)加载主导结果——#188 实测 +7.1%↔−6% 符号翻转
+        if lo > 0 and med_nonmono:
+            print("  结论:双庄>单庄(正向显著)且中位也非单调——但⚠须跨运行复核(共识alpha对币种选择极敏感,单次CI不足)。")
         else:
-            print(f"结论:双庄 {two:+.2f}% ≈ 单庄 {s:+.2f}% ⇒ 共识不显著放大,存疑。")
+            print("  结论:**未确立共识放大**(正向不显著/中位不支持)。⚠核心限制:共识事件集中少数币,")
+            print("        前瞻alpha由'哪些币candle加载'主导→跨运行极不稳定(#188:+7.1%↔−6%符号翻转),此数据/限流下无法定论。")
     else:
-        print("共识事件样本不足——诚实标注数据限制。")
-    print("=" * 64)
+        print("  共识事件样本不足——诚实标注数据限制。")
+    print("=" * 70)
 
 
 if __name__ == "__main__":
