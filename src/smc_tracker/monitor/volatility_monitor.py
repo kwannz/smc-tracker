@@ -1,15 +1,19 @@
 """实时波动追踪（专业细节·逐周期）：监控清单币 → 已采集多周期 K 线 → 每周期独立指标。
 
-设计（CLAUDE.md：领先信号 + 低延迟 + 模块化扁平 + 极简；用户#：不做共振，每周期各显指标 + PDArray）：
-  - vol_metrics：纯 numpy 向量化，单周期 OHLC → rv/atr/range/velocity(1阶导)/accel(2阶导)。
+设计（CLAUDE.md：低延迟 + 模块化扁平 + 极简；用户#：不做共振，每周期各显指标 + PDArray）：
+  - vol_metrics：纯 numpy 向量化，单周期 HLC → rv/atr/range/velocity(1阶导)/accel(2阶导)。
   - pdarray：ICT 溢价/折价数组（Premium/Discount Array）——价在 dealing range 的位置（开源 ICT 标准）。
   - VolatilityMonitor：读 store.get_candles（复用已采 K 线，不重拉），**逐周期**算指标并展示，按运动分排序。
-  - 可比性诚实标注：velocity/accel/rv 用固定 _VEL_WIN/_RV_WIN 根，**同周期内跨币可比**；但 5 根在 15m 与
-    1W 时间跨度差 1~2 个数量级，**跨周期幅度不可直接比较**（rv∝√t、accel 随 bar 时长增大）。
-    pd_pct 是区间占比 [0,1]，跨周期可比。score=max(各周期) 偏向最长周期，仅作"是否在动"的粗排，非精确强度。
+  - **诚实标注（信号性质，CLAUDE.md §二）**：本模块全部指标（rv/velocity/accel/vol_ratio/regime/pdarray）
+    均为历史 K 线的**回望/同步描述量，非前瞻领先量**——accel 是收盘价二阶有限差分、regime 的"扩张"是
+    波动已放大的*确认*而非预测。真正的领先信号见订单簿挂单意图(l2Book)/OI 速度（本模块不提供）。
+  - 可比性：velocity/accel/rv 用固定 _VEL_WIN/_RV_WIN 根，**同周期内跨币可比**；5 根在 15m 与 1W 时间跨度
+    差 1~2 个数量级，**跨周期幅度不可直接比较**（rv∝√t）。pd_pct 是区间占比 [0,1]，跨周期可比。
+    score=max(各周期) 偏向最长周期，仅作"是否在动"粗排，非精确强度。
 """
 from __future__ import annotations
 
+import math
 from typing import Any
 
 import numpy as np
@@ -19,10 +23,13 @@ _RV_WIN = 20
 _RV_LONG = 60   # 波动 regime 长窗基线（短窗 σ / 长窗 σ → 压缩/扩张）
 _VEL_WIN = 5
 _PD_WIN = 60
-# 波动 regime 阈值：短/长 σ 比值 < 压缩阈=蓄势(领先突破)，> 扩张阈=放量
+# 波动 regime 阈值：短/长 σ 比值 < 压缩阈=蓄势(波动收敛)，> 扩张阈=放量(波动已放大,确认非预测)
 _SQUEEZE, _EXPAND = 0.7, 1.4
-# 运动分权重：加速度领先量加权最高，其次速度，波动率辅助
+# 运动分权重：近期动量变化量(accel)加权最高，其次速度，波动率辅助（均为回望量）
 _W_VEL, _W_ACCEL, _W_RV = 1.0, 1.5, 0.5
+# 各周期毫秒跨度（陈旧阈值动态化用；缺失回退 15m）
+_TF_MS = {"15m": 900_000, "30m": 1_800_000, "1H": 3_600_000, "4H": 14_400_000,
+          "6H": 21_600_000, "12H": 43_200_000, "1D": 86_400_000, "1W": 604_800_000}
 
 
 def vol_metrics(h: Any, l: Any, c: Any, *,
@@ -31,17 +38,18 @@ def vol_metrics(h: Any, l: Any, c: Any, *,
     """单周期 HLC → 波动专业指标（numpy 向量化）。数据 <3 根返回 {}。（open 不参与，故不收）
 
     返回：rv(已实现波动率=对数收益σ,%)、atr_pct(真实波幅均值/价,%)、range_pct(当前 bar 区间,%)、
-         velocity(近窗%变化=1 阶导)、accel(速度差=2 阶导)、
-         vol_ratio(短窗σ/长窗σ)、regime(压缩/扩张/常态=波动状态领先信号)。
+         velocity(近窗%变化=1 阶导)、accel(速度差=2 阶导，前序窗不足时=0 不虚增)、
+         vol_ratio(短窗σ/长窗σ)、regime(压缩/扩张/常态=波动状态，回望确认非预测)。
+    数据含 NaN/inf 时返回 {}（数据质量守卫，避免 NaN 污染排名）。
     """
     c = np.asarray(c, dtype=float)
     n = c.size
-    if n < 3:
+    if n < 3 or not np.all(np.isfinite(c)):
         return {}
     cc = np.clip(c, 1e-12, None)                      # 防 log(0)/除 0
     logret = np.diff(np.log(cc))
     rv = float(np.std(logret[-rv_win:], ddof=0)) * 100.0
-    rv_long = float(np.std(logret[-rv_long_win:], ddof=0)) * 100.0 if logret.size else 0.0
+    rv_long = float(np.std(logret[-rv_long_win:], ddof=0)) * 100.0
     vol_ratio = rv / rv_long if rv_long > 1e-9 else 1.0
     regime = "压缩" if vol_ratio < _SQUEEZE else ("扩张" if vol_ratio > _EXPAND else "常态")
     hi, lo = np.asarray(h, float), np.asarray(l, float)
@@ -52,9 +60,12 @@ def vol_metrics(h: Any, l: Any, c: Any, *,
     range_pct = float((hi[-1] - lo[-1]) / last) * 100.0
     k = min(vel_win, n - 1)
     velocity = float((cc[-1] - cc[-1 - k]) / cc[-1 - k]) * 100.0
-    vel_prev = (float((cc[-1 - k] - cc[-1 - 2 * k]) / cc[-1 - 2 * k]) * 100.0
-                if n >= 2 * k + 1 else 0.0)
-    accel = velocity - vel_prev
+    # 前序窗不足（n < 2k+1）→ accel=0（"无加速信息"），不退化为 velocity 虚增运动分（修 P1-1）
+    if n >= 2 * k + 1:
+        vel_prev = float((cc[-1 - k] - cc[-1 - 2 * k]) / cc[-1 - 2 * k]) * 100.0
+        accel = velocity - vel_prev
+    else:
+        accel = 0.0
     return {"rv": rv, "atr_pct": atr_pct, "range_pct": range_pct,
             "velocity": velocity, "accel": accel,
             "vol_ratio": vol_ratio, "regime": regime}
@@ -79,7 +90,7 @@ def pdarray(h: Any, l: Any, c: Any, *, win: int = _PD_WIN, band: float = 0.03) -
 
 
 def move_score(m: dict) -> float:
-    """运动分：|速度|·_W_VEL + |加速度|·_W_ACCEL + 波动率·_W_RV（加速度领先量加权最高）。"""
+    """运动分：|速度|·_W_VEL + |加速度|·_W_ACCEL + 波动率·_W_RV（均为回望量，表当前运动强度非前瞻）。"""
     return (_W_VEL * abs(m.get("velocity", 0.0))
             + _W_ACCEL * abs(m.get("accel", 0.0))
             + _W_RV * m.get("rv", 0.0))
@@ -116,7 +127,9 @@ def market_regime(rows: list[dict]) -> dict:
     """聚合全监控集逐周期 regime/PD → 市场级波动态势（市场广度/regime）。纯函数。
 
     返回 {n, regime:{压缩,扩张,常态}, pd:{折价,溢价,均衡}, label}。
-    label：主导 regime + 主导 PD（如"蓄势(压缩) 12/21 · 普遍折价(偏超卖) 15/21"）；n=0 时 label=""。
+    label：主导 regime + 主导 PD（如"蓄势(压缩) 12/21 · 普遍折价(区间下半段) 15/21"）；n=0 时 label=""。
+    诚实标注（修 P1-5）：pd_zone 仅是近 60 根区间内的价格位置，**不蕴含超买/超卖(均值回归)语义**——
+    价格可在区间下半段持续下行刷新下沿，故用中性"区间下/上半段"措辞。
     """
     rc = {"压缩": 0, "扩张": 0, "常态": 0}
     pc = {"折价": 0, "溢价": 0, "均衡": 0}
@@ -131,7 +144,7 @@ def market_regime(rows: list[dict]) -> dict:
     reg_dom = max(rc, key=lambda k: rc[k])
     pd_dom = max(pc, key=lambda k: pc[k])
     reg_lbl = {"压缩": "蓄势(压缩)", "扩张": "放量(扩张)", "常态": "常态"}[reg_dom]
-    pd_lbl = {"折价": "普遍折价(偏超卖)", "溢价": "普遍溢价(偏超买)", "均衡": "均衡"}[pd_dom]
+    pd_lbl = {"折价": "普遍折价(区间下半段)", "溢价": "普遍溢价(区间上半段)", "均衡": "均衡"}[pd_dom]
     label = f"{reg_lbl} {rc[reg_dom]}/{n} · {pd_lbl} {pc[pd_dom]}/{n}"
     return {"n": n, "regime": rc, "pd": pc, "label": label}
 
@@ -144,7 +157,7 @@ def mtf_alignment(by_tf: dict) -> dict:
     """单币跨周期速度一致性（MTF trend alignment）：各周期 velocity 同向=高确信，冲突=分歧。纯函数。
 
     返回 {bias:多/空/分歧, aligned:主导方向周期数, total:非零周期数, score:主导占比[0,1]}。
-    score 越接近 1 越一致（开源 MTF 趋势对齐思路：多周期共振方向 > 单周期噪声）。
+    score 越接近 1 越一致（MTF 趋势对齐：多周期方向共识；**回望量，反映近期历史共识非预测未来**）。
     """
     up = down = 0
     for m in by_tf.values():
@@ -159,7 +172,8 @@ def mtf_alignment(by_tf: dict) -> dict:
     dominant = max(up, down)
     score = dominant / total
     if score >= _ALIGN_TH:
-        bias = "多" if up >= down else "空"
+        # score>=0.7 时 up==down 不可能(那样 score=0.5)，故 up>down 必为多、否则空（nit-1）
+        bias = "多" if up > down else "空"
     else:
         bias = "分歧"
     return {"bias": bias, "aligned": dominant, "total": total, "score": score}
@@ -192,13 +206,19 @@ class VolatilityMonitor:
         m.update(pdarray(h, l, c))
         return m
 
+    def _fastest_tf(self) -> str:
+        """监控周期里时长最短的（用于新鲜度：最短周期 bar 最频繁，最能反映数据延迟）。修 P1-2。"""
+        if not self.timeframes:
+            return "15m"
+        return min(self.timeframes, key=lambda t: _TF_MS.get(t, 900_000))
+
     def _latest_bar_ms(self, coin: str) -> int:
-        """该币最快周期(timeframes[0])最新 bar 的 open_ms；store 无此能力或异常→0（不误判新鲜度）。"""
+        """该币**最短周期**最新 bar 的 open_ms；store 无此能力或异常→0（不误判新鲜度）。"""
         fn = getattr(self.store, "latest_candle_ms", None)
         if fn is None or not self.timeframes:
             return 0
         try:
-            return int(fn(coin, self.timeframes[0]) or 0)
+            return int(fn(coin, self._fastest_tf()) or 0)
         except Exception:  # noqa: BLE001
             return 0
 
@@ -206,6 +226,7 @@ class VolatilityMonitor:
         """每币逐周期算指标 → {coin, score(各周期运动分取最大), by_tf}，按 score 降序。
 
         now_ms 预留（与兄弟监控板 bb/harmonic 统一签名；当前排序不依赖时间）。
+        score 非有限(NaN/inf，理论上 vol_metrics 已守卫)时置 0，防 sort 非确定排序（修 P2-3）。
         """
         rows: list[dict] = []
         for coin in self.coin_to_symbol:
@@ -213,8 +234,11 @@ class VolatilityMonitor:
                      if (m := self._tf_metrics(coin, tf)) is not None}
             if not by_tf:
                 continue
+            sc = max(move_score(m) for m in by_tf.values())
+            if not math.isfinite(sc):
+                sc = 0.0
             rows.append({"coin": coin,
-                         "score": max(move_score(m) for m in by_tf.values()),
+                         "score": sc,
                          "align": mtf_alignment(by_tf),
                          "last_ms": self._latest_bar_ms(coin),
                          "by_tf": by_tf})
@@ -228,10 +252,12 @@ class VolatilityMonitor:
         from ..util import fmt_ts  # noqa: PLC0415
         ts = fmt_ts(now_ms) if now_ms else ""
         lines = [f"🌀 实时波动追踪板 [{ts}] · 每周期指标(速度+加速度+区间+PD溢价折价) Top {top}"]
-        # 数据新鲜度（诚实标注：实时板不静默展示陈旧数据）：最新 bar 时间 + 陈旧告警
+        # 数据新鲜度（诚实标注：实时板不静默展示陈旧数据）：最短周期最新 bar 时间 + 陈旧告警。
+        # 阈值按最短周期时长动态(2×bar 时长)，避免 1H+ 周期被 30min 固定阈值误报陈旧（修 P1-2）。
         fresh = max((r.get("last_ms", 0) for r in rows), default=0)
         if fresh > 0:
-            stale = now_ms > 0 and (now_ms - fresh) > 1_800_000  # >30min 视为陈旧(最快 15m)
+            stale_ms = 2 * _TF_MS.get(self._fastest_tf(), 900_000)
+            stale = now_ms > 0 and (now_ms - fresh) > stale_ms
             note = "  ⚠️数据陈旧(采集器可能停摆)" if stale else ""
             lines.append(f"🕒 数据更新至 {fmt_ts(fresh)}{note}")
         # 市场级态势：把矩阵聚合成全市场波动广度

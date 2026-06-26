@@ -103,6 +103,19 @@ def test_pdarray_equilibrium_zero_range():
     assert pd["pd_zone"] == "均衡"
 
 
+def test_extreme_pd_inclusive_boundary():
+    """P2-11：extreme_pd 用 <=0.1/>=0.9 包含边界。0.10/0.90 命中，0.11/0.89 不命中。"""
+    def _row(pd):
+        return {"coin": "X", "by_tf": {"15m": {"velocity": 0.0, "vol_ratio": 1.0,
+                "regime": "常态", "pd_pct": pd, "pd_zone": "折价" if pd < 0.5 else "溢价"}}}
+    hit_lo = volatility_highlights([_row(0.10)])["extreme_pd"]
+    hit_hi = volatility_highlights([_row(0.90)])["extreme_pd"]
+    miss_lo = volatility_highlights([_row(0.11)])["extreme_pd"]
+    miss_hi = volatility_highlights([_row(0.89)])["extreme_pd"]
+    assert len(hit_lo) == 1 and len(hit_hi) == 1
+    assert miss_lo == [] and miss_hi == []
+
+
 def test_pdarray_band_boundary_non_degenerate():
     """P2-4：非退化区间内钉住 0.5±band 分区（band=0.03）。"""
     h = [110.0] * 30          # 区间高 110
@@ -169,6 +182,32 @@ def test_rank_captures_freshness_last_ms():
     mon = VolatilityMonitor({"BTC": "BTCUSDT"}, ["15m"], store)
     rows = mon.rank(0)
     assert rows[0]["last_ms"] == 1_700_000_000_000
+
+
+def test_render_freshness_stale_and_fresh():
+    """P1-6a：render 陈旧分支覆盖。最快 15m→阈值 30min。陈旧→⚠️；新鲜→🕒无告警。"""
+    up = [(c, c, c, c) for c in [100.0 + i for i in range(30)]]
+    base = 1_700_000_000_000
+    store = _FakeStore({"BTC": up}, latest={"BTC": base})
+    mon = VolatilityMonitor({"BTC": "BTCUSDT"}, ["15m"], store)
+    rows = mon.rank(0)
+    # now 比最新 bar 晚 1 小时(>2×15m=30min) → 陈旧
+    card_stale = mon.render(rows, now_ms=base + 3_600_000)
+    assert "🕒" in card_stale and "陈旧" in card_stale
+    # now 比最新 bar 晚 10 分钟(<30min) → 新鲜，无陈旧告警
+    card_fresh = mon.render(rows, now_ms=base + 600_000)
+    assert "🕒" in card_fresh and "陈旧" not in card_fresh
+
+
+def test_render_freshness_threshold_dynamic_for_1h():
+    """P1-2：周期为 1H 时陈旧阈值=2h(非固定30min)。最新 bar 后 1h 不应误报陈旧。"""
+    up = [(c, c, c, c) for c in [100.0 + i for i in range(30)]]
+    base = 1_700_000_000_000
+    store = _FakeStore({"BTC": up}, latest={"BTC": base})
+    mon = VolatilityMonitor({"BTC": "BTCUSDT"}, ["1H"], store)
+    rows = mon.rank(0)
+    card = mon.render(rows, now_ms=base + 3_600_000)  # 晚 1h，<2×1H=2h
+    assert "🕒" in card and "陈旧" not in card  # 不误报(修 P1-2)
 
 
 def test_rank_freshness_absent_store_method_safe():
@@ -239,12 +278,23 @@ def test_mtf_alignment_all_down():
 
 
 def test_mtf_alignment_mixed():
-    """方向冲突 → 分歧，score<1。"""
+    """方向冲突 → 分歧，score 精确 2/3（nit-4：精确断言非恒真 <1）。"""
     by_tf = {"15m": {"velocity": 2.0}, "1H": {"velocity": -2.0}, "4H": {"velocity": 1.0}}
     a = mtf_alignment(by_tf)
     assert a["bias"] == "分歧"
-    assert a["aligned"] == 2 and a["total"] == 3   # 多数为多(2/3)
-    assert a["score"] < 1.0
+    assert a["aligned"] == 2 and a["total"] == 3
+    assert abs(a["score"] - 2 / 3) < 1e-9
+
+
+def test_mtf_alignment_threshold_boundary():
+    """P1-6b：钉住 _ALIGN_TH=0.7 边界。3上1下(score=0.75≥0.7)→多；2上1下(0.667<0.7)→分歧。"""
+    up3down1 = {"a": {"velocity": 1.0}, "b": {"velocity": 1.0},
+                "c": {"velocity": 1.0}, "d": {"velocity": -1.0}}
+    a = mtf_alignment(up3down1)
+    assert a["score"] == 0.75 and a["bias"] == "多"
+    up2down1 = {"a": {"velocity": 1.0}, "b": {"velocity": 1.0}, "c": {"velocity": -1.0}}
+    b = mtf_alignment(up2down1)
+    assert abs(b["score"] - 2 / 3) < 1e-9 and b["bias"] == "分歧"
 
 
 def test_mtf_alignment_empty():

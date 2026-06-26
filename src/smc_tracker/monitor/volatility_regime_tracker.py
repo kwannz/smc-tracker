@@ -1,7 +1,8 @@
-"""波动 regime 突破跟踪器：跨刷新检测 (coin,tf) 压缩→扩张 转换（蓄势→放量=突破前瞻信号）。
+"""波动 regime 跟踪器：跨刷新检测 (coin,tf) 压缩→扩张 转换（波动收敛→放大 的同步确认）。
 
-设计（CLAUDE.md §二 领先信号 + 极简）：压缩(蓄势)切到扩张(放量)常先于价格突破；带 per-(coin,tf)
-冷却防刷屏。纯内存状态，无 DB；update 接受 VolatilityMonitor.rank 输出。
+设计（极简）：压缩(波动收敛)切到扩张(波动放大)是波动状态已变化的*确认*（非前瞻预测，诚实标注，
+CLAUDE.md §二：真领先信号见订单簿/OI 速度）；带 per-(coin,tf) 冷却防刷屏。纯内存状态，无 DB；
+update 接受 VolatilityMonitor.rank 输出。
 """
 from __future__ import annotations
 
@@ -51,7 +52,8 @@ class VolatilityRegimeTracker:
         if not events:
             return ""
         from ..util import fmt_ts  # noqa: PLC0415
-        lines = [f"🔶 波动突破告警 [{fmt_ts(now_ms)}] 蓄势→放量（领先突破信号）"]
+        # 诚实标注（修 P1-4）：扩张是波动已放大的*确认*，非领先预测；压缩→放量是同步转换信号
+        lines = [f"🔶 波动扩张确认 [{fmt_ts(now_ms)}] 压缩→放量（波动已放大，同步信号非预测）"]
         for e in events:
             lines.append(
                 f"  {e['coin']}/{e['tf']} 放量 速度{e['velocity']:+.2f}% (σ比 {e['vol_ratio']:.2f})"

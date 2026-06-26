@@ -400,14 +400,15 @@ class PeriodicTasksMixin:
         opt-in：仅 monitored_coins.enabled 且 vol_board_sec>0 时启用（默认关，零新增噪声）。
         每轮重读 get_monitored_coins() → 自动热载入；读 DB 已采 K 线（无网络），失败只 warn。
         """
-        mc = self.cfg.monitored_coins
-        if not mc.enabled or mc.vol_board_sec <= 0:
+        # 启动守卫只读一次（opt-in 开关运行期不变）；循环内重读 self.cfg 以支持配置热载入（修 P2-6）
+        if not self.cfg.monitored_coins.enabled or self.cfg.monitored_coins.vol_board_sec <= 0:
             return
         from .monitor.volatility_monitor import VolatilityMonitor  # noqa: PLC0415
         from .monitor.volatility_regime_tracker import VolatilityRegimeTracker  # noqa: PLC0415
         tracker = VolatilityRegimeTracker()
         await asyncio.sleep(120.0)   # 等采集器填 DB
         while not self._stopping:
+            mc = self.cfg.monitored_coins   # 每轮重读：_reload_config 替换 self.cfg 后即时生效
             try:
                 coins = self.store.get_monitored_coins()
                 if coins:
@@ -418,10 +419,10 @@ class PeriodicTasksMixin:
                     if card:
                         print(card)
                         self._push_harmonic(card)   # 独立 TA 通道
-                    events = tracker.update(rows, now)          # 新增：突破检测
+                    events = tracker.update(rows, now)          # 波动扩张确认检测
                     bo = tracker.render(events, now)
                     if bo:
-                        print(bo); self._push_harmonic(bo)      # 新增：突破告警推送
+                        print(bo); self._push_harmonic(bo)      # 扩张确认推送
             except Exception as exc:  # noqa: BLE001
                 log.warning("波动追踪板推送失败: %s", exc)
             await asyncio.sleep(mc.vol_board_sec)

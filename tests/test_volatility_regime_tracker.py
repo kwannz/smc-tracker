@@ -125,7 +125,10 @@ def test_render_nonempty_contains_coin():
     assert events
     rendered = tracker.render(events, now_ms=now + 7_200_000)
     assert "DOGE" in rendered
-    assert "突破" in rendered or "放量" in rendered
+    # 实质断言(修 P2-10 恒真 OR)：扩张确认头 + 放量行 + 速度数值都在
+    assert "扩张确认" in rendered
+    assert "放量" in rendered
+    assert "2.1" in rendered  # velocity 数值渲染
 
 
 def test_render_empty_returns_empty_string():
