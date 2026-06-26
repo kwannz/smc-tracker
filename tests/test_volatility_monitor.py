@@ -360,6 +360,29 @@ def test_market_regime_empty():
     assert mr["n"] == 0 and mr["label"] == ""
 
 
+def test_market_regime_term_breadth():
+    """市场级期限结构广度：主导倒挂时 label 追加'近端应激 N/M币'，term 计数正确。"""
+    rows = [
+        {"coin": "A", "by_tf": {"15m": {"regime": "扩张", "pd_zone": "均衡"}},
+         "term": {"shape": "倒挂"}},
+        {"coin": "B", "by_tf": {"15m": {"regime": "扩张", "pd_zone": "均衡"}},
+         "term": {"shape": "倒挂"}},
+        {"coin": "C", "by_tf": {"15m": {"regime": "常态", "pd_zone": "均衡"}},
+         "term": {"shape": "平坦"}},
+    ]
+    mr = market_regime(rows)
+    assert mr["term"] == {"倒挂": 2, "平坦": 1, "顺挂": 0}
+    assert "近端应激" in mr["label"] and "2/3币" in mr["label"]
+
+
+def test_market_regime_term_absent_keeps_label():
+    """rows 无 term 键(向后兼容) → 不追加期限广度，label 仅含 regime/PD。"""
+    rows = [{"coin": "A", "by_tf": {"15m": {"regime": "压缩", "pd_zone": "折价"}}}]
+    mr = market_regime(rows)
+    assert mr["term"] == {"倒挂": 0, "平坦": 0, "顺挂": 0}
+    assert "应激" not in mr["label"] and "主导" not in mr["label"]
+
+
 def test_mtf_alignment_all_up():
     """各周期速度同向上 → 多头一致，aligned=total。"""
     by_tf = {"15m": {"velocity": 1.0}, "1H": {"velocity": 2.0}, "4H": {"velocity": 0.5}}

@@ -158,20 +158,31 @@ def market_regime(rows: list[dict]) -> dict:
     """
     rc = {"压缩": 0, "扩张": 0, "常态": 0}
     pc = {"折价": 0, "溢价": 0, "均衡": 0}
+    tc = {"倒挂": 0, "平坦": 0, "顺挂": 0}   # 期限结构广度(按币计,非按 cell)
     n = 0
     for r in rows:
         for _tf, m in r.get("by_tf", {}).items():
             n += 1
             rc[m.get("regime", "常态")] = rc.get(m.get("regime", "常态"), 0) + 1
             pc[m.get("pd_zone", "均衡")] = pc.get(m.get("pd_zone", "均衡"), 0) + 1
+        sh = (r.get("term") or {}).get("shape")
+        if sh in tc:
+            tc[sh] += 1
     if n == 0:
-        return {"n": 0, "regime": rc, "pd": pc, "label": ""}
+        return {"n": 0, "regime": rc, "pd": pc, "term": tc, "label": ""}
     reg_dom = max(rc, key=lambda k: rc[k])
     pd_dom = max(pc, key=lambda k: pc[k])
     reg_lbl = {"压缩": "蓄势(压缩)", "扩张": "放量(扩张)", "常态": "常态"}[reg_dom]
     pd_lbl = {"折价": "普遍折价(区间下半段)", "溢价": "普遍溢价(区间上半段)", "均衡": "均衡"}[pd_dom]
     label = f"{reg_lbl} {rc[reg_dom]}/{n} · {pd_lbl} {pc[pd_dom]}/{n}"
-    return {"n": n, "regime": rc, "pd": pc, "label": label}
+    # 期限结构广度：仅在主导为可操作的倒挂/顺挂时追加(全市场近端是否普遍应激)
+    nt = sum(tc.values())
+    if nt:
+        td = max(tc, key=lambda k: tc[k])
+        if td != "平坦":
+            tlbl = {"倒挂": "近端应激(期限倒挂)", "顺挂": "远端主导(期限顺挂)"}[td]
+            label += f" · {tlbl} {tc[td]}/{nt}币"
+    return {"n": n, "regime": rc, "pd": pc, "term": tc, "label": label}
 
 
 # 多周期一致性阈值：主导方向占比 ≥ 此值才判明确多/空，否则分歧
