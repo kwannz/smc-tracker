@@ -189,10 +189,10 @@ class EventHandlersMixin:
 
     def _on_closed_candle(self, coin: str, candle) -> None:
         self._last_close[coin] = candle.c
-        # 维护近 K 线缓冲 → 暴涨暴跌实时预警
+        # 维护近 K 线缓冲 → 暴涨暴跌实时预警 + KNN/TA 特征(用户#:KNN 需 2000 bar 训练集)
         buf = self._candles.setdefault(coin, [])
         buf.append(candle)
-        if len(buf) > 400:
+        if len(buf) > 2100:                  # 保留 ~2000 bar(KNN feature_matrix 训练集;DB 滚动 3000 充足)
             del buf[:100]
         now = int(time.time() * 1000)
         if now - self._pump_seen.get(coin, 0) >= 1_800_000:   # 30min 冷却
