@@ -21,8 +21,8 @@ def test_bearish_divergence():
 
 def test_pred_kind_splits_squeeze_from_distribution():
     """#176 生产 alpha 验证:背离落预测表的 kind 按方向**拆分**,使 accuracy_report/efficacy
-    能独立审判 #170 的不对称 edge——逼空(bullish,实测+0.83pp迹象)与分销(bearish,~0)分桶,
-    不再混记 '背离' 用噪声稀释信号。单一真相源(两条生产路径共用)。"""
+    能独立审判逼空(bullish)与分销(bearish)——#170 "+0.83pp" edge 已 #193 降级 unverified(小coin样本同#186/#187),
+    拆 kind 保留仅为生产持续审判(以 efficacy 实盘为准),不再混记 '背离'。单一真相源(两条生产路径共用)。"""
     from smc_tracker.signals.divergence import pred_kind
     assert pred_kind("bullish") == "逼空背离"
     assert pred_kind("bearish") == "分销背离"

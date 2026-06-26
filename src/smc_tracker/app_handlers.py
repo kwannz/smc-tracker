@@ -349,10 +349,10 @@ class EventHandlersMixin:
         if sig.ts - self._div_seen.get(key, 0) < self._DIV_COOLDOWN_MS:
             return
         self._div_seen[key] = sig.ts
-        # 实测 edge 标注(#170 不对称样本外):吸筹/逼空(bullish)超基线+0.83pp有迹象;分销(bearish)弱~0。
-        # 让用户即知该信哪侧——透明(#166)而非把噪声与信号对称地一起推。
-        edge_mark = (" ✅实测有edge(逼空+0.83pp,小样本)" if sig.direction == "bullish"
-                     else " ⚠️分销侧实测弱(~0,当弱提示)")
+        # #193 降级:#170 逼空"+0.83pp"与 #186/#187 同类(小coin样本前瞻收益,n=17),该类已两次币内配对证伪翻转→
+        # edge 未确立,不再宣称"✅有edge";拆 kind 仅为生产持续审判,以 efficacy 实盘命中率为准,两侧均当弱上下文。
+        edge_mark = (" (逼空背离·edge未确立#193,看实盘efficacy)" if sig.direction == "bullish"
+                     else " (分销背离·实测弱~0)")
         # #176:落表/efficacy label 同走拆分 kind(逼空背离/分销背离),让实盘独立审判不对称 edge,
         # 闭合"展示已减噪(edge_mark)、验证仍混桶"的裂缝。pred_kind 为两生产路径共用单一真相源。
         pk = pred_kind(sig.direction)
