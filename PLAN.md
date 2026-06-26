@@ -214,6 +214,13 @@ D 多空符号 · E 真实 userFills 解析/分类自洽 · F WS webData2==REST 
 > 据 codex-loop 反幻觉纪律保持开放，区别于「已实现但 backlog 写保守」的项（已核实证据后闭合）。
 
 ## 迭代日志
+- 2026-06-26 #127: **WS 重连风暴根因修复(数据摄入地基)+ 工作树异常恢复**（/loop；Opus 直接执行）。
+  ① **环境异常**:外部进程(同步/挂载)把磁盘工作树整体还原成 loop#101 旧快照(46删+66改),Desktop 路径 TCC 权限拒绝。
+  git HEAD(#126)完整,逐项确证工作树无独有内容后 `git restore --source=HEAD` 整树恢复,全量 2419 passed 验证零丢失。
+  ② **WS 重连风暴修复**:审计 `hyperliquid/ws_client.py`(数据摄入地基)发现 `run()` 在「连接成功」即重置退避
+  `backoff=1.0`,server 接受连接后立即断(限流/维护)时退避被反复清零→1s 间隔无限重连风暴(自我 DoS)。
+  **修复**:抽纯函数 `_reconnect_backoff`——仅连接存活≥`_STABLE_CONN_SEC`(30s)才重置,否则继续指数增长。
+  TDD 4 例(稳定重置/瞬断增长防风暴/封顶/边界)。全量 **2423 passed, 2 skipped**(零回归)。
 - 2026-06-26 #126: **微观价格/OFI 数学审计(领先信号数学内核)——核心正确,补诚实/惯例/覆盖**（/loop；Opus 直接执行）。
   审计 `microprice.py`(book_intent 背后的 OFI/微观价格数学)。**正向结论**:对照 Cont-Kukanov-Stoikov 2014 OFI
   (e_b/e_a 三分支 + OFI=e_b−e_a)与 imbalance 加权中价定义,**数学正确**;ofi_delta 6 分支已有手算 golden 测试。

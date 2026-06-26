@@ -26,6 +26,24 @@ log = logging.getLogger("hl.ws")
 # handler 签名：handler(data: Any, recv_ns: int) -> None | Awaitable[None]
 Handler = Callable[[Any, int], Any]
 
+# 连接存活 ≥ 此秒数才视为「稳定」→ 断开后重置退避；否则继续指数增长（防重连风暴）
+_STABLE_CONN_SEC = 30.0
+
+
+def _reconnect_backoff(
+    conn_elapsed_sec: float, current_backoff: float, max_backoff: float,
+    stable_sec: float = _STABLE_CONN_SEC,
+) -> tuple[float, float]:
+    """重连退避决策（纯函数，可测）：返回 (本次 sleep 秒数, 下次退避基数)。
+
+    根因修复（防重连风暴）：**不在「连接成功」时重置退避，而在「连接稳定」时**。
+    server 接受连接后立即断（限流/维护）的失败模式下，若每次连上即重置退避，会形成
+    1s 间隔无限重连风暴（自我 DoS）。本函数仅当连接存活 ≥ stable_sec 才重置为 1.0，
+    否则保持 current_backoff 继续指数增长（×2，封顶 max_backoff）。
+    """
+    base = 1.0 if conn_elapsed_sec >= stable_sec else current_backoff
+    return base, min(base * 2.0, max_backoff)
+
 
 @dataclass(frozen=True, slots=True)
 class Subscription:
@@ -92,6 +110,7 @@ class HyperliquidWSClient:
         self._running = True
         backoff = 1.0
         while self._running:
+            conn_start = time.monotonic()    # 本轮连接(含 connect 尝试)起始，用于稳定性判定
             try:
                 async with websockets.connect(
                     self.ws_url,
@@ -101,7 +120,8 @@ class HyperliquidWSClient:
                 ) as conn:
                     self._conn = conn
                     self._connected_evt.set()
-                    backoff = 1.0
+                    # 不在此处重置退避——避免「连上即断」时退避被反复清零形成重连风暴；
+                    # 退避在断开后按连接存活时长决定（见 _reconnect_backoff）。
                     log.info("WS 已连接 %s", self.ws_url)
                     await self._resubscribe_all()
                     ping_task = asyncio.create_task(self._ping_loop())
@@ -119,9 +139,12 @@ class HyperliquidWSClient:
                 self._connected_evt.clear()
             if not self._running:
                 break
-            await asyncio.sleep(backoff)
-            backoff = min(backoff * 2, self.reconnect_max_backoff_sec)
-            log.info("WS 重连中（退避 %.1fs）…", backoff)
+            # 稳定连接(存活≥_STABLE_CONN_SEC)断开 → 退避重置；瞬断 → 继续指数增长(防风暴)
+            elapsed = time.monotonic() - conn_start
+            sleep_sec, backoff = _reconnect_backoff(
+                elapsed, backoff, self.reconnect_max_backoff_sec)
+            log.info("WS 重连中（退避 %.1fs，本轮连接存活 %.0fs）…", sleep_sec, elapsed)
+            await asyncio.sleep(sleep_sec)
 
     async def stop(self) -> None:
         self._running = False
