@@ -213,6 +213,11 @@ D 多空符号 · E 真实 userFills 解析/分类自洽 · F WS webData2==REST 
 > 据 codex-loop 反幻觉纪律保持开放，区别于「已实现但 backlog 写保守」的项（已核实证据后闭合）。
 
 ## 迭代日志
+- 2026-06-26 #119: **db.py K线方法拆 CandleStoreMixin(880→747，达标≤800)**（/loop；Opus 直接执行）。
+  6 个 K 线读写方法(upsert_candles/prune_candles_to/get_candles/candles_for_draw/count_candles/latest_candle_ms，
+  ~136 行，仅依赖 self.conn 零其它 Store 耦合)抽成 `storage/db_candles.py::CandleStoreMixin`，`Store(CandleStoreMixin)`
+  继承(MRO 解析 self.conn)。教科书"胖类→mixin"重构。验证 6 方法经 Store 实例全可达且正确。
+  db.py **880→747**(达标)。≤800 剩余违规：app.py 2010 / exchange_flow.py 826。全量 **2363 passed, 2 skipped**(零回归)。
 - 2026-06-26 #118: **多周期速度一致性 mtf_alignment(MTF 趋势对齐=确信度)**（/loop；Opus 直接执行，Sonnet 额度耗尽）。
   `mtf_alignment(by_tf)` 纯函数：统计各周期 velocity 同向占比 → bias(多/空/分歧,≥70% 占比判明确)+aligned/total+score；
   接入 rank() 每币 `align` + CLI 每币标题行 🟢多/🔴空(N/M周期一致) + dashboard 矩阵币格。
