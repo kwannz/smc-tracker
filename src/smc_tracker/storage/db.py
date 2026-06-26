@@ -15,6 +15,8 @@ from __future__ import annotations
 
 import logging
 import sqlite3
+import threading
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -32,6 +34,10 @@ class Store(CandleStoreMixin):
         # check_same_thread=False：允许 asyncio.to_thread 跨线程 flush(WAL 下安全)
         self.conn = sqlite3.connect(str(p), isolation_level=None,   # autocommit；显式控制事务
                                     check_same_thread=False)
+        # 写事务串行锁(修审计P1)：sqlite3 事务态是**连接级**，多线程(to_thread flush + 事件循环
+        # 同步写)在共享连接上并发 BEGIN..COMMIT 会冲突('cannot start a transaction within a
+        # transaction'/抢提交)。所有手写事务经 _txn() 持此 RLock 串行化。
+        self._write_lock = threading.RLock()
         self.conn.execute("PRAGMA journal_mode=WAL;")
         self.conn.execute("PRAGMA synchronous=NORMAL;")
         self.conn.execute("PRAGMA foreign_keys=ON;")
@@ -88,6 +94,22 @@ class Store(CandleStoreMixin):
         for name, typ in cols.items():
             if name not in existing:
                 self.conn.execute(f"ALTER TABLE {table} ADD COLUMN {name} {typ}")
+
+    @contextmanager
+    def _txn(self):
+        """串行化的写事务(修审计P1)：持 RLock → BEGIN → yield → COMMIT；异常 ROLLBACK 并重抛。
+
+        单连接事务态是连接级，跨线程并发 BEGIN 会冲突。所有手写事务方法改用 `with self._txn():`，
+        把 STMTS 放在 with 体内(缩进不变)，由本管理器统一加锁+BEGIN/COMMIT/ROLLBACK。RLock 可重入。
+        """
+        with self._write_lock:
+            self.conn.execute("BEGIN")
+            try:
+                yield
+                self.conn.execute("COMMIT")
+            except Exception:
+                self.conn.execute("ROLLBACK")
+                raise
 
     def pragma(self, name: str) -> int | str:
         """读取指定 PRAGMA 的当前值（供测试断言 PRAGMA 生效；纯读，零孤儿——被 test 引用即接入）。"""
@@ -192,17 +214,12 @@ class Store(CandleStoreMixin):
         rows_list = list(rows)
         if not rows_list:
             return 0
-        try:
-            self.conn.execute("BEGIN")
+        with self._txn():
             self.conn.executemany(
                 "INSERT INTO sm_events(ts,type,address,label,coin,side,sz,px,notional,"
                 "pos_before,pos_after,closed_pnl,taker) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 rows_list,
             )
-            self.conn.execute("COMMIT")
-        except Exception:
-            self.conn.execute("ROLLBACK")
-            raise
         return len(rows_list)
 
     # ---- 信号 ----
@@ -229,16 +246,11 @@ class Store(CandleStoreMixin):
         """
         if not rows:
             return
-        try:
-            self.conn.execute("BEGIN")
+        with self._txn():
             self.conn.execute("DELETE FROM whale_positions")
             self.conn.executemany(
                 "INSERT INTO whale_positions(address,coin,szi,notional,label,ts) "
                 "VALUES(?,?,?,?,?,?)", rows)
-            self.conn.execute("COMMIT")
-        except Exception:
-            self.conn.execute("ROLLBACK")
-            raise
 
     def insert_position_change(self, row: tuple) -> None:
         """row: (ts,address,label,coin,kind,direction,prev_notional,new_notional)"""
@@ -374,8 +386,7 @@ class Store(CandleStoreMixin):
             return r
 
         normalized = [_normalize(r) for r in rows_list]
-        try:
-            self.conn.execute("BEGIN")
+        with self._txn():
             self.conn.executemany(
                 "INSERT INTO harmonic_setups("
                 "ts,coin,tf,kind,pattern,direction,price,"
@@ -387,10 +398,6 @@ class Store(CandleStoreMixin):
                 "?,?,?,?,?,?,?,?,?,?)",
                 normalized,
             )
-            self.conn.execute("COMMIT")
-        except Exception:
-            self.conn.execute("ROLLBACK")
-            raise
 
     def recent_harmonic_setups(self) -> list[tuple]:
         """返回每币每周期最新行（per-coin per-tf latest），按 confidence DESC。
@@ -442,17 +449,12 @@ class Store(CandleStoreMixin):
         rows = list(items)
         if not rows:
             return
-        try:
-            self.conn.execute("BEGIN")
+        with self._txn():
             self.conn.executemany(
                 "INSERT INTO harmonic_collected(coin,symbol,added_ts) VALUES(?,?,?) "
                 "ON CONFLICT(coin) DO UPDATE SET symbol=excluded.symbol",
                 rows,
             )
-            self.conn.execute("COMMIT")
-        except Exception:
-            self.conn.execute("ROLLBACK")
-            raise
 
     def get_harmonic_collected(self) -> dict[str, str]:
         """返回收集币 {coin: symbol}。"""
@@ -469,34 +471,24 @@ class Store(CandleStoreMixin):
         rows = list(items)
         if not rows:
             return
-        try:
-            self.conn.execute("BEGIN")
+        with self._txn():
             self.conn.executemany(
                 "INSERT INTO monitored_coins(coin,symbol,added_ts,note) VALUES(?,?,?,?) "
                 "ON CONFLICT(coin) DO UPDATE SET symbol=excluded.symbol, note=excluded.note",
                 rows,
             )
-            self.conn.execute("COMMIT")
-        except Exception:
-            self.conn.execute("ROLLBACK")
-            raise
 
     def remove_monitored_coins(self, coins: Iterable[str]) -> int:
         """从清单删除指定 coin，返回删除行数。空安全返回 0。"""
         cs = [c for c in coins if c]
         if not cs:
             return 0
-        try:
-            self.conn.execute("BEGIN")
+        with self._txn():
             cur = self.conn.executemany(
                 "DELETE FROM monitored_coins WHERE coin=?", [(c,) for c in cs]
             )
             n = cur.rowcount if cur.rowcount is not None and cur.rowcount >= 0 else 0
-            self.conn.execute("COMMIT")
-            return n
-        except Exception:
-            self.conn.execute("ROLLBACK")
-            raise
+        return n
 
     def get_monitored_coins(self) -> dict[str, str]:
         """返回监控清单 {coin: symbol}。"""
@@ -684,8 +676,7 @@ class Store(CandleStoreMixin):
             return r
 
         normalized = [_normalize(r) for r in rows]
-        try:
-            self.conn.execute("BEGIN")
+        with self._txn():
             self.conn.executemany(
                 "INSERT OR REPLACE INTO wallet_positions_full"
                 "(address,coin,direction,szi,entry_px,position_value,"
@@ -693,10 +684,6 @@ class Store(CandleStoreMixin):
                 "open_ms,last_close_ms,hold_sec) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 normalized,
             )
-            self.conn.execute("COMMIT")
-        except Exception:
-            self.conn.execute("ROLLBACK")
-            raise
 
     def latest_wallet_positions(self, address: str, limit: int = 100) -> list[tuple]:
         """取该地址最新一个 ts 的所有持仓行，按 abs(position_value) DESC。

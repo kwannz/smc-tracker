@@ -163,6 +163,32 @@ def test_insert_sm_events_batch_writes(tmp_path):
     assert first[12] == 1                 # taker
 
 
+def test_concurrent_writes_no_txn_conflict_no_loss(tmp_path):
+    """修审计P1:共享连接上多线程并发 BEGIN..COMMIT 不抛 OperationalError 且不丢数据(_txn 写锁串行化)。
+
+    无锁时两线程并发手写事务会偶发 'cannot start a transaction within a transaction'/抢提交丢行。
+    两线程各 400 次单行批量写,断言:零异常 + 行数精确=800(无静默丢失)。
+    """
+    s = _make_store(tmp_path)
+    assert hasattr(s, "_write_lock") and hasattr(s, "_txn")   # 锁与事务管理器存在
+    errors: list[Exception] = []
+    N = 400
+
+    def hammer(base: int) -> None:
+        try:
+            for i in range(N):
+                s.insert_sm_events_batch([_fake_sm_row(base + i)])
+        except Exception as exc:  # noqa: BLE001
+            errors.append(exc)
+
+    t1 = threading.Thread(target=hammer, args=(0,))
+    t2 = threading.Thread(target=hammer, args=(1_000_000,))
+    t1.start(); t2.start(); t1.join(); t2.join()
+    assert not errors, f"并发写事务抛异常(锁未生效?): {errors[:2]}"
+    cnt = s.conn.execute("SELECT COUNT(*) FROM sm_events").fetchone()[0]
+    assert cnt == 2 * N, f"应写入 {2 * N} 行,实际 {cnt}(并发丢数据?)"
+
+
 def test_sm_buffer_deferred_write(tmp_path):
     """模拟热路径 append + flush 模式：append N 次后表仍空，flush 后有 N 行。"""
     s = _make_store(tmp_path)

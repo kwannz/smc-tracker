@@ -37,8 +37,7 @@ class CandleStoreMixin:
         """
         if max_bars <= 0:
             return 0
-        try:
-            self.conn.execute("BEGIN")
+        with self._txn():   # 复用 Store._txn 写锁串行化(修审计P1并发事务)
             cur = self.conn.execute(
                 "DELETE FROM bitget_candles WHERE rowid IN ("
                 "  SELECT rowid FROM ("
@@ -50,11 +49,7 @@ class CandleStoreMixin:
                 (max_bars,),
             )
             n = cur.rowcount if cur.rowcount and cur.rowcount > 0 else 0
-            self.conn.execute("COMMIT")
-            return n
-        except Exception:
-            self.conn.execute("ROLLBACK")
-            raise
+        return n
 
     def get_candles(self, coin: str, tf: str, limit: int = 1000,
                     since_ms: int | None = None) -> list:
