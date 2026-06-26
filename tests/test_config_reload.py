@@ -74,6 +74,22 @@ def test_diff_config_telegram():
     assert "telegram.chat_id" in keys
 
 
+def test_diff_config_masks_bot_token_no_plaintext_leak():
+    """bot_token/webhook 变更**不得明文出现在变更消息**(该消息会落日志+推送通知渠道，修审计 P1 泄露)。"""
+    old = Config()
+    new = Config()
+    old.telegram.bot_token = "123456:AAH-OLD-SECRET-abcdef"
+    new.telegram.bot_token = "789012:BBI-NEW-SECRET-uvwxyz"
+    old.output.webhook_url = "https://hooks.example.com/OLD-SECRET-PATH-1111"
+    new.output.webhook_url = "https://hooks.example.com/NEW-SECRET-PATH-2222"
+    blob = "\n".join(diff_config(old, new))
+    # 明文密钥/路径绝不出现；只允许末4位掩码
+    assert "AAH-OLD-SECRET" not in blob and "BBI-NEW-SECRET" not in blob
+    assert "OLD-SECRET-PATH" not in blob and "NEW-SECRET-PATH" not in blob
+    assert "***" in blob                              # 确实走了脱敏分支
+    assert "telegram.bot_token" in blob               # 仍报告该字段变更(只是脱敏)
+
+
 def test_diff_config_llm_enabled():
     """开启 llm.enabled → 检测到变更。"""
     old = Config()

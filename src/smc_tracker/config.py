@@ -547,10 +547,12 @@ def diff_config(old: "Config", new: "Config") -> list[str]:
 
     # output
     _cmp(changes, "output.console", old.output.console, new.output.console)
-    _cmp(changes, "output.webhook_url", old.output.webhook_url, new.output.webhook_url)
+    _cmp(changes, "output.webhook_url", old.output.webhook_url, new.output.webhook_url,
+         sensitive=True)
 
     # telegram
-    _cmp(changes, "telegram.bot_token", old.telegram.bot_token, new.telegram.bot_token)
+    _cmp(changes, "telegram.bot_token", old.telegram.bot_token, new.telegram.bot_token,
+         sensitive=True)
     _cmp(changes, "telegram.chat_id", old.telegram.chat_id, new.telegram.chat_id)
 
     # llm
@@ -568,7 +570,20 @@ def diff_config(old: "Config", new: "Config") -> list[str]:
     return changes
 
 
-def _cmp(changes: list[str], key: str, old_val: Any, new_val: Any) -> None:
-    """辅助：若新旧值不同则追加变更描述。"""
+def _mask_secret(v: Any) -> str:
+    """敏感值脱敏：非空→'***'+末4位，空→'(空)'。**永不输出明文密钥**(修审计 P1 泄露)。"""
+    s = str(v) if v is not None else ""
+    if not s:
+        return "(空)"
+    return "***" + s[-4:] if len(s) > 4 else "***"
+
+
+def _cmp(changes: list[str], key: str, old_val: Any, new_val: Any,
+         sensitive: bool = False) -> None:
+    """辅助：新旧值不同则追加变更描述。sensitive=True 的密钥/webhook 脱敏——热加载变更消息会
+    print 落日志且 _push 推到通知渠道，明文 token 会泄露(审计 P1)，故敏感字段只报掩码。"""
     if old_val != new_val:
-        changes.append(f"{key}: {old_val!r}→{new_val!r}")
+        if sensitive:
+            changes.append(f"{key}: {_mask_secret(old_val)}→{_mask_secret(new_val)}")
+        else:
+            changes.append(f"{key}: {old_val!r}→{new_val!r}")

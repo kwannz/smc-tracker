@@ -573,6 +573,11 @@ class TradingSystem(EventHandlersMixin, PeriodicTasksMixin, PeriodicDataMixin):
         # 谐波历史 + BB 压力层：保留 7 天供历史回看与多周期 S/R（v2 新增）
         ("harmonic_setups",      "ts",       7 * 86_400_000),
         ("bb_levels",            "ts",       7 * 86_400_000),
+        # append-only 时序表补裁剪（修审计 P2：原无保留→长跑无界增长）
+        ("hl_orderbook_walls",   "ts",       7  * 86_400_000),
+        ("okx_perp",             "ts",       7  * 86_400_000),
+        ("okx_liquidations",     "ts",       7  * 86_400_000),
+        ("okx_signals",          "ts",       30 * 86_400_000),
     ]
 
     # K 线滚动保留：每 (coin,tf) 保留最新 N 根（历史+实时统一上限；用户#：每周期 3000 bar）
