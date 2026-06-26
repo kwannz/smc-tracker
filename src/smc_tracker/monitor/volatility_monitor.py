@@ -207,7 +207,7 @@ def vol_metrics(h: Any, l: Any, c: Any, *,
     返回：rv(已实现波动率=对数收益σ,%)、atr_pct(Wilder ATR/价,%；开源标准 RMA 平滑)、range_pct(当前 bar 区间,%)、
          velocity(近窗%变化=1 阶导)、accel(速度差=2 阶导，前序窗不足时=0 不虚增)、
          vol_ratio(短窗σ/长窗σ)、regime(压缩/扩张/常态=波动状态，回望确认非预测)、
-         ewma_vol(RiskMetrics EWMA 预期波动水平,#154)、garch_vol(GARCH(1,1)一步预测,主前瞻量,#179 胜 EWMA +0.07)。
+         ewma_vol(RiskMetrics EWMA 预期波动水平,#154)、garch_vol(GARCH(1,1)一步预测,主前瞻量,#179 胜 EWMA·周期依赖#180:15m+0.078)。
     数据含 NaN/inf 时返回 {}（数据质量守卫，避免 NaN 污染排名）。
     """
     c = np.asarray(c, dtype=float)
@@ -239,7 +239,7 @@ def vol_metrics(h: Any, l: Any, c: Any, *,
             "vol_ratio": vol_ratio, "regime": regime,
             "vol_pct": vol_percentile(c),    # 历史波动百分位(HVP，-1=数据不足)
             "ewma_vol": ewma_vol(c),         # RiskMetrics EWMA 预期波动水平(#154)
-            "garch_vol": garch_vol(c)}       # GARCH(1,1) 一步预测(均值回归,#179 各视野胜 EWMA +0.07,主前瞻量)
+            "garch_vol": garch_vol(c)}       # GARCH(1,1) 一步预测(均值回归,主前瞻量;胜 EWMA 周期依赖#180:15m+0.078/4H·1D+0.02/1H≈中性)
 
 
 def pdarray(h: Any, l: Any, c: Any, *, win: int = _PD_WIN, band: float = 0.03) -> dict:
@@ -617,7 +617,7 @@ class VolatilityMonitor:
                 if vp >= 0:
                     vp_mark = "🔥" if vp >= 0.9 else ("❄️" if vp <= 0.1 else "")
                     vp_str = f" HVP{vp * 100:.0f}%{vp_mark}"
-                # 前瞻波动量:GA=GARCH(1,1)一步预测(主前瞻量,#179 各视野胜 EWMA +0.07)、EW=EWMA(#154)。
+                # 前瞻波动量:GA=GARCH(1,1)一步预测(主前瞻量,胜 EWMA 周期依赖#180:15m+0.078)、EW=EWMA(#154)。
                 # 均为**水平**预测(非方向、非趋势);#157 实测"预测 vs σ 升/降"对未来波动无净预测力,勿读作续升。
                 ga = m.get("garch_vol", -1.0)
                 ew = m.get("ewma_vol", -1.0)
