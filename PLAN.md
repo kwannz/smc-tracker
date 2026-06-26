@@ -214,6 +214,14 @@ D 多空符号 · E 真实 userFills 解析/分类自洽 · F WS webData2==REST 
 > 据 codex-loop 反幻觉纪律保持开放，区别于「已实现但 backlog 写保守」的项（已核实证据后闭合）。
 
 ## 迭代日志
+- 2026-06-26 #160: **「审计每个方位」8方位并行审计编队 → 21确认发现,逐批修复中**（用户指令;Opus编排Workflow+裁决修复）。
+  含外置盘闪断3次(本会话)→ 把源码复制到内置盘稳定副本供编队读(规避卷抖动)→ 重挂载 + diskutil 恢复法。用户授权「3」:推送 origin 离机备份(53提交,单点风险清零)。
+  Workflow:8方位(正确性/诚实§二/健壮/安全/数据/性能并发/架构DRY/测试质量)并行审计→逐发现对抗证伪→Opus裁决。37 agent,29发现,**21确认(0 P0/4 P1/14 P2/3 nit)**。
+  **已修(2批,TDD,全量2453 passed零回归):**
+  ① P1安全:配置热加载diff_config明文bot_token/webhook落日志+推送→泄露;修_cmp脱敏(***末4位)+TDD钉死。
+  ② P2数据:4张append-only时序表(hl_orderbook_walls/okx_perp/okx_liquidations/okx_signals)无保留→无界增长;补_DB_RETAIN(7/7/7/30天)。
+  ③ P1正确:address_dossier avg_hold_sec用'平仓跨度÷笔数'(频率)冒充持仓时长→scalper误判whale;改复用reconstruct真实持仓段+TDD。
+  **待修:** P1 pump_radar(1h标定喂5m,24h标签/命中率张冠李戴) · P1 SQLite多线程共享连接并发事务崩溃 · P2(pump WHITELIST虚高/dump桶混/review 14次COUNT/dashboard N+1死代码/vol板无上限/correlation O(W²)/3处死代码/3处测试skip)。
 - 2026-06-26 #159: **EWMA 优势泛化性验证(逐周期)→ 全周期 better-or-equal,划清适用边界**（/loop；Opus 泛化验证）。
   我把 EWMA 铺到全 7 周期,但 #155 只在 15m 验证过。检验泛化:EWMA vs rv 预测未来波动逐周期(15m/1H/4H/1D,各150币):
   EWMA 优势全为正、从不更差——15m **+0.029**(83%币优)、1H +0.008(70%)、4H **+0.038**(92%)、1D +0.010(**52%≈持平**)。
