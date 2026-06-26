@@ -22,6 +22,19 @@ from dataclasses import dataclass
 from typing import Any, Callable
 
 
+def pred_kind(direction: str) -> str:
+    """背离预测落 predictions 表 / efficacy 学习的 kind——按方向**拆分**(单一真相源,
+    流式+轮询两路径共用)。
+
+    #176:旧实现两侧混记 'background'→'背离',使 accuracy_report/efficacy 的 by_kind 把
+    有 edge 的逼空(bullish,#170 实测超基线+0.83pp 迹象,小样本)与 ~0 的分销(bearish)聚合进
+    同一命中率——噪声稀释信号,实盘永远无法独立确认不对称。拆 kind 后生产分别审判:逼空累积
+    小样本验真、分销持续证实 ~0(efficacy.weight_of 自动给 ~0 侧降权)。展示层早已拆(edge_mark),
+    此处闭合"展示已减噪、验证仍混桶"的裂缝。
+    """
+    return "逼空背离" if direction == "bullish" else "分销背离"
+
+
 @dataclass(slots=True)
 class DivergenceSignal:
     coin: str

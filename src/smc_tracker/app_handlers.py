@@ -10,7 +10,7 @@ from .config import WatchAddress
 from .indicators import analyze as ta_analyze, fmt_analysis
 from .memecoins import normalize
 from .monitor import EventType, SmartMoneyEvent
-from .signals import ConfluenceSignal, ConsensusSignal, DivergenceSignal, PositionChange, Signal
+from .signals import ConfluenceSignal, ConsensusSignal, DivergenceSignal, PositionChange, Signal, pred_kind
 from .smc import LiquidityEngine, StructureEvent, ZoneEngine
 from .util import fmt_hms as _hms
 from .util import fmt_ts as _ts
@@ -351,12 +351,15 @@ class EventHandlersMixin:
         # 让用户即知该信哪侧——透明(#166)而非把噪声与信号对称地一起推。
         edge_mark = (" ✅实测有edge(逼空+0.83pp,小样本)" if sig.direction == "bullish"
                      else " ⚠️分销侧实测弱(~0,当弱提示)")
+        # #176:落表/efficacy label 同走拆分 kind(逼空背离/分销背离),让实盘独立审判不对称 edge,
+        # 闭合"展示已减噪(edge_mark)、验证仍混桶"的裂缝。pred_kind 为两生产路径共用单一真相源。
+        pk = pred_kind(sig.direction)
         msg = (f"[{_ts(sig.ts)}] {sig.fmt()}{self._price_tag(sig.coin)}{edge_mark}"
-               + self.efficacy.label_of("背离"))
+               + self.efficacy.label_of(pk))
         print(msg)
         self._emit("divergence", msg)
         self._record_pred(
-            sig.coin, "背离", "up" if sig.direction == "bullish" else "down"
+            sig.coin, pk, "up" if sig.direction == "bullish" else "down"
         )
 
     def _on_consensus(self, sig: ConsensusSignal) -> None:

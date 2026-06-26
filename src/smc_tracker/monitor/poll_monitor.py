@@ -19,7 +19,7 @@ from ..memecoins import normalize
 from ..models import Side
 from ..review import PredictionReview, fmt_accuracy
 from ..signals import (ConfluenceAggregator, DivergenceDetector, WhaleConsensus,
-                       WhalePositionTracker, positioning)
+                       WhalePositionTracker, positioning, pred_kind)
 from ..storage import Store
 from ..util import to_float
 from .address_analyzer import AddressAnalyzer
@@ -283,7 +283,8 @@ class PollMonitor:
         for s in cons:
             _rec(s.coin, "共识", s.direction)
         for s in divs:
-            _rec(s.coin, "背离", "up" if s.direction == "bullish" else "down")
+            # #176:逼空/分销分 kind 落表,实盘 by_kind 独立审判不对称 edge(#170)
+            _rec(s.coin, pred_kind(s.direction), "up" if s.direction == "bullish" else "down")
         for s in confl:
             _rec(s.coin, "超级", s.direction)
         return total

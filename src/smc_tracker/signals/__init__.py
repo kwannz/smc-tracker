@@ -1,6 +1,6 @@
 """信号引擎：SMC 共振 + CEX⟂DEX 背离 + 多庄共识。"""
 from .engine import Signal, SignalEngine
-from .divergence import DivergenceDetector, DivergenceSignal
+from .divergence import DivergenceDetector, DivergenceSignal, pred_kind
 from .consensus import CoinPositioning, ConsensusSignal, WhaleConsensus, positioning
 from .position_tracker import PositionChange, WhalePositionTracker
 from .confluence import ConfluenceAggregator, ConfluenceSignal
@@ -23,7 +23,7 @@ from .microprice import OFITracker, queue_imbalance, micro_price, ofi_delta
 # 共享聚合 helper：读 11 张信号表 → 统一行结构 → 按 ts 倒序
 from .all_signals import collect_all_signals
 
-__all__ = ["Signal", "SignalEngine", "DivergenceDetector", "DivergenceSignal",
+__all__ = ["Signal", "SignalEngine", "DivergenceDetector", "DivergenceSignal", "pred_kind",
            "ConsensusSignal", "CoinPositioning", "WhaleConsensus", "positioning",
            "PositionChange", "WhalePositionTracker",
            "ConfluenceAggregator", "ConfluenceSignal", "TASignal",

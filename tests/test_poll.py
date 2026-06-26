@@ -109,6 +109,31 @@ def test_poll_records_and_evaluates_predictions():
     s.close()
 
 
+def test_poll_divergence_kind_split_by_direction():
+    """#176 轮询路径:逼空/分销背离落 predictions 用**不同 kind**,让实盘 accuracy_report
+    按 by_kind 独立审判不对称 edge(#170)——旧实现两侧混记 '背离',分销噪声稀释逼空信号。"""
+    from types import SimpleNamespace
+
+    from smc_tracker.config import Config
+    from smc_tracker.monitor.poll_monitor import PollMonitor, _make_price_of
+
+    s = Store(Path(tempfile.mkdtemp()) / "div.db")
+    pm = PollMonitor(Config(), s)
+    now = 1_000_000_000_000
+    price_of = _make_price_of({"BTC": 60_000.0, "ETH": 3_000.0})
+    divs = [SimpleNamespace(coin="BTC", direction="bullish"),    # 逼空→up
+            SimpleNamespace(coin="ETH", direction="bearish")]    # 分销→down
+    pm._record_predictions({}, [], divs, [], price_of, now)
+    kinds = {k for (k,) in s.conn.execute("SELECT DISTINCT kind FROM predictions")}
+    assert kinds == {"逼空背离", "分销背离"}     # 不再混记为「背离」
+    btc = s.conn.execute(
+        "SELECT DISTINCT direction FROM predictions WHERE kind='逼空背离'").fetchone()[0]
+    eth = s.conn.execute(
+        "SELECT DISTINCT direction FROM predictions WHERE kind='分销背离'").fetchone()[0]
+    assert btc == "up" and eth == "down"
+    s.close()
+
+
 def test_poll_multi_horizon_recording():
     """MTF 多时间段：7 个 TF 各落一条；5m TF 先到期仅评 1 条；报告按水平线分解正确。"""
     from types import SimpleNamespace

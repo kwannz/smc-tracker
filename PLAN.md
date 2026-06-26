@@ -214,6 +214,14 @@ D 多空符号 · E 真实 userFills 解析/分类自洽 · F WS webData2==REST 
 > 据 codex-loop 反幻觉纪律保持开放，区别于「已实现但 backlog 写保守」的项（已核实证据后闭合）。
 
 ## 迭代日志
+- 2026-06-26 #176: **生产 alpha 验证起步:逼空/分销背离落预测表拆 kind,实盘独立审判不对称 edge**（/loop;用户选「1 生产alpha验证」;TDD)。
+  缺口:`_on_divergence`/poll `_rec` 两条生产路径都把逼空(bullish,#170实测+0.83pp迹象)与分销(bearish,~0)混记 kind="背离",
+  使 accuracy_report/efficacy 的 by_kind 用分销噪声稀释逼空信号→实盘永远无法独立确认 #170 不对称(展示层早已拆edge_mark,验证层仍混桶)。
+  修:`signals/divergence.py` 加纯函数 `pred_kind(direction)`(单一真相源,bullish→逼空背离/else→分销背离),signals 导出,
+  流式 app_handlers `_on_divergence`(label_of+_record_pred)与轮询 poll_monitor `_rec` 双路径共用。生产中逼空累积前向小样本验真、
+  分销持续证实~0(efficacy.weight_of 自动给~0侧降权)。TDD:test_divergence(helper)+test_poll(by_kind拆分);全量 2460 passed(+2)。
+  对齐:这是「生产 alpha 验证」第一步——把 OOS 结论(尤其n=17小样本的逼空)放进真实流逝的时间里自证;延续减噪纪律到验证层。
+
 - 2026-06-26 #175: **整体性收口核查:50+轮campaign后系统仍完整自洽(800行守/无孤儿/全量绿)**（/loop;Opus 完成态核查)。
   连续50+轮(算法验证#143-148/谐波pump验证#162-166/审计#160-161/预测审计#167-171/减噪操作化#169-174)往大量文件加注释+代码后,核查累积债务:
   ①800行不变量守住(无文件超800,最大app.py786/harmonic740/db734;诚实注释成本未越红线);②新增9函数(_txn/ewma_vol/pick_coins/_conf_tier等)全被引用无孤儿;③全量2458 passed。
