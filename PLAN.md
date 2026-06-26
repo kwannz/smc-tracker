@@ -213,6 +213,12 @@ D 多空符号 · E 真实 userFills 解析/分类自洽 · F WS webData2==REST 
 > 据 codex-loop 反幻觉纪律保持开放，区别于「已实现但 backlog 写保守」的项（已核实证据后闭合）。
 
 ## 迭代日志
+- 2026-06-26 #117: **cli.py handler 拆分到 cli_commands.py(928→590，两文件均≤800)**（Sonnet 执行/Opus 复核收尾）。
+  13 个 `_cmd_*` handler 迁出 → `cli_commands.py`(362)；cli.py import 回来(零孤儿)。**关键坑(Sonnet 识别)**：
+  `_cmd_poll`/`_cmd_evaluate`/`_cmd_cycle` 依赖被测试 `patch("smc_tracker.cli._poll_once_async")` 的 async helper，
+  裸全局名查找须同命名空间 → 这 3 个 handler + helper **留 cli.py**，其余迁出(否则 patch 失效破测试)。
+  Sonnet 因会话额度中途断(改动已落盘),Opus 接手复核收尾：复跑 2359 passed、两文件≤800、CLI 端到端(watch/子命令)正常。
+  ≤800 剩余违规：app.py 2010 / db.py 880 / exchange_flow.py 826(均类/函数逻辑，需更重拆分)。
 - 2026-06-26 #116: **db.py SCHEMA DDL 外置成 schema.sql(1218→880，SQL 与代码分离)**（Sonnet 执行/Opus 复核）。
   同"数据外置"范式：339 行内联建表 DDL 外置成 `storage/schema.sql`(338)，db.py 改 `read_text` 加载；
   pyproject package-data 加 `"smc_tracker.storage" = ["*.sql"]`(wheel 打包带上)。Opus 复核：复跑 2359 passed、
