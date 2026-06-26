@@ -130,7 +130,9 @@ class PeriodicDataMixin:
             try:
                 # min_coins=2：要求跨≥2 个不同币协同——跨市场协同是同一实体的硬证据，
                 # 且避免单币重叠把追涨人群污染合并成大团(高精确度路线)。
-                groups = self.correlation.clusters_detailed(
+                # O(W²)滑窗+全表扫描移出事件循环(修审计P2:避免同步阻塞)
+                groups = await asyncio.to_thread(
+                    self.correlation.clusters_detailed,
                     now - 1_800_000, window_sec=120, min_shared=3, min_coins=2)
             except Exception as e:  # noqa: BLE001
                 log.warning("关联扫描失败: %s", e)
@@ -145,14 +147,15 @@ class PeriodicDataMixin:
                     continue
                 self._seen_clusters.add(sig)
                 # 核心地址的最相关伙伴(correlated_with)
-                rel = self.correlation.correlated_with(g[0], now - 1_800_000, min_shared=2)
+                rel = await asyncio.to_thread(
+                    self.correlation.correlated_with, g[0], now - 1_800_000, min_shared=2)
                 rel_s = (" 核心" + g[0][:8] + "…最相关:"
                          + ",".join(f"{a[:8]}…×{c}" for a, c in rel[:3])) if rel else ""
                 strength = f"跨{d['coins']}币·协同{d['events']}次·{d['links']}对"
                 # lead-lag：识别群内谁先动（核心 leader），供跟庄前瞻决策
                 try:
-                    leader_info = self.correlation.cluster_leader(
-                        g, now - 1_800_000, window_sec=120)
+                    leader_info = await asyncio.to_thread(
+                        self.correlation.cluster_leader, g, now - 1_800_000, window_sec=120)
                 except Exception:  # noqa: BLE001
                     leader_info = None
                 leader_s = (f" 核心leader:{leader_info[0][:10]}…(领先{leader_info[1]}次)"

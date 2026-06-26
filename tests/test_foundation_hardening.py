@@ -85,7 +85,9 @@ def test_busy_timeout_prevents_locked(tmp_path):
     assert s_a.pragma("busy_timeout") == 5000
 
     # 验证 busy_timeout=0 时会抛（无等待）
-    conn_b = sqlite3.connect(db_path, timeout=0)
+    # 修审计P2:check_same_thread=False 让 conn_b 可在 hold_write 子线程 BEGIN EXCLUSIVE 真正建锁,
+    # 否则跨线程用连接抛'objects created in a thread'→测试永久 skip,核心 OperationalError 断言不执行。
+    conn_b = sqlite3.connect(db_path, timeout=0, check_same_thread=False)
     conn_b.execute("PRAGMA journal_mode=WAL")
 
     # 线程持有写锁

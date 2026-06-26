@@ -110,6 +110,21 @@ def _uptrend_candles(n: int = 150) -> list[Candle]:
     return cs
 
 
+def _downtrend_candles(n: int = 150) -> list[Candle]:
+    """带有界波动的明显下降趋势 K 线（_uptrend_candles 的镜像，drift -0.6）。"""
+    cs: list[Candle] = []
+    base = 200.0
+    for i in range(n):
+        wobble = 0.9 * np.sin(i * 0.7) + 0.5 * np.sin(i * 0.31)
+        o = base
+        c = base - 0.6 + wobble
+        h = max(o, c) + 0.4 + 0.2 * abs(np.sin(i * 1.3))
+        l = min(o, c) - 0.4 - 0.2 * abs(np.cos(i * 1.1))
+        cs.append(mk(i, o, h, l, c, v=10 + (i % 5)))
+        base = c
+    return cs
+
+
 @pytest.fixture()
 def patch_adx(monkeypatch):
     """把 knn 模块里引用的 adx 换成无 nan 的实现（规避源码 nan）。"""
@@ -333,7 +348,7 @@ def test_feature_matrix_warmup_rows_have_nan(patch_adx):
 
 
 def test_knn_fit_and_predict(patch_adx):
-    """明显上升趋势的 150 根 K 线：fit==True，predict_latest 返回完整 dict。"""
+    """明显上升趋势的 150 根 K 线：fit==True，predict_latest 返回完整 dict，且**方向正确=long**。"""
     cs = _uptrend_candles(150)
     knn = KNNPredictor(k=5, horizon=3)
     assert knn.fit(cs) is True
@@ -341,9 +356,20 @@ def test_knn_fit_and_predict(patch_adx):
     assert isinstance(pred, dict)
     for key in ("direction", "p_up", "confidence"):
         assert key in pred
-    assert pred["direction"] in ("long", "short")
-    assert 0.0 <= pred["p_up"] <= 1.0
+    # 修审计P2:原仅断言 direction∈{long,short}(恒真),方向反转bug抓不到。上升趋势应预测 long+p_up>0.5。
+    assert pred["direction"] == "long", f"上升趋势应预测 long,实得 {pred['direction']}"
+    assert pred["p_up"] > 0.5, f"上升趋势 p_up 应>0.5,实得 {pred['p_up']}"
     assert 0.0 <= pred["confidence"] <= 1.0
+
+
+def test_knn_predicts_short_on_downtrend(patch_adx):
+    """对称用例(修审计P2):明显下降趋势 → KNN 应预测 short+p_up<0.5(配合上升用例捕获方向反转回归)。"""
+    cs = _downtrend_candles(150)
+    knn = KNNPredictor(k=5, horizon=3)
+    assert knn.fit(cs) is True
+    pred = knn.predict_latest(cs)
+    assert pred["direction"] == "short", f"下降趋势应预测 short,实得 {pred['direction']}"
+    assert pred["p_up"] < 0.5, f"下降趋势 p_up 应<0.5,实得 {pred['p_up']}"
 
 
 def test_knn_fit_21d_succeeds_on_250_candles(patch_adx):
