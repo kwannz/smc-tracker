@@ -872,7 +872,7 @@ class TestATR2ShortDirection:
             "confidence": 0.75,
             "confluence": 2,
             "points": {
-                "X": (0, 120.0),   # X=120 > D=107，short X 在上方
+                "X": (0, 112.0),   # X=112 > D=107(short X 在上方)；stop_pct<8% 过 compute_risk(修审计:原 X=120 被过滤致测试永久 skip)
                 "A": (10, 90.0),
                 "B": (15, 110.0),
                 "C": (20, 95.0),
@@ -890,8 +890,8 @@ class TestATR2ShortDirection:
             candles=candles,
             harmonic_result=harmonic,
         )
-        if not setups:
-            pytest.skip("short Gartley 被 compute_risk 过滤，跳过")
+        # 修审计P2:X=112 使 stop_pct<8% 确定产出 setup;改 assert 取代 skip,使 compute_risk 过滤回归直接 fail
+        assert setups, "short Gartley(X=112,stop_pct<8%)应产出 setup;若空=compute_risk 过滤回归"
         s = setups[0]
         assert s.direction == "short"
         if s.atr_stop is None:
