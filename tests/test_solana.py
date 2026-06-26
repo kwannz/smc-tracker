@@ -8,8 +8,42 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from smc_tracker.onchain.solana import SolanaSupplyMonitor, detect_change
+from smc_tracker.onchain.solana import SolanaRPC, SolanaSupplyMonitor, detect_change
 from smc_tracker.storage import Store
+
+
+class _FakeSession:
+    """假 aiohttp session：按预置 JSON 返回 getTokenSupply（无网络）。"""
+    def __init__(self, payload):
+        self._payload = payload
+
+    def post(self, *a, **k):
+        import orjson
+        payload = self._payload
+
+        class _Resp:
+            status = 200
+            async def __aenter__(self_inner):
+                return self_inner
+            async def __aexit__(self_inner, *exc):
+                return False
+            def raise_for_status(self_inner):
+                pass
+            async def read(self_inner):
+                return orjson.dumps(payload)
+        return _Resp()
+
+
+def test_token_supply_rejects_nan_supply():
+    """数据质量守卫：uiAmountString 为 'NaN' → token_supply 返回 None（防污染 mint/burn 检测）。"""
+    rpc = SolanaRPC()
+    sess = _FakeSession({"result": {"value": {"uiAmountString": "NaN", "decimals": 6}}})
+    res = asyncio.run(rpc.token_supply(sess, "FakeMint"))
+    assert res is None, "NaN 供应量应被拒(否则 nan>0=False 误判 burn)"
+    # 对照：合法供应量正常解析
+    sess2 = _FakeSession({"result": {"value": {"uiAmountString": "1000000", "decimals": 6}}})
+    res2 = asyncio.run(rpc.token_supply(sess2, "FakeMint"))
+    assert res2 == (1000000.0, 6)
 
 
 def test_detect_change():

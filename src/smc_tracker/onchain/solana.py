@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import math
 from dataclasses import dataclass
 from typing import Any
 
@@ -96,7 +97,11 @@ class SolanaRPC:
             return None
         val = v["value"]
         try:
-            return float(val["uiAmountString"]), int(val["decimals"])
+            supply = float(val["uiAmountString"])
+            # 数据质量守卫：float("NaN")/"inf" 不抛异常但会污染 mint/burn 检测(nan>0=False→误判burn)
+            if not math.isfinite(supply) or supply < 0:
+                return None
+            return supply, int(val["decimals"])
         except (KeyError, TypeError, ValueError):
             return None
 

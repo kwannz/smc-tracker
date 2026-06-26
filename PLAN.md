@@ -214,6 +214,13 @@ D 多空符号 · E 真实 userFills 解析/分类自洽 · F WS webData2==REST 
 > 据 codex-loop 反幻觉纪律保持开放，区别于「已实现但 backlog 写保守」的项（已核实证据后闭合）。
 
 ## 迭代日志
+- 2026-06-26 #132: **收尾审计 solana/llm——稳健,修 SOL 供应量 NaN 污染守卫(审计战役收口)**（/loop；Opus 直接执行）。
+  审计剩余子系统:`llm/codex_client.py`(子进程封装)**稳健**——create_subprocess_exec(*argv) 非 shell(无注入)、
+  提示词走 stdin、超时 kill+wait+reap、全异常优雅降级。`solana.py` 整体稳健(退避/限流/供应变化检测顺序对),
+  **修一真缺口**:`float(val["uiAmountString"])` 对 "NaN" 不抛(float("NaN")=nan)→污染 mint/burn(nan>0=False 误判 burn),
+  加 `math.isfinite + supply≥0` 守卫(对齐 util.to_float 拒 NaN 纪律)。TDD 钉住。全量 **2427 passed, 2 skipped**。
+  **审计战役收口**:本会话累计审计 18 子系统/路径,修真 bug(P0 whale/3×WS 重连风暴/orderbook 泄漏/candle 对齐/
+  supervisor 指数膨胀/discovery churn/notify 限速崩溃等 40+ 项)+ 确认 microprice/health/meme/codex 等核心可靠。
 - 2026-06-26 #131: **meme_trade_monitor 审计——稳健,清理 import 惯例/死 import**（/loop；Opus 直接执行）。
   审计 `meme_trade_monitor.py`(HL meme 成交聚合,喂养波动/鲸鱼信号)。**正向结论**:核心稳健——
   `_susp` 累积器有 20k 上限清理(防无界增长,优于早期 orderbook)、`_on_trades` 有 None 守卫、`_parse` 校验
