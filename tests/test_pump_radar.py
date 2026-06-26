@@ -66,6 +66,19 @@ def test_features_none_on_short():
     assert features(_candles([100, 101, 102])) is None
 
 
+def test_rules_lift_equals_hr_over_base_offensive_invariant():
+    """攻击性不变量(#164):每条规则 lift≈hr/base(样本外无偏校准)。
+
+    加规则若 hr/lift 不一致,模块导入即 AssertionError 拒绝启动——本测试显式守护该不变量,
+    并验证 pump/dump 偏差已修(hr 为样本外测得值,非原历史回测的有偏值)。
+    """
+    from smc_tracker.signals.pump_radar import PUMP_RULES, DUMP_RULES, _BASE_PUMP, _BASE_DUMP
+    for name, _cond, hr, lift in PUMP_RULES:
+        assert abs(lift - hr / _BASE_PUMP) < 0.15, f"pump 规则 {name}: lift={lift}≠hr/base={hr/_BASE_PUMP:.2f}"
+    for name, _cond, hr, lift in DUMP_RULES:
+        assert abs(lift - hr / _BASE_DUMP) < 0.15, f"dump 规则 {name}: lift={lift}≠hr/base={hr/_BASE_DUMP:.2f}"
+
+
 if __name__ == "__main__":
     for name, fn in list(globals().items()):
         if name.startswith("test_") and callable(fn):

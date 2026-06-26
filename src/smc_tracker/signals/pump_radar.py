@@ -1,17 +1,14 @@
-"""暴涨暴跌实时预警 —— 把 38 万根历史回测出的高 lift 规则操作化。
+"""暴涨暴跌实时预警 —— 把高 lift 规则操作化(hr/lift 已样本外重校准,无偏)。
 
-规则来自 data/history/analysis/SUMMARY.md（4 维交叉验证 + base-rate 校正）：
-- 暴涨前兆是「动量延续」非「能量积蓄」：RSI 高位 + ATR% 扩张 + 放量阳线 / 已涨多。
-- 暴跌风险集中两端：刚垂直暴涨(见顶) 与 已在跌中(中继)。
-- 妖币白名单 lift 翻倍；只跌黑名单做多预警直接拉黑。
-诚实：高 lift≠必涨(最严规则命中也仅~5%)，本预警是**尾部押注/仓位调节器**，非满仓开关。
+规则结构(暴涨前兆=动量延续非积蓄;暴跌风险集中刚垂直暴涨与已在跌中两端;妖币白名单 boost、只跌黑名单拉黑)
+来自 data/history/analysis/SUMMARY.md 历史发现；但**展示的 hr/lift 不再用历史回测值**——
 
-**样本外验证(#162/#163,生产 1H 150币·25万点·+15%/12h)——全 7 规则逐条审，无死规则(全 lift>2×)**，
-异于 #150-158 证伪的波动方向信号(那些反转)。但有**系统性偏差**：
-  · **pump 侧展示 lift 偏乐观**(OOS 收缩)：RSI>70&ATR% 18→14.1×、ret24>20%&量 14.3→13.3×、
-    深跌反抽 6.2→4.8×(n=34少)、**放量≥5×+阳线 5.3→2.6×(最弱/最过拟合,仍有 edge)**；
-  · **dump 侧展示 lift 偏保守**(OOS 更强)：垂直见顶 15.8→**73.8×**、高位回落 9.2→**37.9×**、下跌中继 8.1→15.6×。
-  诚实用法：lift 量级勿当精确承诺(尤其 pump 侧偏高)；规则方向有效，"放量阳线"最该谨慎。
+**#164 修正偏差(攻击性):** #162/#163 样本外审 7 规则发现历史值有系统偏差(pump 乐观/dump 保守)。
+本版**直接用生产 1H·25万点·样本外测得的 hr 替换**(pump +15%/12h、dump -15%/12h),lift=hr/base,**偏差消除**——
+每个显示数字=可复现 OOS 测量。全 7 规则 lift>2×(无死规则,异于 #150-158 证伪的波动方向信号),
+但量级勿当精确承诺,**「放量≥5×+阳线」最弱(2.6×·半过拟合)最该谨慎**;「深跌反抽」n=34 小样本。
+模块导入时 assert lift≈hr/base(攻击性不变量:加规则若 hr/lift 不一致当场拒绝启动)。
+诚实：高 lift≠必涨(尾部押注/仓位调节器非满仓开关);非 1H 喂入时 fmt 标注「本TF未验证」(#160)。
 """
 from __future__ import annotations
 
@@ -28,19 +25,34 @@ WHITELIST = {"MOODENG", "PNUT", "TRUMP", "AIXBT", "TURBO", "GRIFFAIN"}
 # 只跌型：做多/暴涨预警拉黑
 BLACKLIST = {"PUMP", "BONK", "POPCAT", "SPX", "DOGE"}
 
-# (规则名, 条件 lambda(f), 历史命中率, lift)
+# hr/lift 由生产 1H 数据**样本外重校准**(#164:150币·25万点·pump +15%/12h、dump -15%/12h)，
+# 替换原历史回测值，**消除 #163 发现的 pump乐观/dump保守系统偏差**——每个数字=可复现的 OOS 测量。
+_BASE_PUMP = 0.0186   # 样本外基线 P(暴涨 +15%/12h)
+_BASE_DUMP = 0.0065   # 样本外基线 P(暴跌 -15%/12h)
+
+# (规则名, 条件 lambda(f), 样本外命中率 hr, lift=hr/base)
 PUMP_RULES = [
-    ("RSI>70&ATR%>3", lambda f: f["rsi"] > 70 and f["atr_pct"] > 3, 0.049, 18.0),
-    ("ret24>20%&量>2x", lambda f: f["ret24"] > 0.20 and f["vol_x"] > 2.0, 0.041, 14.3),
-    ("放量≥5×+阳线", lambda f: f["relvol"] >= 5 and f["bull"], 0.015, 5.3),
-    ("深跌反抽(ret24<-20%)", lambda f: f["ret24"] < -0.20 and f["rsi"] > 45, 0.018, 6.2),
+    ("RSI>70&ATR%>3", lambda f: f["rsi"] > 70 and f["atr_pct"] > 3, 0.262, 14.1),
+    ("ret24>20%&量>2x", lambda f: f["ret24"] > 0.20 and f["vol_x"] > 2.0, 0.247, 13.3),
+    ("放量≥5×+阳线", lambda f: f["relvol"] >= 5 and f["bull"], 0.049, 2.6),   # 最弱·半过拟合·最该谨慎
+    ("深跌反抽(ret24<-20%)", lambda f: f["ret24"] < -0.20 and f["rsi"] > 45, 0.088, 4.7),  # n=34 小样本
 ]
 DUMP_RULES = [
-    ("垂直见顶(ret24>50%)", lambda f: f["ret24"] > 0.50, 0.067, 15.8),
-    ("下跌中继(RSI<35&ret24<-15%)", lambda f: f["rsi"] < 35 and f["ret24"] < -0.15, 0.034, 8.1),
+    ("垂直见顶(ret24>50%)", lambda f: f["ret24"] > 0.50, 0.478, 73.5),
+    ("下跌中继(RSI<35&ret24<-15%)", lambda f: f["rsi"] < 35 and f["ret24"] < -0.15, 0.101, 15.5),
     ("高位回落风险(ATR%>5&ret24>20%&阴线)",
-     lambda f: f["atr_pct"] > 5 and f["ret24"] > 0.20 and not f["bull"], 0.039, 9.2),
+     lambda f: f["atr_pct"] > 5 and f["ret24"] > 0.20 and not f["bull"], 0.245, 37.7),
 ]
+
+# 攻击性编程：导入即校验每条规则 lift≈hr/base(无偏不变量)。未来若加 hr/lift 不一致的规则
+# → 当场 AssertionError 拒绝启动，而非默默显示错误乘数(防御性「希望一致」→攻击性「强制一致」)。
+for _name, _hr, _lift, _base in (
+    [(n, hr, lf, _BASE_PUMP) for n, _, hr, lf in PUMP_RULES]
+    + [(n, hr, lf, _BASE_DUMP) for n, _, hr, lf in DUMP_RULES]
+):
+    assert abs(_lift - _hr / _base) < 0.15, (
+        f"pump_radar 规则 {_name}: lift={_lift} ≠ hr/base={_hr / _base:.2f} —— hr/lift 不一致，须按样本外重校准"
+    )
 
 # 规则与 hr/lift 标定于 1h K 线(data/history/analysis/SUMMARY.md 回测)。喂入非 1h K 线时
 # 窗口实际跨度按周期换算(24 根≠24h)，且 hr/lift 未在该 TF 验证——fmt 据此诚实标注(修审计 P1)。
