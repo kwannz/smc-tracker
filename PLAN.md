@@ -214,6 +214,13 @@ D 多空符号 · E 真实 userFills 解析/分类自洽 · F WS webData2==REST 
 > 据 codex-loop 反幻觉纪律保持开放，区别于「已实现但 backlog 写保守」的项（已核实证据后闭合）。
 
 ## 迭代日志
+- 2026-06-26 #144: **顺 bug 家族线交叉验证 Wilder 全家(RSI/ATR/ADX/atr2)→ 全精确,#143 bug 确认孤立**（/loop；Opus 验证+文档锁定）。
+  Wilder 平滑家族(ATR/RSI/ADX/DMI 同用 RMA,朴素实现都易误用 SMA)——发现 ATR bug 后沿家族线查兄弟。
+  对独立 canonical 参考交叉验证主 TA 层(technical.py):RSI Δ=0.0、ATR Δ=0.0(5币全精确);`_wilder`(seed=SMA+RMA递推)正确;
+  atr2_signals 复用 `from .technical import atr`(line25/126)=正确 Wilder。**主 TA 层 Wilder 全家外部验证精确,无新 bug。**
+  定性结论:#143 的 ATR bug 是孤立的——根因 volatility_monitor 当初自重写一份 SMA 版没复用 technical 的正确版(DRY 隐患)。
+  #143 修后两份均对但仍并存:前摄注释锁定有意分歧(vol模块自包含纯numpy不耦合indicators/,改平滑须两处同步)。
+  纯注释,全量 **2448 passed**(零回归)。教训:bug 有家族,找到一个就沿"同作者/同算法"线查兄弟;读对≠值对,仍须外部参考裁判。
 - 2026-06-26 #143: **指标数值对照独立参考 → 修 ATR 偏离开源标准(SMA-of-TR→Wilder RMA)**（/loop；Opus 验证+修正）。
   首次用**外部真相源**(我没写的纯Python std + 标准Wilder公式)裁判波动指标,补单测盲区("代码符合作者意图"≠"作者意图符合标准")。
   对照5币真实数据:rv(Δ~1e-14)、velocity(Δ0)、HVP(∈[0,1]) **数值精确**——十轮首次有外部背书。

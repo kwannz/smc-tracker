@@ -38,6 +38,10 @@ def _wilder_rma(tr: np.ndarray, n: int) -> float:
 
     seed=前 n 根 TR 的 SMA，其后 ATR_t=(ATR_{t-1}·(n-1)+TR_t)/n（含全历史指数衰减权，非仅近 n 根等权
     平均的 SMA-of-TR——后者在近端剧烈期系统性偏高 10~19%，见 #143 交叉验证）。数据不足→退化可用窗 SMA。
+
+    与 indicators/technical.py 的 `_wilder` **有意各持一份**(#144 核实两者均对独立 Wilder 参考 Δ=0)：本函数
+    保持 vol_metrics 自包含·纯 numpy·不耦合 indicators/ 层；technical._wilder 是 TA 层 RSI/ADX/ATR 共用版。
+    勿盲目消重(跨包耦合得不偿失)；若改平滑法须两处同步。
     """
     sz = tr.size
     if sz == 0:
