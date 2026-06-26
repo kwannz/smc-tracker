@@ -213,6 +213,11 @@ D 多空符号 · E 真实 userFills 解析/分类自洽 · F WS webData2==REST 
 > 据 codex-loop 反幻觉纪律保持开放，区别于「已实现但 backlog 写保守」的项（已核实证据后闭合）。
 
 ## 迭代日志
+- 2026-06-26 #120: **exchange_flow.py BlockstreamClient 拆出(826→677)——≤800 仅剩 app.py 一个违规**（/loop；Opus 直接执行）。
+  自包含的 BTC HTTP 客户端 `BlockstreamClient`(~145 行，仅依赖 aiohttp/asyncio + 2 常量)抽成
+  `onchain/exchange_flow_btc.py`(163)；exchange_flow.py re-import 回来(onchain/__init__ + test import 路径全兼容)。
+  exchange_flow.py **826→677**。**全项目 ≤800 现仅剩 app.py(2010) 一个违规**(编排器，拆 periodic 任务群风险最高，
+  待 Sonnet 额度恢复用 workflow 谨慎拆)。全量 **2363 passed, 2 skipped**(零回归)。
 - 2026-06-26 #119: **db.py K线方法拆 CandleStoreMixin(880→747，达标≤800)**（/loop；Opus 直接执行）。
   6 个 K 线读写方法(upsert_candles/prune_candles_to/get_candles/candles_for_draw/count_candles/latest_candle_ms，
   ~136 行，仅依赖 self.conn 零其它 Store 耦合)抽成 `storage/db_candles.py::CandleStoreMixin`，`Store(CandleStoreMixin)`
