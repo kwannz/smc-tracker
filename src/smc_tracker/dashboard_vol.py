@@ -56,7 +56,7 @@ def render_volatility_page() -> str:
  .up{color:#3fb950} .dn{color:#f85149} .prem{background:#3a1d1d} .disc{background:#16301d} .eq{color:#8b949e}
  .note{color:#8b949e;font-size:12px}
 </style></head><body>
-<h1>🌀 实时波动追踪 <span class="note">逐周期 速度·PD溢价折价·波动状态·HVP（绿=折价/买区 红=溢价/卖区；🔸压缩 🔶扩张；HVP=波动率历史百分位 🔥≥90%异常剧烈 ❄️≤10%极静蓄势）</span></h1>
+<h1>🌀 实时波动追踪 <span class="note">逐周期 速度·PD溢价折价·波动状态·HVP（绿=折价/买区 红=溢价/卖区；🔸压缩 🔶扩张；HVP=波动率历史百分位 🔥≥90%异常剧烈 ❄️≤10%极静蓄势；期限结构 ⏫倒挂=近端波动急/事件 ⏬顺挂=远端主导/趋缓）</span></h1>
 <div id="hl" class="note"></div>
 <div id="box" class="note">加载中…</div>
 <script>
@@ -93,7 +93,9 @@ async function load(){
   var al=c.align||{bias:'分歧',aligned:0,total:0};
   var bm=al.bias==='多'?'<span class="up">🟢多</span>':(al.bias==='空'?'<span class="dn">🔴空</span>':'⚪');
   var st=c.state?(' '+c.state):'';
-  h+='<tr><td class="coin">'+c.coin+st+'<br><small>'+bm+' '+al.aligned+'/'+al.total+'</small></td><td>'+c.score.toFixed(1)+'</td>';
+  var tsh=(c.term&&c.term.shape)||'';
+  var ts=tsh==='倒挂'?' <span class="dn">⏫倒挂</span>':(tsh==='顺挂'?' <span class="up">⏬顺挂</span>':'');
+  h+='<tr><td class="coin">'+c.coin+st+'<br><small>'+bm+' '+al.aligned+'/'+al.total+ts+'</small></td><td>'+c.score.toFixed(1)+'</td>';
   tfs.forEach(function(t){h+=cell(c.by_tf[t]);}); h+='</tr>';
  });
  document.getElementById('box').innerHTML=h+'</tbody></table>';

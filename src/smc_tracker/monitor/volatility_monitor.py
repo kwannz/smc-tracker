@@ -229,6 +229,42 @@ def coin_vol_state(by_tf: dict) -> str:
     return "常态"
 
 
+# 期限结构阈值：短端/长端归一波动比 >此=倒挂(近端急)，<其倒数=顺挂(远端主导)
+_TS_BACKWARD, _TS_CONTANGO = 1.2, 0.83
+
+
+def vol_term_structure(by_tf: dict) -> dict:
+    """波动率期限结构：各周期 rv 用 √t 归一到同一时间基准后，比短端 vs 长端（方差期限结构思路）。
+
+    跨周期 rv 不可直接比(rv∝√t，见模块头)——先除 √(周期时长)归一为「单位时间波动强度」再比，
+    这正是化解那条「不可比」警告的标准做法。返回 {shape, ratio, short, long, n}：
+      shape∈{倒挂,平坦,顺挂,缺}；ratio=短端/长端归一波动。
+      倒挂(ratio>1.2)=近端波动高于远端→急性应激/事件驱动；
+      顺挂(ratio<0.83)=近端低于远端→风暴后趋缓/长周期主导；平坦=期限结构均衡。
+    取首尾各 ~1/3 周期为短/长端(中段排除使对比更锐)。<2 个有效周期→缺(不冒充结构)。
+    诚实：归一假设波动∝√t(GBM)真实有偏；rv 为回望量，描述当前非预测。
+    """
+    items = sorted(
+        ((tf, m) for tf, m in by_tf.items()
+         if isinstance(m.get("rv"), (int, float)) and math.isfinite(m.get("rv", float("nan")))
+         and _TF_MS.get(tf)),
+        key=lambda kv: _TF_MS[kv[0]],
+    )
+    n = len(items)
+    if n < 2:
+        return {"shape": "缺", "ratio": 0.0, "short": 0.0, "long": 0.0, "n": n}
+    k = max(1, n // 3)
+    short = [m["rv"] / math.sqrt(_TF_MS[tf]) for tf, m in items[:k]]
+    long = [m["rv"] / math.sqrt(_TF_MS[tf]) for tf, m in items[-k:]]
+    sv, lv = sum(short) / len(short), sum(long) / len(long)
+    if lv <= 1e-12:
+        return {"shape": "缺", "ratio": 0.0, "short": sv, "long": lv, "n": n}
+    ratio = sv / lv
+    shape = ("倒挂" if ratio > _TS_BACKWARD
+             else ("顺挂" if ratio < _TS_CONTANGO else "平坦"))
+    return {"shape": shape, "ratio": ratio, "short": sv, "long": lv, "n": n}
+
+
 class VolatilityMonitor:
     """逐周期读已采 K 线算波动+PD 指标，按运动分排序出当前在动的监控清单币。"""
 
@@ -291,6 +327,7 @@ class VolatilityMonitor:
                          "score": sc,
                          "align": mtf_alignment(by_tf),
                          "state": coin_vol_state(by_tf),   # 多周期合成状态(决策级)
+                         "term": vol_term_structure(by_tf),  # 波动率期限结构(√t 归一)
                          "last_ms": self._latest_bar_ms(coin),
                          "by_tf": by_tf})
         rows.sort(key=lambda r: r["score"], reverse=True)
@@ -330,9 +367,12 @@ class VolatilityMonitor:
         for r in rows[:top]:
             al = r.get("align") or {"bias": "分歧", "aligned": 0, "total": 0}
             bias_mark = {"多": "🟢多", "空": "🔴空", "分歧": "⚪分歧"}[al["bias"]]
+            # 期限结构：仅显示可操作的倒挂(近端急)/顺挂(远端主导)，平坦/缺略去不扰
+            ts_mark = {"倒挂": " ⏫期限倒挂(近端急)", "顺挂": " ⏬期限顺挂(远端主导)"}.get(
+                (r.get("term") or {}).get("shape"), "")
             lines.append(
                 f"━ {r['coin']:<8} [{r.get('state', '常态')}] 运动分 {r['score']:.1f}"
-                f" · {bias_mark}({al['aligned']}/{al['total']}周期一致)")
+                f" · {bias_mark}({al['aligned']}/{al['total']}周期一致){ts_mark}")
             for tf in self.timeframes:
                 m = r["by_tf"].get(tf)
                 if not m:

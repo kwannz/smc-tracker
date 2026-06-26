@@ -11,7 +11,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from smc_tracker.monitor.volatility_monitor import (
     vol_metrics, pdarray, VolatilityMonitor, volatility_highlights, market_regime,
-    mtf_alignment, vol_percentile, coin_vol_state,
+    mtf_alignment, vol_percentile, coin_vol_state, vol_term_structure,
 )
 
 
@@ -46,6 +46,42 @@ def test_coin_vol_state_deep_discount():
 def test_coin_vol_state_normal_and_empty():
     assert coin_vol_state({"15m": _m()}) == "常态"
     assert coin_vol_state({}) == "常态"
+
+
+# ── vol_term_structure：波动率期限结构(√t 归一后比短端 vs 长端) ──
+_SCALE = (604_800_000 / 900_000) ** 0.5   # 1W vs 15m 的 √t 比≈25.9 = 平坦基准
+
+
+def _rv(v):
+    return {"rv": v}
+
+
+def test_vol_term_structure_flat_when_sqrt_t_scaling():
+    """rv 恰按 √t 缩放(rv_1W=rv_15m×√t比) → 归一相等 → 平坦。"""
+    ts = vol_term_structure({"15m": _rv(1.0), "1W": _rv(_SCALE)})
+    assert ts["shape"] == "平坦"
+    assert abs(ts["ratio"] - 1.0) < 1e-6
+
+
+def test_vol_term_structure_backwardation_near_term_stress():
+    """近端 rv 高于 √t 基准(短端归一波动更大) → 倒挂(急性应激)。"""
+    ts = vol_term_structure({"15m": _rv(2.0), "1W": _rv(_SCALE)})
+    assert ts["shape"] == "倒挂"
+    assert ts["ratio"] > 1.2
+
+
+def test_vol_term_structure_contango_near_term_calm():
+    """近端 rv 低于 √t 基准 → 顺挂(远端主导/风暴后趋缓)。"""
+    ts = vol_term_structure({"15m": _rv(0.5), "1W": _rv(_SCALE)})
+    assert ts["shape"] == "顺挂"
+    assert ts["ratio"] < 0.83
+
+
+def test_vol_term_structure_insufficient_and_dirty():
+    """有效周期 <2 → 缺(不冒充结构)；rv 缺失/非有限的周期被剔除。"""
+    assert vol_term_structure({"15m": _rv(1.0)})["shape"] == "缺"
+    assert vol_term_structure({})["shape"] == "缺"
+    assert vol_term_structure({"15m": _rv(float("nan")), "1H": _rv(1.0)})["shape"] == "缺"
 
 
 def test_vol_percentile_high_when_recent_spike():
