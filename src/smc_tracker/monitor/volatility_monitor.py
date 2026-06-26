@@ -192,6 +192,16 @@ class VolatilityMonitor:
         m.update(pdarray(h, l, c))
         return m
 
+    def _latest_bar_ms(self, coin: str) -> int:
+        """该币最快周期(timeframes[0])最新 bar 的 open_ms；store 无此能力或异常→0（不误判新鲜度）。"""
+        fn = getattr(self.store, "latest_candle_ms", None)
+        if fn is None or not self.timeframes:
+            return 0
+        try:
+            return int(fn(coin, self.timeframes[0]) or 0)
+        except Exception:  # noqa: BLE001
+            return 0
+
     def rank(self, now_ms: int = 0) -> list[dict]:
         """每币逐周期算指标 → {coin, score(各周期运动分取最大), by_tf}，按 score 降序。
 
@@ -206,6 +216,7 @@ class VolatilityMonitor:
             rows.append({"coin": coin,
                          "score": max(move_score(m) for m in by_tf.values()),
                          "align": mtf_alignment(by_tf),
+                         "last_ms": self._latest_bar_ms(coin),
                          "by_tf": by_tf})
         rows.sort(key=lambda r: r["score"], reverse=True)
         return rows
@@ -217,6 +228,12 @@ class VolatilityMonitor:
         from ..util import fmt_ts  # noqa: PLC0415
         ts = fmt_ts(now_ms) if now_ms else ""
         lines = [f"🌀 实时波动追踪板 [{ts}] · 每周期指标(速度+加速度+区间+PD溢价折价) Top {top}"]
+        # 数据新鲜度（诚实标注：实时板不静默展示陈旧数据）：最新 bar 时间 + 陈旧告警
+        fresh = max((r.get("last_ms", 0) for r in rows), default=0)
+        if fresh > 0:
+            stale = now_ms > 0 and (now_ms - fresh) > 1_800_000  # >30min 视为陈旧(最快 15m)
+            note = "  ⚠️数据陈旧(采集器可能停摆)" if stale else ""
+            lines.append(f"🕒 数据更新至 {fmt_ts(fresh)}{note}")
         # 市场级态势：把矩阵聚合成全市场波动广度
         mr = market_regime(rows)
         if mr["label"]:

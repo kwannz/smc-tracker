@@ -124,12 +124,16 @@ class _FakeCandle:
 
 
 class _FakeStore:
-    def __init__(self, series):
+    def __init__(self, series, latest=None):
         self._series = series  # {(coin,tf): [(o,h,l,c), ...]} 或 {coin: [...]}（所有 tf 共用）
+        self._latest = latest or {}  # {coin: last_ms}（可选，供新鲜度测试）
 
     def get_candles(self, coin, tf, limit=1000):
         data = self._series.get((coin, tf), self._series.get(coin, []))
         return [_FakeCandle(*x) for x in data]
+
+    def latest_candle_ms(self, coin, tf):
+        return self._latest.get(coin)
 
 
 def test_rank_orders_by_movement():
@@ -156,6 +160,25 @@ def test_per_tf_block_shows_each_tf():
 def test_rank_skips_insufficient_data():
     mon = VolatilityMonitor({"X": "XUSDT"}, ["15m"], _FakeStore({"X": [(1.0, 1.0, 1.0, 1.0)]}))
     assert mon.rank(0) == []
+
+
+def test_rank_captures_freshness_last_ms():
+    """rank 给每币带最新 bar 时间(供新鲜度展示)；store 无 latest_candle_ms 时 last_ms=0 不崩。"""
+    up = [(c, c, c, c) for c in [100.0 + i for i in range(30)]]
+    store = _FakeStore({"BTC": up}, latest={"BTC": 1_700_000_000_000})
+    mon = VolatilityMonitor({"BTC": "BTCUSDT"}, ["15m"], store)
+    rows = mon.rank(0)
+    assert rows[0]["last_ms"] == 1_700_000_000_000
+
+
+def test_rank_freshness_absent_store_method_safe():
+    """store 无 latest_candle_ms（旧 fake）→ last_ms=0，不抛。"""
+    up = [(c, c, c, c) for c in [100.0 + i for i in range(30)]]
+    class _NoLatest:
+        def get_candles(self, coin, tf, limit=1000):
+            return [_FakeCandle(*x) for x in up]
+    mon = VolatilityMonitor({"BTC": "BTCUSDT"}, ["15m"], _NoLatest())
+    assert mon.rank(0)[0]["last_ms"] == 0
 
 
 def test_volatility_highlights_synthesizes_matrix():

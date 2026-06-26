@@ -213,6 +213,12 @@ D 多空符号 · E 真实 userFills 解析/分类自洽 · F WS webData2==REST 
 > 据 codex-loop 反幻觉纪律保持开放，区别于「已实现但 backlog 写保守」的项（已核实证据后闭合）。
 
 ## 迭代日志
+- 2026-06-26 #122: **波动板数据新鲜度(诚实标注，实时板不静默展示陈旧)**（/loop；Opus 直接执行）。
+  先自查波动系统死代码：9 个产出字段(rv/atr/range/velocity/accel/vol_ratio/regime/pd_pct/pd_zone)全多处消费，
+  无"算而不渲"(#113 era 问题已修干净)。加 `VolatilityMonitor._latest_bar_ms`(guarded latest_candle_ms，无能力→0)
+  + rank 每币带 last_ms + render 头部「🕒 数据更新至 <最新bar时间>」+ >30min ⚠️陈旧告警；dashboard 同步。
+  诚实优先：实时板若数据陈旧(采集器停摆)显式告警而非静默误导。真实数据：数据 3 分钟新鲜无告警。
+  TDD 2 例；全量 **2365 passed, 2 skipped**(零回归)。
 - 2026-06-26 #121: **🎯 app.py 拆 3 mixin → 全项目 141 源文件全部 ≤800 达标**（Sonnet 执行/Opus 复核）。
   app.py(2010，最后违规)拆: `app_handlers.py::EventHandlersMixin`(400，事件回调 _on_*/_push/_emit)+
   `app_periodic.py::PeriodicTasksMixin`(459，看板/TA/采集类 periodic)+ `app_periodic_data.py::PeriodicDataMixin`(422，
