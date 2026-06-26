@@ -48,6 +48,22 @@ def test_stale_data_flags_unhealthy():
     s.close()
 
 
+def test_future_timestamp_clamped_to_nonneg_age_and_flagged():
+    """未来 ts(时钟偏移/服务端同步数据)→ age_s 夹非负(不显示无意义负值)+ future_skew=True 诚实标注。"""
+    s = _store()
+    now = 1_000_000_000_000
+    # 写一行 ts 在 now 之后 1 小时(模拟时钟偏移)
+    s.conn.execute(
+        "INSERT INTO bitget_oi(symbol,coin,oi_size,oi_usd,mark_px,funding,ts)"
+        " VALUES('BTCUSDT','BTC',1.0,1.0,60000.0,0.0,?)", (now + 1 * _HOUR,))
+    rep = system_health(s, now, stale_after_s=7200.0)
+    bo = next(f for f in rep["freshness"] if f["table"] == "bitget_oi")
+    assert bo["age_s"] >= 0.0, "未来 ts 不应产生负 age_s"
+    assert bo["future_skew"] is True, "未来 ts 应标注 future_skew(诚实暴露时钟偏移)"
+    assert bo["stale"] is False  # 数据本身是最新的(只是 ts 偏移)
+    s.close()
+
+
 def test_overdue_predictions_flag_unhealthy():
     """有新鲜数据但存在到期未评估预测 → ok=False（评估管线停滞信号）。"""
     s = _store()

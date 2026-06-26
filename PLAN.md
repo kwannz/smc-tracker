@@ -214,6 +214,12 @@ D 多空符号 · E 真实 userFills 解析/分类自洽 · F WS webData2==REST 
 > 据 codex-loop 反幻觉纪律保持开放，区别于「已实现但 backlog 写保守」的项（已核实证据后闭合）。
 
 ## 迭代日志
+- 2026-06-26 #130: **health 可观测层审计——稳健,修未来 ts 负 age + 诚实标注时钟偏移**（/loop；Opus 直接执行）。
+  审计 `health.py`(数据新鲜度/WS/延迟/内存可观测层,与波动板新鲜度同源)。**正向结论**:核心稳健,
+  HealthMonitor 读的 4 内存属性(_whale_acc/_seen_clusters/_candles/_bg_tasks)经 #121 mixin 重构后均仍存在。
+  唯一真缺陷:`age_s=(now-mx)/1000` 对未来 ts(时钟偏移/服务端同步)产负值(无意义+掩盖异常)。
+  **修复**:age_s 夹非负 + 新增 `future_skew` 字段诚实暴露时钟偏移(数据本身仍判 fresh)。TDD 钉住。
+  全量 **2426 passed, 2 skipped**(零回归)。
 - 2026-06-26 #129: **supervisor 退避指数无界增长修复(韧性层)**（/loop；Opus 直接执行）。
   审计周期任务监督器 `supervisor.py`(支撑全部数据采集的容错层,busy-loop 已修)。发现 `_calc_backoff` 用
   `2**error_count`,任务永久失败时 error_count 无限增长→每轮计算千位大整数(CPU 浪费),而退避值早已封顶。

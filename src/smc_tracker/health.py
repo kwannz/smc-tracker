@@ -81,12 +81,16 @@ def system_health(store: Any, now_ms: int, stale_after_s: float = 7200.0) -> dic
             freshness.append({"table": tbl, "exists": True, "n": n,
                               "age_s": None, "latest_dt": None, "stale": n > 0})
             continue
-        age_s = (now_ms - int(mx)) / 1000.0
+        # 夹非负：未来 ts(时钟偏移/服务端同步数据)不产生无意义负 age；future_skew 诚实标注异常
+        raw_age_s = (now_ms - int(mx)) / 1000.0
+        future_skew = raw_age_s < 0
+        age_s = max(0.0, raw_age_s)
         stale = age_s > stale_after_s
         if not stale:
             any_fresh = True
         freshness.append({"table": tbl, "exists": True, "n": n, "age_s": age_s,
-                          "latest_dt": fmt_ts(int(mx)), "stale": stale})
+                          "latest_dt": fmt_ts(int(mx)), "stale": stale,
+                          "future_skew": future_skew})
 
     pred = {"total": 0, "evaluated": 0, "pending": 0, "overdue": 0}
     if "predictions" in tables:
