@@ -410,6 +410,9 @@ class PeriodicTasksMixin:
         while not self._stopping:
             mc = self.cfg.monitored_coins   # 每轮重读：_reload_config 替换 self.cfg 后即时生效
             try:
+                # 故意用 get_monitored_coins 而非 pick_coins(#141)：推送是**主动通知**，必须清单
+                # 严格——清单空=用户不想要任何推送，绝不 fallback 到波动币(那会用没选的币刷屏)。
+                # CLI/dashboard 是拉取视图才用 pick_coins fallback。语义不同，勿统一(同 #137 _fmt_usd)。
                 coins = self.store.get_monitored_coins()
                 if coins:
                     mon = VolatilityMonitor(coins, list(mc.timeframes), self.store)

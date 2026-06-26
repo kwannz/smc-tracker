@@ -214,6 +214,13 @@ D 多空符号 · E 真实 userFills 解析/分类自洽 · F WS webData2==REST 
 > 据 codex-loop 反幻觉纪律保持开放，区别于「已实现但 backlog 写保守」的项（已核实证据后闭合）。
 
 ## 迭代日志
+- 2026-06-26 #142: **第三消费者(推送)选币语义核查 + 前摄锁住有意分歧**（/loop；Opus 验证+文档加固）。
+  续 #141:波动板三消费者(dashboard/CLI/opt-in推送)中,推送 `_periodic_volatility_board` 也独立选币(get_monitored_coins)。
+  核查判定:**推送故意保持清单严格,绝不能用 pick_coins**——推送是主动通知,清单空=用户不想要,fallback到波动币会
+  用没选的币刷屏;CLI/dashboard 是拉取视图才该 fallback。语义不同(同名 get_monitored_coins 不同义,同 #137 _fmt_usd)。
+  前摄加注释锁住此有意分歧(防 #141 统一后"大家都用 pick_coins"的表面一致诱惑导致误统一→推送刷屏回归)。
+  附带核实突破告警 VolatilityRegimeTracker 有 9 专门测试覆盖充分。纯注释,全量 **2447 passed**(零回归)。
+  教训:刚做完一处 DRY 统一,会抬高相邻"形似处"被误统一的风险;前摄文档化"为何不统一"比事后修更省。
 - 2026-06-26 #141: **可达性验证 + 修 CLI/dashboard 选币分叉(DRY 单一源)**（/loop；Opus 验证+重构）。
   先验证 800 行不变量(✅无文件超800,改动的 volatility_monitor 443行)。再做可达性验证:波动板三条触达路径
   (dashboard路由/CLI子命令/opt-in推送)都接线。但发现真 bug:`_cmd_vol` 只用 get_monitored_coins,空清单(=当前
