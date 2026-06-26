@@ -74,6 +74,15 @@ def positioning(positions: dict[tuple[str, str], float], prices: dict[str, float
 
 
 class WhaleConsensus:
+    """多庄同向共识信号。
+
+    ⚠**#187 实证张力(诚实标注,暂不改行为——证据尚薄)**:同币同向前瞻 alpha 随庄数**非单调**——
+    单庄+1.8%(24h) < **双庄+7.1%(峰值)** > 多庄≥3+2.0%(塌回单庄,拥挤反转 signature)。
+    即"庄越多越强"被证伪(倒U)。当前 min_consensus=3 会滤掉最强双庄信号、score∝n_agree 给≥3拥挤更高分,
+    与实证反向。未据此改(n~540/桶、+7.1%或小样本噪声膨胀,#166纪律:证据强度定动作强度);
+    待更大样本验证非单调稳健后再校准(降 min_consensus / 压平 score 的庄数项)。脚本 scripts/audit_consensus_strength.py。
+    """
+
     def __init__(self, store: Any | None = None, min_consensus: int = 3,
                  min_net_notional: float = 200_000.0, cooldown_ms: int = 1_800_000,
                  on_signal: ConsensusCallback | None = None) -> None:
