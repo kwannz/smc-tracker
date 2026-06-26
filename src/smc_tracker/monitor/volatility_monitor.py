@@ -118,6 +118,10 @@ def vol_percentile(c: Any, *, win: int = _RV_WIN, lookback: int = 120) -> float:
     返回 ∈[0,1]（1=当前波动处历史最高位=异常剧烈；0=历史最低=极度平静）；
     数据不足(<win+3 根有效 logret)或含 NaN/inf → -1.0 哨兵（不冒充百分位，诚实标注）。
     校准维度：补 rv(绝对值)/vol_ratio(变化方向) 之外的「当前波动 vs 自身历史」相对水平。
+
+    约定（#148 核实）：用 `mean(rvs<=cur)` **≤(含自身)** 百分位秩——故永不返回 0、最小=1/N。
+    与 Pine `ta.percentrank` 的**严格<**约定差恰为 1/N(lookback=120 时≈0.008)，属合法约定差异非 bug，
+    选 ≤ 因"当前即历史最高"应得 1.0 而非 (N-1)/N。勿因"对 Pine 不为零"误判。
     """
     cc = np.asarray(c, dtype=float)
     if cc.size < win + 3 or not np.all(np.isfinite(cc)):

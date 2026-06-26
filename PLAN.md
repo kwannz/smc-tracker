@@ -214,6 +214,14 @@ D 多空符号 · E 真实 userFills 解析/分类自洽 · F WS webData2==REST 
 > 据 codex-loop 反幻觉纪律保持开放，区别于「已实现但 backlog 写保守」的项（已核实证据后闭合）。
 
 ## 迭代日志
+- 2026-06-26 #148: **PD array(ICT)+HVP(统计百分位)验证 → 全精确,收口开源标准验证 campaign(#143-148)**（/loop；Opus 验证+约定锁定）。
+  PD array (price-low)/(high-low) 60根 dealing range Δ=0.0(ICT 标准)✅;HVP 滚动 rv 百分位秩 Δ=0.0 ✅。
+  HVP 的 ≤(含自身)约定 vs Pine percentrank 严格< 差恰 1/N(同 #145 EMA 种子的合法约定差异);docstring 写"TradingView思路"
+  却用 ≤ 有歧义,前摄注释锁定(选 ≤ 因"当前即历史最高"应得1.0,勿因对Pine不为零误判)。纯注释,全量 **2448 passed**。
+  **★ 开源标准验证 campaign 收口(#143-148,6轮):全核心算法层对外部真相验证完毕——**
+    TA(Wilder全家/Stoch/BB/CCI/MACD)#143-145、谐波Fib(Carney)#146、微观结构(CKS2014/Stoikov)#147、PD(ICT)/HVP#148。
+    **成果:修1真bug(ATR SMA→Wilder)、对齐1软项(Crab cd_bc)、锁定4处合法约定(EMA种子/双Wilder/HVP百分位)、确认其余全标准合规。**
+    整个量化算法栈现有外部真相背书;rv/velocity/RSI/ATR/Stoch/BB/CCI/PD 数值精确(Δ~1e-12),余者属约定差异已文档化。
 - 2026-06-26 #147: **微观结构层(OFI/micro-price/queue)对 CKS2014/Stoikov 标准验证 → 全正确且已 golden 锁,无需改**（/loop；Opus 验证）。
   微观结构是全系统**唯一声称前瞻**的层(订单流领先指标),正确性赌注最高。逐项对学术标准核对 signals/microprice.py:
   ① queue_imbalance (bid-ask)/(bid+ask) ✅;② **micro_price 交叉加权** (bid_px·ask_sz+ask_px·bid_sz)/总=I·ask+(1-I)·bid 方向正确
