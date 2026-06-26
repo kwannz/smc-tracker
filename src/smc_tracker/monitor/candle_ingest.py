@@ -115,20 +115,15 @@ async def detect_and_fill_gap(
         log.debug("detect_and_fill_gap: coin=%s tf=%s 库为空，初始化回填 %d 根", coin, tf, _DEFAULT_BARS)
         return await backfill(bg, coin, symbol, tf, _DEFAULT_BARS, store)
 
-    # 计算「当前最近已收盘 bar」的 open_ms
+    # 缺口计数**锚定 latest_ms**（交易所返回的真实对齐 open），与交易所 bar 边界时区无关。
+    # 修正原纪元对齐 bug：(now//gran)*gran 假设 bar 对齐 1970 纪元(周四)，但 Bitget 按 UTC+8
+    # 日界对齐(1D=16:00 UTC、1W=周日 16:00 UTC)，对 1D/1W/4H 等系统性错位。
+    # latest_ms 之后第 j 根(open=latest+j*gran)已收盘 ⟺ latest+(j+1)*gran <= now。
+    # 已收盘缺口数 = floor((now-latest)/gran) - 1（j>=1 的已收盘根数；对齐无关）。
     now_ms: int = int(time.time() * 1000)
-    # 最近完整收盘 bar 的 open_ms（当前 bar 尚未收盘，排除）
-    current_bar_open_ms: int = (now_ms // gran_ms) * gran_ms
-    # 最近已收盘 bar = 当前 bar 的上一根
-    last_closed_open_ms: int = current_bar_open_ms - gran_ms
-
-    # 缺口 = 从 latest_ms 到 last_closed_open_ms 之间缺少的根数
-    if last_closed_open_ms <= latest_ms:
-        # 已是最新，无缺口
-        return 0
-
-    gap_count: int = (last_closed_open_ms - latest_ms) // gran_ms
+    gap_count: int = (now_ms - latest_ms) // gran_ms - 1
     if gap_count <= 0:
+        # 已是最新（latest 即最近已收盘 bar，或时钟回拨），无缺口
         return 0
 
     # 拉取足够覆盖缺口的根数（+1 保证包含边界）

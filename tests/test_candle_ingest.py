@@ -208,6 +208,28 @@ class TestDetectAndFillGap:
         assert result == 0, "无缺口时应返回 0"
         assert bg.call_count == 0, "无缺口时 bg.klines 不应被调用"
 
+    def test_gap_alignment_independent_for_1d(self) -> None:
+        """对齐无关性：1D bar 按交易所 UTC+8 边界(非纪元对齐)，gap 检测应锚定 latest_ms 而非纪元。
+
+        Bitget 日线开盘 16:00 UTC(=北京0点)，与 (now//gran)*gran 的纪元对齐(00:00 UTC)差 16h。
+        旧实现用纪元对齐算当前 bar，对 1D 错位；新实现锚定真实 latest_ms，与边界无关。
+        构造 latest = now - 2.5 天的真实对齐 open（含 16h 偏移）→ 应检测出 1 根已收盘缺口。
+        """
+        gran_ms = GRANULARITY_MS["1D"]
+        now_ms = int(time.time() * 1000)
+        # 交易所对齐 open：UTC+8 日界（16:00 UTC 偏移），刻意非纪元对齐
+        offset = 16 * 3_600_000
+        latest_ms = ((now_ms - offset) // gran_ms) * gran_ms + offset - 2 * gran_ms  # 约 2 天前
+        store = _make_store()
+        store.upsert_candles([("BTC", "1D", latest_ms, 100.0, 110.0, 90.0, 105.0, 1.0)])
+        candles = [_make_candle(open_ms=latest_ms + i * gran_ms) for i in range(4)]
+        bg = FakeBG(candles)
+
+        result = _run(detect_and_fill_gap(bg, "BTC", "BTCUSDT", "1D", store))
+        # latest 约 2 天前 → 至少 1 根已收盘 bar 待回填（锚定 latest_ms，不受 16h 偏移干扰）
+        assert bg.call_count == 1, "1D 有缺口时应触发回填（对齐无关）"
+        assert result > 0
+
 
 # ---------------------------------------------------------------------------
 # 测试 3：ingest_ws_closed_bar

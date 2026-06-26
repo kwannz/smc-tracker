@@ -214,6 +214,12 @@ D 多空符号 · E 真实 userFills 解析/分类自洽 · F WS webData2==REST 
 > 据 codex-loop 反幻觉纪律保持开放，区别于「已实现但 backlog 写保守」的项（已核实证据后闭合）。
 
 ## 迭代日志
+- 2026-06-26 #124: **K线数据地基审计:gap 检测纪元对齐 bug 修复(波动追踪数据基石)**（/loop；Opus 直接执行）。
+  审计从未覆盖的 K 线采集/摄入管线(喂养所有波动/谐波/BB 信号)。**实证发现真实 bug**:`detect_and_fill_gap`
+  用 `(now//gran)*gran` 算当前 bar 假设纪元(周四)对齐,但 Bitget 日线 16:00 UTC、周线周日 16:00 UTC 按 UTC+8 日界对齐
+  (实跑确认),对 1D/1W/4H gap 计数系统性错位。**修复**:改锚定 `latest_ms`(交易所真实对齐 open)——
+  `gap=(now-latest)//gran-1`,与交易所边界时区无关、可证正确。TDD 补对齐无关测试(test_gap_alignment_independent_for_1d)。
+  全量 **2417 passed, 2 skipped**(零回归)。
 - 2026-06-26 #123: **全系统并行审计修复(39确认含P0)+ 800行债务闭合 + P0端到端验证**（用户#：不计成本并行 agent）。
   ① **波动子系统审计**(6维对抗验证→24确认)+ **9子系统并行审计编队**(55 agent,45原始→39确认:1 P0+13 P1)。
   ② **8 fixer 并行修复**(文件归属零冲突)：P0 discovery whale判定恢复(build_dossier 算 avg_hold_sec)、notify NULL崩溃+
