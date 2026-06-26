@@ -181,13 +181,11 @@ def _composite_oi_signal(
     raw_vel = oi_directional_velocity(oi_now, oi_prev, px_now, px_prev)
     v_sig = math.tanh(raw_vel / _OI_SCALE) if _OI_SCALE > 0.0 else 0.0
 
-    # acceleration（2阶导；方向化：vel_sign × |accel|，加速同向=正，减速=负）
+    # acceleration（2阶导；OI 加速度自带方向——加速建仓=正、加速去杠杆=负）
+    # 直接使用 a_raw，不依赖 velocity 方向调制：v_sig=0（如价格不变）时加速度信号不应归零。
+    # 加速度与 velocity 权重独立（_W_ACCEL=0.30），各自贡献合成信号。
     a_raw = _oi_acceleration(oi_deque, scale=_OI_SCALE)
-    # velocity 方向符号：有速度则与 vel 同向；无速度则中性
-    vel_sign = 1.0 if v_sig > 0.0 else (-1.0 if v_sig < 0.0 else 0.0)
-    # 加速度本身有方向（加速建仓 vs 减速），保留其符号并按 vel_sign 调制
-    # 若 vel=0（首帧/价无变化），accel 也中性
-    a_sig = a_raw * (abs(vel_sign) if vel_sign != 0.0 else 0.0)
+    a_sig = a_raw  # 保留自身方向，不因 vel=0 而归零
 
     # divergence（独立，方向化）
     d_sig = _oi_price_divergence(oi_deque, px_deque, direction)
@@ -208,7 +206,7 @@ class HarmonicForwardSignals:
 
     __slots__ = (
         "min_funding_samples", "_profile", "_funding_hist", "_flow_source",
-        "_oi_signal", "_last_oi", "_last_px",
+        "_last_oi", "_last_px",
         "_oi_hist", "_px_hist",         # C3：时序 deque（OI 加速度/背离用）
         "_oi_hist_maxlen",
     )
@@ -226,7 +224,6 @@ class HarmonicForwardSignals:
             lambda: deque(maxlen=hist_maxlen)
         )
         self._flow_source = flow_source
-        self._oi_signal: dict[str, float] = {}   # coin -> 最近一帧复合 OI 信号 ∈[-1,1]
         self._last_oi: dict[str, float] = {}     # 上一帧 OI（算速度）
         self._last_px: dict[str, float] = {}     # 上一帧 price（算速度方向）
         # C3：时序 deque（OI 加速度+背离需要多帧历史）
@@ -271,19 +268,9 @@ class HarmonicForwardSignals:
             if price > 0:
                 px_dq.append(price)
 
-            # 复合 OI 信号：velocity + acceleration + divergence
-            # 需上一帧 OI+price（首帧无前值→0），时序 deque 供加速度/背离使用
-            prev_oi = self._last_oi.get(coin)
-            prev_px = self._last_px.get(coin)
-            if prev_oi is not None and prev_px is not None:
-                # 注意：此处 direction 暂用中性"long"（后续 __call__ 时会按方向重算）
-                # 实际上 velocity/accel 已含方向，divergence 在 __call__ 时再传入真实方向
-                # 这里先存无方向的基础值，__call__ 时结合方向返回
-                raw_vel = oi_directional_velocity(oi, prev_oi, price, prev_px)
-                v_sig = math.tanh(raw_vel / _OI_SCALE) if _OI_SCALE > 0.0 else 0.0
-                self._oi_signal[coin] = v_sig   # 暂存速度分量，__call__ 时合成完整信号
-            else:
-                self._oi_signal[coin] = 0.0
+            # OI/price 前值追踪（供 __call__ 时 _composite_oi_signal 使用）
+            # 完整复合信号（velocity + acceleration + divergence）在 __call__ 时按真实 direction 合成，
+            # update 阶段仅维护时序 deque 和前值指针，不预算 oi_signal（避免死状态）。
             if oi > 0:
                 self._last_oi[coin] = oi
             if price > 0:

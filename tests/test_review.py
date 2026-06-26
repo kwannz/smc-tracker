@@ -1110,3 +1110,210 @@ class TestByAssetClass:
         text = fmt_accuracy(rep)
         assert "预测准确率回顾" in text
         assert "资产类别命中率" not in text
+
+
+# ---- P1: recent_rows 离群过滤测试 ----
+
+class TestRecentRowsOutlierFilter:
+    """recent_rows SQL 应过滤 |realized_ret| > 10.0 的离群记录（与统计循环 _RET_OUTLIER 一致）。"""
+
+    def _insert_row(
+        self,
+        store: _FakeStore,
+        ts: int,
+        coin: str,
+        realized_ret: float,
+    ) -> None:
+        """直接插入已评估行（走最短路径），不依赖 record/evaluate_due。"""
+        store.conn.execute(
+            "INSERT INTO predictions"
+            "(ts,dt,coin,kind,direction,px_emit,hl_px,bg_px,px_gap_pct,"
+            "horizon_ms,evaluated,eval_ts,eval_dt,px_eval,realized_ret,correct,note)"
+            " VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (ts, "2025-01-01", coin, "跟庄", "long",
+             1.0, 1.0, None, None,
+             3_600_000, 1, ts + 3_600_000, "2025-01-01", 1.05,
+             realized_ret, 1, None),
+        )
+
+    def test_recent_excludes_outlier_ret(
+        self, rev: PredictionReview, store: _FakeStore
+    ) -> None:
+        """|realized_ret| > 10.0 的行不应出现在 recent 列表中。"""
+        self._insert_row(store, 1000, "NORMAL", 0.05)       # 正常行
+        self._insert_row(store, 1001, "OUTLIER", 15.0)      # 离群 +1500%
+        self._insert_row(store, 1002, "NEGSIER", -11.0)     # 离群 -1100%
+        rep = rev.accuracy_report(0, 99999)
+        coins_in_recent = [r["coin"] for r in rep["recent"]]
+        assert "NORMAL" in coins_in_recent, "正常行应在 recent 中"
+        assert "OUTLIER" not in coins_in_recent, "离群 +15 倍行不应进 recent"
+        assert "NEGSIER" not in coins_in_recent, "离群 -11 倍行不应进 recent"
+
+    def test_recent_boundary_exactly_10_included(
+        self, rev: PredictionReview, store: _FakeStore
+    ) -> None:
+        """|realized_ret| == 10.0（等于阈值）的行应保留（<=10 阈值）。"""
+        self._insert_row(store, 2000, "BOUNDARY", 10.0)
+        rep = rev.accuracy_report(0, 99999)
+        coins_in_recent = [r["coin"] for r in rep["recent"]]
+        assert "BOUNDARY" in coins_in_recent, "|ret|=10.0 恰好等于阈值，应保留"
+
+    def test_recent_boundary_just_over_10_excluded(
+        self, rev: PredictionReview, store: _FakeStore
+    ) -> None:
+        """|realized_ret| 略超 10.0 的行应被过滤。"""
+        self._insert_row(store, 3000, "JUST_OVER", 10.001)
+        rep = rev.accuracy_report(0, 99999)
+        coins_in_recent = [r["coin"] for r in rep["recent"]]
+        assert "JUST_OVER" not in coins_in_recent, "|ret|>10.0 应被过滤"
+
+
+# ---- P1: market_neutral_stats 单桶告警测试 ----
+
+class TestMarketNeutralSingleBucketWarning:
+    """market_neutral_stats 大比例单样本桶时 fmt_accuracy 应发出「不可信」告警。"""
+
+    def test_single_bucket_frac_all_singletons_warns(self) -> None:
+        """每个桶仅 1 条记录（100% 单样本桶）→ fmt_accuracy 含「市场中性命中率不可信」告警。"""
+        # 5 条不同时间戳（不同桶），每桶 1 条 → single_bucket_frac = 100%
+        bucket_ms = 3_600_000
+        records = [(i * bucket_ms + 1, "long", 0.05) for i in range(5)]
+        mn_stats = market_neutral_stats(records, bucket_ms=bucket_ms)
+        # 构造一个 report，让 fmt_accuracy 渲染
+        rep = {
+            "total_n": 5,
+            "total_hits": 3,
+            "hit_rate": 0.6,
+            "edge": 0.1,
+            "sufficient": True,
+            "min_sample": 5,
+            "avg_ret": 0.01,
+            "n_long": 5, "n_short": 0,
+            "dir_skew": 1.0,
+            "avg_market_move": 0.01,
+            "beta_suspect": False,
+            "by_kind": {},
+            "by_horizon": {},
+            "gap_warn_count": 0,
+            "recent": [],
+            "market_neutral": mn_stats,
+        }
+        text = fmt_accuracy(rep)
+        assert "市场中性命中率不可信" in text, f"应含告警，实际输出:\n{text}"
+
+    def test_single_bucket_frac_below_threshold_no_warn(self) -> None:
+        """同桶多条记录（0% 单样本桶）→ fmt_accuracy 不含「市场中性命中率不可信」。"""
+        # 5 条同时间桶 → single_bucket_frac = 0%
+        bucket_ms = 3_600_000
+        ts_base = 1_000_000
+        records = [(ts_base, "long", ret) for ret in [0.01, 0.02, 0.03, 0.04, 0.05]]
+        mn_stats = market_neutral_stats(records, bucket_ms=bucket_ms)
+        rep = {
+            "total_n": 5,
+            "total_hits": 3,
+            "hit_rate": 0.6,
+            "edge": 0.1,
+            "sufficient": True,
+            "min_sample": 5,
+            "avg_ret": 0.01,
+            "n_long": 5, "n_short": 0,
+            "dir_skew": 1.0,
+            "avg_market_move": 0.01,
+            "beta_suspect": False,
+            "by_kind": {},
+            "by_horizon": {},
+            "gap_warn_count": 0,
+            "recent": [],
+            "market_neutral": mn_stats,
+        }
+        text = fmt_accuracy(rep)
+        assert "市场中性命中率不可信" not in text, f"不应含告警，实际输出:\n{text}"
+
+    def test_single_bucket_frac_computed_correctly(self) -> None:
+        """market_neutral_stats 返回 single_bucket_frac 值正确。"""
+        bucket_ms = 3_600_000
+        # 3 个桶：桶0两条、桶1一条、桶2一条 → 单样本桶 = 2/3
+        ts0 = 0
+        ts1 = bucket_ms
+        ts2 = 2 * bucket_ms
+        records = [
+            (ts0,     "long", 0.05),   # 桶0 第1条
+            (ts0 + 1, "long", 0.03),   # 桶0 第2条 → 桶0有2条，不是单样本桶
+            (ts1,     "long", 0.04),   # 桶1 单条
+            (ts2,     "long", 0.02),   # 桶2 单条
+        ]
+        result = market_neutral_stats(records, bucket_ms=bucket_ms)
+        # 3 个桶：桶0(2条)、桶1(1条)、桶2(1条) → 2 个单样本桶 / 3 桶 = 0.667
+        assert "single_bucket_frac" in result, "结果应含 single_bucket_frac 键"
+        assert result["single_bucket_frac"] == pytest.approx(2 / 3, rel=1e-6)
+
+    def test_empty_records_single_bucket_frac_zero(self) -> None:
+        """空输入时 single_bucket_frac 应为 0.0，不抛异常。"""
+        result = market_neutral_stats([])
+        assert result.get("single_bucket_frac", 0.0) == pytest.approx(0.0)
+
+
+# ---- P2: accuracy_report now_ms 时间上界测试 ----
+
+class TestAccuracyReportNowMsUpperBound:
+    """accuracy_report 的两条 SQL 都应加 AND ts <= now_ms，把「未来」数据排除在外。"""
+
+    def _insert_row(
+        self,
+        store: _FakeStore,
+        ts: int,
+        coin: str,
+        realized_ret: float = 0.05,
+        correct: int = 1,
+    ) -> None:
+        store.conn.execute(
+            "INSERT INTO predictions"
+            "(ts,dt,coin,kind,direction,px_emit,hl_px,bg_px,px_gap_pct,"
+            "horizon_ms,evaluated,eval_ts,eval_dt,px_eval,realized_ret,correct,note)"
+            " VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (ts, "2025-01-01", coin, "跟庄", "long",
+             1.0, 1.0, None, None,
+             3_600_000, 1, ts + 3_600_000, "2025-01-01", 1.05,
+             realized_ret, correct, None),
+        )
+
+    def test_main_query_respects_now_ms(
+        self, rev: PredictionReview, store: _FakeStore
+    ) -> None:
+        """ts > now_ms 的行不应计入统计（主查询 AND ts <= now_ms）。"""
+        # 过去的记录（ts=1000）
+        self._insert_row(store, 1000, "PAST")
+        # 未来的记录（ts=9_000_000，远超 now_ms=5_000）
+        self._insert_row(store, 9_000_000, "FUTURE")
+
+        rep = rev.accuracy_report(since_ms=0, now_ms=5_000)
+        # 只应统计 PAST（ts=1000 <= 5000）
+        assert rep["total_n"] == 1, (
+            f"应仅含 ts<=now_ms 的行，total_n 期望 1，实际 {rep['total_n']}"
+        )
+        by_kind_coins = {k for k in rep.get("by_kind", {})}
+        assert rep["total_n"] == 1
+
+    def test_recent_query_respects_now_ms(
+        self, rev: PredictionReview, store: _FakeStore
+    ) -> None:
+        """ts > now_ms 的行不应出现在 recent 列表中（recent SQL AND ts <= now_ms）。"""
+        self._insert_row(store, 1000, "PAST")
+        self._insert_row(store, 9_000_000, "FUTURE")
+
+        rep = rev.accuracy_report(since_ms=0, now_ms=5_000)
+        coins_in_recent = [r["coin"] for r in rep["recent"]]
+        assert "PAST" in coins_in_recent, "过去的行应出现在 recent"
+        assert "FUTURE" not in coins_in_recent, "未来的行（ts>now_ms）不应出现在 recent"
+
+    def test_now_ms_does_not_filter_valid_rows(
+        self, rev: PredictionReview, store: _FakeStore
+    ) -> None:
+        """ts == now_ms 的行应保留（<=，不是 <）；ts < now_ms 的行也应保留。"""
+        self._insert_row(store, 5_000, "EXACT_NOW")    # ts == now_ms
+        self._insert_row(store, 4_000, "BEFORE_NOW")  # ts < now_ms
+
+        rep = rev.accuracy_report(since_ms=0, now_ms=5_000)
+        assert rep["total_n"] == 2, (
+            f"ts<=now_ms 的行都应保留，期望 2，实际 {rep['total_n']}"
+        )

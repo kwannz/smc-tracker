@@ -58,15 +58,15 @@ async def fetch_leaderboard_rows() -> list[dict[str, Any]]:
         return cached
 
 
-def _window(row: dict[str, Any], name: str) -> tuple[float, float]:
-    """取某时间窗的 (pnl, roi)。"""
+def _window(row: dict[str, Any], name: str) -> float:
+    """取某时间窗的 pnl（P2简化：roi 被所有调用方丢弃，直接返回 float）。"""
     for w in row.get("windowPerformances", []):
         if w and len(w) >= 2 and w[0] == name:        # 长度守卫：防裸下标 w[1] 越界
             try:
-                return float(w[1].get("pnl", 0)), float(w[1].get("roi", 0))
+                return float(w[1].get("pnl", 0))
             except (TypeError, ValueError, AttributeError, IndexError):
-                return 0.0, 0.0
-    return 0.0, 0.0
+                return 0.0
+    return 0.0
 
 
 def rank_smart_money(
@@ -87,8 +87,8 @@ def rank_smart_money(
             av = float(r.get("accountValue", 0) or 0)
         except (TypeError, ValueError):
             continue
-        at_pnl, _ = _window(r, "allTime")
-        m_pnl, _ = _window(r, "month")
+        at_pnl = _window(r, "allTime")
+        m_pnl = _window(r, "month")
         if av < min_account_value or at_pnl < min_alltime_pnl:
             continue
         if require_month_positive and m_pnl <= 0:

@@ -96,12 +96,27 @@ async def build_dossier(address: str, info: Any, store: Any, now_ms: int, *,
     except Exception:  # noqa: BLE001
         flagged = False
 
+    # ⑦ avg_hold_sec：从已平仓 fills 估算平均持仓时长（P0修复：原先缺此字段导致 whale 判定永久失效）
+    # 算法：取所有已平仓 fill（closed_pnl≠0）的时间戳，用 [max-min]/n_closed 估算生命周期；
+    # 样本过少(<2)时回退0，不抛。
+    avg_hold_sec: float = 0.0
+    try:
+        closed_fills = [f for f in raw_fills if f.closed_pnl != 0]
+        n_closed = len(closed_fills)
+        if n_closed >= 2:
+            ts_list = [f.time_ms for f in closed_fills]
+            span_ms = max(ts_list) - min(ts_list)
+            avg_hold_sec = to_float(span_ms / n_closed / 1000.0)  # 转换为秒，拒 NaN/inf
+    except Exception:  # noqa: BLE001
+        avg_hold_sec = 0.0
+
     return {
         "address": addr, "now_ms": now_ms, "window_h": window_h,
         "profile": profile, "positions": positions, "recent_fills": recent_fills,
         "co_movers": co_movers, "counterparties": counterparties,
         "cluster": my_cluster,
         "trajectory": trajectory, "pnl_snapshot": pnl_snapshot, "flagged": flagged,
+        "avg_hold_sec": avg_hold_sec,   # 平均持仓时长(秒)，供 classify_trader 判定庄家
     }
 
 

@@ -17,7 +17,6 @@ WS ticker 字段（已实证，wss://ws.bitget.com/v2/ws/public，channel=ticker
 from __future__ import annotations
 
 import logging
-import math
 from collections import deque
 from typing import Any, Callable
 
@@ -58,8 +57,9 @@ class BitgetOIMonitor:
         # symbol → 上一次用于比较的 OI(币数)，用于算异动
         self._prev_oi: dict[str, float] = {}
         # A2b：OI 历史窗口环形缓存（纯内存，替换 _on_structure 热路径磁盘 SELECT）
-        # symbol → list[(ts_ms, oi_size)]；保留最近 1200s（2×600s 窗口）的数据点
-        self._oi_window_data: dict[str, list[tuple[int, float]]] = {}
+        # symbol → deque[(ts_ms, oi_size)]；保留最近 1200s（2×600s 窗口）的数据点
+        # P1: 用 deque 替代 list，popleft() O(1) 而 list.pop(0) O(n)
+        self._oi_window_data: dict[str, deque[tuple[int, float]]] = {}
         # 超过此时长的 OI 历史点自动丢弃（节省内存，保留 2 倍窗口足够）
         self._oi_window_retain_ms: int = 1_200_000  # 1200s = 20 min
         # 统计
@@ -147,13 +147,14 @@ class BitgetOIMonitor:
 
         # A2b：维护 OI 历史窗口（纯内存，供 oi_window() 热路径查询，替代磁盘 SELECT）
         if ts and oi_size > 0:
-            window = self._oi_window_data.setdefault(symbol, [])
+            # P1: setdefault deque()，popleft() O(1) 替代 list.pop(0) O(n)
+            window = self._oi_window_data.setdefault(symbol, deque())
             window.append((ts, oi_size))
             # 剪裁过老数据（保留 retain_ms 以内的点，避免内存单调增长）
             if len(window) > 1:
                 cutoff = ts - self._oi_window_retain_ms
                 while window and window[0][0] < cutoff:
-                    window.pop(0)
+                    window.popleft()
 
         # 注意：不在热路径内调用 maybe_flush()；落库由 app._periodic_flush(every=5s) 周期驱动
 

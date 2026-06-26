@@ -90,3 +90,50 @@ def test_no_flow_source_keeps_flow_none():
     fs.update(_parsed("BTC", oi=1.0, funding=0.0001), now_ms=1000)
     _, flow_score, _, _ = fs("BTC", "long")
     assert flow_score is None
+
+
+# ---------------------------------------------------------------------------
+# P1: _oi_signal 死状态已删除（不应出现在 __slots__）
+# ---------------------------------------------------------------------------
+
+def test_p1_no_oi_signal_slot():
+    """P1：_oi_signal 是死状态，不应存在于 __slots__ 中（已删除）。"""
+    assert "_oi_signal" not in HarmonicForwardSignals.__slots__, (
+        "_oi_signal 是死状态，应已从 __slots__ 删除"
+    )
+
+
+def test_p1_no_oi_signal_in_instance():
+    """P1：实例不应有 _oi_signal 属性（slots 删除后实例也无此属性）。"""
+    fs = HarmonicForwardSignals()
+    fs.update(_parsed("BTC", oi=1000.0, funding=0.0001, price=100.0), now_ms=1000)
+    assert not hasattr(fs, "_oi_signal"), "_oi_signal 死状态应已从实例中删除"
+
+
+# ---------------------------------------------------------------------------
+# P2: OI 加速度在 v_sig=0 时不应被归零
+# ---------------------------------------------------------------------------
+
+def test_p2_accel_contributes_when_velocity_zero():
+    """P2：价格不变（v_sig=0）时，OI 持续加速仍应产生非零 oi_signal（加速度不应被归零）。
+
+    构造：OI 持续加速增长，但价格恒定（v_sig=0）。
+    修复前：a_sig = a_raw * 0.0 = 0（错误归零）。
+    修复后：a_sig = a_raw（保留加速度信号）。
+    需要 ≥3 帧 OI 历史才能计算加速度（_MIN_OI_FRAMES=3）。
+    """
+    fs = HarmonicForwardSignals()
+    # 价格固定=100，OI 持续加速增长（一阶导在增加）
+    # 帧1: OI=1000
+    fs.update(_parsed("BTC", oi=1000.0, funding=0.0001, price=100.0), now_ms=1000)
+    # 帧2: OI=1020（+2%）
+    fs.update(_parsed("BTC", oi=1020.0, funding=0.0001, price=100.0), now_ms=2000)
+    # 帧3: OI=1060（+3.9%，加速：速度从2%→~3.9%）
+    fs.update(_parsed("BTC", oi=1060.0, funding=0.0001, price=100.0), now_ms=3000)
+    # 帧4: OI=1120（+5.7%，加速：速度继续增加）
+    fs.update(_parsed("BTC", oi=1120.0, funding=0.0001, price=100.0), now_ms=4000)
+    _, _, oi_signal, _ = fs("BTC", "long")
+    # 价格不变 → v_sig=0，但 OI 在加速，accel 应非零，oi_signal 应非零
+    assert oi_signal is not None and oi_signal != 0.0, (
+        f"价格不变时 OI 加速应产生非零信号，得到 oi_signal={oi_signal}"
+    )

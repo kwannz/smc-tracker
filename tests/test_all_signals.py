@@ -375,3 +375,47 @@ def test_type_label_chinese(store: _FakeStore) -> None:
         # 中文标签应包含至少一个中文字符
         has_chinese = any("一" <= c <= "鿿" for c in label)
         assert has_chinese, f"type={row['type']} type_label={label!r} 不含中文"
+
+
+# ---- P2: book_imb NULL 格式化修复 ----
+
+def _setup_flow_predictions_null_book_imb(store: _FakeStore) -> None:
+    """建 flow_predictions 表并插一行 book_imb=NULL 的样本。"""
+    _exec(store, """
+        CREATE TABLE IF NOT EXISTS flow_predictions (
+            ts INTEGER, coin TEXT, direction TEXT,
+            score REAL, vel REAL, accel REAL, book_imb REAL
+        );
+    """)
+    store.conn.execute(
+        "INSERT INTO flow_predictions VALUES(?,?,?,?,?,?,?)",
+        (_T0, "ETH", "short", 0.6, 8000.0, None, None),  # book_imb=NULL
+    )
+
+
+def test_flow_prediction_book_imb_null_shows_question_mark(store: _FakeStore) -> None:
+    """P2 修复：book_imb=NULL 时 evidence_text 应显示 '?' 而非 '0.00'。"""
+    _setup_flow_predictions_null_book_imb(store)
+    result = collect_all_signals(store, SINCE, _T0)
+    flow = [r for r in result if r["type"] == "flow_prediction"]
+    assert flow, "flow_prediction 应有结果"
+    text = flow[0]["evidence_text"]
+    assert "挂单失衡=?" in text, (
+        f"book_imb=NULL 时应显示 '挂单失衡=?'，实际: {text!r}"
+    )
+    # 确认 evidence dict 里 book_imb 为 None（不是 0.0）
+    assert flow[0]["evidence"]["book_imb"] is None, (
+        f"evidence['book_imb'] 应为 None，实际: {flow[0]['evidence']['book_imb']!r}"
+    )
+
+
+def test_flow_prediction_book_imb_present_shows_value(store: _FakeStore) -> None:
+    """book_imb 非 NULL 时 evidence_text 应显示具体数值（非 '?'）。"""
+    _setup_flow_predictions(store)  # 使用已有 helper（book_imb=0.3）
+    result = collect_all_signals(store, SINCE, _T0)
+    flow = [r for r in result if r["type"] == "flow_prediction"]
+    assert flow, "flow_prediction 应有结果"
+    text = flow[0]["evidence_text"]
+    assert "挂单失衡=0.30" in text, (
+        f"book_imb=0.3 时应显示 '挂单失衡=0.30'，实际: {text!r}"
+    )

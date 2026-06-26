@@ -515,6 +515,94 @@ def test_on_surge_fixed_handler_extracts_fields_correctly():
     s.close()
 
 
+# ================================================================
+# P1 修复验证：_oi_window_data 改用 deque，popleft() O(1)
+# ================================================================
+
+def test_oi_window_data_is_deque():
+    """P1 修复：_oi_window_data 中每个 symbol 的容器必须是 deque（非 list）。
+
+    deque.popleft() 是 O(1)，list.pop(0) 是 O(n)。
+    此测试验证修复后 setdefault 创建的是 deque 实例。
+    """
+    from collections import deque as _deque
+    ws = _FakeWS()
+    s = _store()
+    m = BitgetOIMonitor(["PEPEUSDT"], {"PEPEUSDT": "PEPE"}, ws, s)
+
+    # 喂一条 ticker 触发 _oi_window_data 初始化
+    m._on_ticker({"instId": "PEPEUSDT"}, [_ticker("PEPEUSDT", 1000, 1.0, 0.0, 1_000_000)], 0)
+
+    window = m._oi_window_data.get("PEPEUSDT")
+    assert window is not None, "_oi_window_data 应有 PEPEUSDT 条目"
+    assert isinstance(window, _deque), (
+        f"P1 修复：_oi_window_data 的容器应为 deque，实际为 {type(window).__name__}"
+    )
+    s.close()
+
+
+def test_oi_window_prunes_old_entries_via_popleft():
+    """P1 修复：过老的 OI 历史点通过 popleft() 被正确剪裁（保留 retain_ms 内的数据）。
+
+    构造三个 ts：t0（太旧）、t1（刚好在边界外）、t2（最新）。
+    喂入后期望只保留最新点（t2），t0/t1 被 popleft() 清除。
+    """
+    ws = _FakeWS()
+    s = _store()
+    m = BitgetOIMonitor(["WIFUSDT"], {"WIFUSDT": "WIF"}, ws, s)
+
+    retain_ms = m._oi_window_retain_ms  # 默认 1_200_000ms = 20min
+
+    # t0 很早（肯定过期），t1 = t2 - retain_ms - 1（刚好过期）
+    t2 = 10_000_000
+    t1 = t2 - retain_ms - 1    # 过期
+    t0 = t1 - 60_000            # 更早，也过期
+
+    # 喂三条，每条单独 on_ticker（不同 ts）
+    m._on_ticker({"instId": "WIFUSDT"}, [_ticker("WIFUSDT", 100, 1.0, 0.0, t0)], 0)
+    m._on_ticker({"instId": "WIFUSDT"}, [_ticker("WIFUSDT", 200, 1.0, 0.0, t1)], 0)
+    m._on_ticker({"instId": "WIFUSDT"}, [_ticker("WIFUSDT", 300, 1.0, 0.0, t2)], 0)
+
+    window = m._oi_window_data.get("WIFUSDT")
+    assert window is not None
+
+    # t0 和 t1 均早于 t2 - retain_ms，应被 popleft() 剪掉
+    # 只剩 t2 这一条
+    remaining_ts = [entry[0] for entry in window]
+    assert t0 not in remaining_ts, f"t0={t0} 应被剪裁，剩余: {remaining_ts}"
+    assert t1 not in remaining_ts, f"t1={t1} 应被剪裁，剩余: {remaining_ts}"
+    assert t2 in remaining_ts, f"t2={t2} 应保留，剩余: {remaining_ts}"
+
+    s.close()
+
+
+def test_oi_window_query_returns_correct_past_oi():
+    """oi_window() 能正确返回 (latest_oi, past_oi)，past_oi 取窗口边界前最近一条。"""
+    ws = _FakeWS()
+    s = _store()
+    m = BitgetOIMonitor(["1000BONKUSDT"], {"1000BONKUSDT": "BONK"}, ws, s)
+
+    now_ms = 2_000_000
+    window_ms = 600_000   # 10min 窗口
+    boundary = now_ms - window_ms  # = 1_400_000
+
+    # ts=1_000_000：比 boundary 更早，应作为 past_oi
+    # ts=1_500_000：比 boundary 更晚，不作为 past_oi
+    # ts=2_000_000：最新，作为 latest_oi
+    m._on_ticker({"instId": "1000BONKUSDT"}, [_ticker("1000BONKUSDT", 100, 0.01, 0.0, 1_000_000)], 0)
+    m._on_ticker({"instId": "1000BONKUSDT"}, [_ticker("1000BONKUSDT", 200, 0.01, 0.0, 1_500_000)], 0)
+    m._on_ticker({"instId": "1000BONKUSDT"}, [_ticker("1000BONKUSDT", 300, 0.01, 0.0, 2_000_000)], 0)
+
+    result = m.oi_window("1000BONKUSDT", window_ms, now_ms)
+    assert result is not None, "有数据时 oi_window 不应返回 None"
+    latest_oi, past_oi = result
+    assert abs(latest_oi - 300.0) < 1e-9, f"latest_oi 期望 300，实际 {latest_oi}"
+    assert past_oi is not None, "past_oi 应找到 ts=1_000_000 的点"
+    assert abs(past_oi - 100.0) < 1e-9, f"past_oi 期望 100，实际 {past_oi}"
+
+    s.close()
+
+
 if __name__ == "__main__":
     for name, fn in list(globals().items()):
         if name.startswith("test_") and callable(fn):

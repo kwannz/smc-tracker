@@ -57,6 +57,33 @@ def test_negative_price():
     assert "e" not in s.lower()
 
 
+def test_fmt_usd_zh_units():
+    """fmt_usd 中文单位：亿 / 万 / 原始价格（小额）。"""
+    from smc_tracker.util import fmt_usd
+    assert fmt_usd(1_500_000_000.0) == "15.00亿"
+    assert fmt_usd(2_000_000.0) == "200.0万"
+    assert fmt_usd(50_000.0) == "5.0万"
+    assert fmt_usd(999.0) == "999"          # 小额走 fmt_px
+    assert fmt_usd(0.0) == "0"
+    assert fmt_usd(-300_000.0) == "-30.0万"
+
+
+def test_fmt_usd_en_units():
+    """fmt_usd 英文单位：B / M / K / 原始价格。"""
+    from smc_tracker.util import fmt_usd
+    assert fmt_usd(2_500_000_000.0, style="en") == "2.50B"
+    assert fmt_usd(5_000_000.0, style="en") == "5.00M"
+    assert fmt_usd(8_000.0, style="en") == "8.0K"
+    assert fmt_usd(500.0, style="en") == "500"    # 小额走 fmt_px
+
+
+def test_fmt_usd_none_returns_question_mark():
+    """fmt_usd(None) 必须返回 '?'，不以 '0' 掩盖缺失值（P2 约束）。"""
+    from smc_tracker.util import fmt_usd
+    assert fmt_usd(None) == "?"
+    assert fmt_usd(None, style="en") == "?"
+
+
 def test_is_placeholder_addr():
     """占位/无效地址判别：空 / 全零地址(0x0..0) → True（示例配置残留，不追踪/不推送）。"""
     from smc_tracker.util import is_placeholder_addr

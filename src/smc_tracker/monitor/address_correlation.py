@@ -112,7 +112,11 @@ class AddressCorrelation:
 
     def correlated_with(self, address: str, since_ms: int, window_sec: int = 60,
                         min_shared: int = 2, limit: int = 15) -> list[tuple[str, int]]:
-        """与指定地址协同事件最多的地址（已按 lift 排序的 co_movers 结果中过滤）。"""
+        """与指定地址最相关的地址，沿用 co_movers 的 lift 降序（消高频偏向）。
+
+        co_movers 已按 lift 归一排序，此处只做过滤，不再按 raw count 重排，
+        以保留 lift 序（lift 高的真协同伙伴应排在绝对次数多但随机的高频地址之前）。
+        """
         a = address                      # 与存储一致(HL 地址本即小写)，不强转
         out: list[tuple[str, int]] = []
         for x, y, c in self.co_movers(since_ms, window_sec, min_shared, limit=10_000):
@@ -120,7 +124,7 @@ class AddressCorrelation:
                 out.append((y, c))
             elif y == a:
                 out.append((x, c))
-        out.sort(key=lambda t: t[1], reverse=True)
+        # 不重排：co_movers 已按 lift 降序，直接截取 limit 即可
         return out[:limit]
 
     def _union_groups(
@@ -198,17 +202,26 @@ class AddressCorrelation:
             min_shared, min_coins, self._cfg.min_lift, self._cfg.max_p,
         )
         out: list[dict[str, Any]] = []
+        min_lift = self._cfg.min_lift
+        max_p = self._cfg.max_p
         for g in groups:
             members = set(g)
             links = 0
             events = 0
             coinset: set[str] = set()
             for (a, b), c in counts.items():
-                if a in members and b in members and c >= min_shared \
-                        and len(coins[(a, b)]) >= min_coins:
-                    links += 1
-                    events += c
-                    coinset |= coins[(a, b)]
+                if a not in members or b not in members:
+                    continue
+                if c < min_shared or len(coins[(a, b)]) < min_coins:
+                    continue
+                # 同步显著性过滤：仅统计通过 is_significant 检验的成对关系，
+                # 与 _union_groups 的条件保持一致，不含非显著对的虚假贡献
+                lift, p = pair_lift(c, activity.get(a, 0), activity.get(b, 0), total_events)
+                if not is_significant(lift, p, min_lift, max_p):
+                    continue
+                links += 1
+                events += c
+                coinset |= coins[(a, b)]
             out.append({"members": g, "size": len(g), "links": links,
                         "events": events, "coins": len(coinset),
                         "coin_list": sorted(coinset)})

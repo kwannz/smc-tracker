@@ -524,3 +524,109 @@ class TestToBBRecords:
         rows = [{"coin": "BTC", "tfs": {"1H": _make_analyze_result()}, "agg": {}}]
         recs = mon.to_bb_records(rows, now_ms=now)
         assert recs[0][2] == now
+
+
+# ── P1/P2 修复专项：need_min、动态 src_label、挤压启发式标注 ──────────────────────
+
+class TestP1P2Fixes:
+    """P1/P2 修复验证：need_min=period（非 period+1），动态数据源标注，挤压启发式告警。"""
+
+    def _make_monitor(self, period: int = 20) -> BitgetBBMonitor:
+        return BitgetBBMonitor(
+            coin_to_symbol={"BTC": "BTCUSDT"},
+            timeframes=["1H"],
+            bars=100,
+            period=period,
+            k=2.0,
+            top_n=5,
+        )
+
+    def test_need_min_is_period_not_period_plus_1(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """P1：DB 提供恰好 period 根时，不应回退 live（need_min=period 而非 period+1）。
+
+        旧实现 need_min=period+1 会在 DB 有 period 根时错误回退 live 拉取。
+        """
+        from smc_tracker.bitget import rest as rest_mod
+        from smc_tracker.models import Candle
+
+        period = 20
+        live_calls: list = []
+
+        async def fake_klines(self_bg, symbol, tf, bars=1000, coin=""):
+            live_calls.append((symbol, tf))
+            return []
+
+        monkeypatch.setattr(rest_mod.BitgetREST, "klines", fake_klines)
+
+        # 构造恰好 period 根 K 线（如果 need_min=period+1 则不足，会触发 live）
+        base_ms = 1_700_000_000_000
+        step = 3600 * 1000
+        enough = [
+            Candle(
+                coin="BTC", interval="1H",
+                open_time_ms=base_ms + i * step,
+                close_time_ms=base_ms + (i + 1) * step,
+                o=60000.0, h=60200.0, l=59800.0, c=60100.0, v=1.0, n=0,
+            )
+            for i in range(period)  # 恰好 period 根
+        ]
+
+        class _FakeStore:
+            def get_candles(self, coin, tf, limit=1000):
+                return enough[:limit]
+            def upsert_candles(self, rows):
+                pass
+
+        mon = BitgetBBMonitor(
+            coin_to_symbol={"BTC": "BTCUSDT"},
+            timeframes=["1H"],
+            bars=100,
+            period=period,
+            k=2.0,
+            top_n=5,
+            store=_FakeStore(),
+        )
+
+        import asyncio
+        asyncio.run(mon.refresh(now_ms=base_ms))
+
+        assert len(live_calls) == 0, (
+            f"DB 恰好 period={period} 根时 need_min=period 不应回退 live，"
+            f"实际触发 live {len(live_calls)} 次"
+            f"（旧 need_min=period+1 的 off-by-one 会触发此失败）"
+        )
+
+    def test_render_squeeze_note_contains_heuristic_label(self) -> None:
+        """P2：挤压标注含"内部启发式,非标准BB挤压"告警文本。"""
+        mon = self._make_monitor()
+        rows = [
+            _make_row("BTC", "BTCUSDT", 62538.4, 80, "偏多", 4, 1, squeeze_n=2),
+        ]
+        card = mon.render(rows, now_ms=1_700_000_000_000)
+        assert card is not None
+        assert "内部启发式" in card, (
+            "挤压告警应包含'内部启发式'标注（0.6×median 是启发式而非标准BB挤压）"
+        )
+        assert "非标准BB挤压" in card, "挤压告警应包含'非标准BB挤压'诚实标注"
+
+    def test_render_no_squeeze_no_heuristic_label(self) -> None:
+        """无挤压周期时，卡片中不含挤压标注文本。"""
+        mon = self._make_monitor()
+        rows = [
+            _make_row("BTC", "BTCUSDT", 62538.4, 80, "偏多", 4, 1, squeeze_n=0),
+        ]
+        card = mon.render(rows, now_ms=1_700_000_000_000)
+        assert card is not None
+        assert "内部启发式" not in card, "无挤压时不应输出启发式标注"
+
+    def test_render_src_label_dynamic(self) -> None:
+        """P2：render 卡片数据源标注动态反映 _HAS_TALIB 状态。"""
+        from smc_tracker.indicators.bollinger_bands import _HAS_TALIB
+        mon = self._make_monitor()
+        rows = [_make_row("BTC", "BTCUSDT", 62538.4, 80, "偏多", 4, 1)]
+        card = mon.render(rows, now_ms=1_700_000_000_000)
+        assert card is not None
+        if _HAS_TALIB:
+            assert "TA-Lib BBANDS" in card, "TA-Lib 存在时应标注'TA-Lib BBANDS'"
+        else:
+            assert "numpy bollinger" in card, "TA-Lib 不存在时应标注'numpy bollinger'"

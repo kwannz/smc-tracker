@@ -42,7 +42,13 @@ def bb_bands(
 
 
 def _pos_label(pct_b: float) -> str:
-    """按 %B 值分档返回人类可读位置标签。"""
+    """按 %B 值分档返回人类可读位置标签。
+
+    pct_b==0.5 时为带宽为零（极端常数序列）的中性兜底值，单独返回横盘中性。
+    """
+    # band_width=0 时兜底值，中性不偏多空
+    if pct_b == 0.5:
+        return "横盘中性"
     if pct_b >= 1.0:
         return "触上轨/压力(超买)"
     if pct_b >= 0.8:
@@ -72,7 +78,7 @@ def analyze_tf(
         None 若 K 线不足 period+1；
         否则 dict 含键：upper/mid/lower/price/pct_b/bandwidth/squeeze/pos_label/bull
     """
-    if len(candles) < period + 1:
+    if len(candles) < period:
         return None
 
     arrays = ohlcv_arrays(candles)
@@ -96,6 +102,7 @@ def analyze_tf(
     bandwidth = band_width_val / mid if abs(mid) > 1e-12 else 0.0
 
     # squeeze：带宽处于近 N 根低位（bandwidth < 近窗中位数*0.6）
+    # 注意：0.6×median 阈值是内部启发式，非标准BB挤压（如 John Carter TTM Squeeze 定义）
     # N=min(len,120)，不足则不判为挤压
     squeeze_n = min(len(c_arr), 120)
     squeeze = False

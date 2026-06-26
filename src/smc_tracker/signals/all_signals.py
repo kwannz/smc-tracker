@@ -18,10 +18,11 @@
 """
 from __future__ import annotations
 
+import math
 import sqlite3
 from typing import TYPE_CHECKING, Any
 
-from ..util import fmt_px, to_float
+from ..util import fmt_px, fmt_usd, to_float
 
 if TYPE_CHECKING:
     from ..storage.db import Store
@@ -46,7 +47,6 @@ def _sf(v: Any, default: float | None = None) -> float | None:
     if v is None:
         return default
     f = to_float(v, float("nan"))
-    import math
     return default if math.isnan(f) else f
 
 
@@ -59,17 +59,6 @@ def _addr_short(addr: str | None) -> str:
         return s[:8] + ".." + s[-6:]
     return s
 
-
-def _fmt_usd(v: float | None) -> str:
-    """名义金额格式化：万/亿 中文单位。"""
-    if v is None:
-        return "?"
-    a = abs(v)
-    if a >= 1e8:
-        return f"{v/1e8:.2f}亿"
-    if a >= 1e4:
-        return f"{v/1e4:.1f}万"
-    return fmt_px(v)
 
 
 # ---- 各表解析函数 ----
@@ -129,7 +118,7 @@ def _parse_divergence(rows: list[tuple]) -> list[dict]:
         if funding is not None:
             parts.append(f"资金费={to_float(funding)*100:.3f}%")
         if dex_flow_usd is not None:
-            parts.append(f"DEX流向={_fmt_usd(_sf(dex_flow_usd))}")
+            parts.append(f"DEX流向={fmt_usd(_sf(dex_flow_usd))}")
         if reason:
             parts.append(str(reason)[:40])
         result.append({
@@ -162,7 +151,7 @@ def _parse_whale_signals(rows: list[tuple]) -> list[dict]:
             "taker": bool(taker) if taker is not None else None,
         }
         addr_str = label or _addr_short(address)
-        ntl_str = _fmt_usd(_sf(notional))
+        ntl_str = fmt_usd(_sf(notional))
         taker_str = " taker" if taker else ""
         parts = [f"庄{addr_str} {action or ''} {direction or '?'} 净{ntl_str}{taker_str}"]
         result.append({
@@ -193,7 +182,7 @@ def _parse_position_changes(rows: list[tuple]) -> list[dict]:
             "new_notional": _sf(new_notional),
         }
         addr_str = label or _addr_short(address)
-        change_str = f"{_fmt_usd(_sf(prev_notional))}→{_fmt_usd(_sf(new_notional))}"
+        change_str = f"{fmt_usd(_sf(prev_notional))}→{fmt_usd(_sf(new_notional))}"
         text = f"庄{addr_str} {kind or '?'} {direction or '?'} {change_str}"
         result.append({
             "type": "position_change",
@@ -222,7 +211,7 @@ def _parse_consensus(rows: list[tuple]) -> list[dict]:
             "labels": labels,
         }
         text = (
-            f"{n_agree or 0}庄一致 净{_fmt_usd(_sf(net_notional))}"
+            f"{n_agree or 0}庄一致 净{fmt_usd(_sf(net_notional))}"
             f" 反对{n_oppose or 0}"
         )
         result.append({
@@ -281,7 +270,7 @@ def _parse_flagged(rows: list[tuple]) -> list[dict]:
         }
         text = (
             f"可疑地址 {_addr_short(address)}"
-            f" 净{_fmt_usd(_sf(net_usd))}"
+            f" 净{fmt_usd(_sf(net_usd))}"
             f" {reason or ''}"
         )
         result.append({
@@ -308,9 +297,11 @@ def _parse_flow_predictions(rows: list[tuple]) -> list[dict]:
             "accel": _sf(accel),
             "book_imb": _sf(book_imb),
         }
-        vel_str = f"{_fmt_usd(_sf(vel))}/min" if vel is not None else "?"
-        accel_str = f"加速度{_fmt_usd(_sf(accel))}" if accel is not None else ""
-        text = f"{direction or '?'} 流速={vel_str} {accel_str} 挂单失衡={to_float(book_imb):.2f}"
+        vel_str = f"{fmt_usd(_sf(vel))}/min" if vel is not None else "?"
+        accel_str = f"加速度{fmt_usd(_sf(accel))}" if accel is not None else ""
+        # P2: book_imb 可为 None（DB 为 NULL），须先判 None 再格式化，避免 to_float(None)=0.00 掩盖缺失
+        imb_str = f"{_sf(book_imb):.2f}" if book_imb is not None else "?"
+        text = f"{direction or '?'} 流速={vel_str} {accel_str} 挂单失衡={imb_str}"
         result.append({
             "type": "flow_prediction",
             "type_label": "前瞻资金流",
@@ -336,7 +327,7 @@ def _parse_okx_signals(rows: list[tuple]) -> list[dict]:
             "net_flow": _sf(net_flow),
         }
         funding_str = f"资金费={to_float(funding)*100:.3f}%" if funding is not None else ""
-        flow_str = f"净流入={_fmt_usd(_sf(net_flow))}" if net_flow is not None else ""
+        flow_str = f"净流入={fmt_usd(_sf(net_flow))}" if net_flow is not None else ""
         text = f"OKX {kind or ''} {direction or '?'} {funding_str} {flow_str}".strip()
         result.append({
             "type": "okx_signal",
@@ -367,7 +358,7 @@ def _parse_orderbook_walls(rows: list[tuple]) -> list[dict]:
         direction = "long" if side == "bid" else "short" if side == "ask" else None
         text = (
             f"{side or '?'}墙 {kind or ''} @{fmt_px(px)}"
-            f" 名义={_fmt_usd(_sf(notional))}"
+            f" 名义={fmt_usd(_sf(notional))}"
         )
         result.append({
             "type": "orderbook_wall",

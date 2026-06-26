@@ -616,6 +616,61 @@ def test_bare_sell_adds_short_increments_fills():
     assert lc.open_ms == 1000
 
 
+# ---------------------------------------------------------------------------
+# P1 越零路径修复测试：is_close 超量平仓穿越0后，open_ms/n_fills/seg_max_abs 重置
+# ---------------------------------------------------------------------------
+
+def test_overclose_resets_open_ms_to_fill_time():
+    """P1 修复：Close Long 超量穿越零后，open_ms 应重置为该笔时间（新段起点）。
+
+    修复前：open_ms 仍为旧段开仓时间（1000），表示持仓时长虚高。
+    修复后：open_ms = 越零笔时间（2000），n_fills=1，seg_max_abs=abs(running)。
+    """
+    fills = [
+        _fill("BTC", "BUY",  100.0, 1000, "Open Long",  hash_="h1", oid=1),
+        _fill("BTC", "SELL", 150.0, 2000, "Close Long", hash_="h2", oid=2),  # 超量越零 → running=-50
+    ]
+    lcs = reconstruct(fills, now_ms=9000)
+    lc = lcs["BTC"]
+    # 方向应翻转为 short（已有 test_overclose_flips_direction 验证）
+    assert lc.current_dir == "short"
+    # P1 修复：open_ms 重置为越零笔时间 2000
+    assert lc.open_ms == 2000, f"P1 修复：open_ms 应为越零笔 2000，实际 {lc.open_ms}"
+    # n_fills 重置为 1（新段第一笔）
+    assert lc.n_segment_fills == 1, f"P1 修复：n_fills 应为 1，实际 {lc.n_segment_fills}"
+
+
+def test_overclose_short_resets_open_ms():
+    """P1 修复：Close Short 超量穿越零后，open_ms 应重置为该笔时间。"""
+    fills = [
+        _fill("ETH", "SELL",  80.0, 1000, "Open Short",  hash_="h1", oid=1),
+        _fill("ETH", "BUY",  120.0, 2000, "Close Short", hash_="h2", oid=2),  # 净 +40 → running=+40
+    ]
+    lcs = reconstruct(fills, now_ms=9000)
+    lc = lcs["ETH"]
+    assert lc.current_dir == "long"
+    # P1 修复：open_ms 重置为越零笔时间 2000
+    assert lc.open_ms == 2000, f"P1 修复：open_ms 应为越零笔 2000，实际 {lc.open_ms}"
+    assert lc.n_segment_fills == 1, f"P1 修复：n_fills 应为 1，实际 {lc.n_segment_fills}"
+
+
+def test_partial_close_no_zero_crossing_open_ms_unchanged():
+    """P1 修复不应影响正常部分平仓（未越零）：open_ms 不变，n_fills 不变。
+
+    确保越零检测仅在方向真实翻转时触发，不误伤正常减仓。
+    """
+    fills = [
+        _fill("SOL", "BUY",  200.0, 1000, "Open Long",  hash_="h1", oid=1),
+        _fill("SOL", "SELL",  50.0, 2000, "Close Long", hash_="h2", oid=2),  # 部分平仓 → running=150
+    ]
+    lcs = reconstruct(fills, now_ms=9000)
+    lc = lcs["SOL"]
+    # 未越零：方向仍 long，open_ms 仍为 1000
+    assert lc.current_dir == "long"
+    assert lc.open_ms == 1000, f"正常部分平仓 open_ms 不应改变，实际 {lc.open_ms}"
+    assert lc.last_close_ms == 2000   # last_close_ms 更新
+
+
 if __name__ == "__main__":
     for name, fn in list(globals().items()):
         if name.startswith("test_") and callable(fn):

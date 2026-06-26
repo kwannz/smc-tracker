@@ -36,6 +36,33 @@ def fmt_px(px: Any) -> str:
     return f"{v:.{decimals}f}".rstrip("0").rstrip(".")
 
 
+def fmt_usd(v: float | None, style: str = "zh") -> str:
+    """名义金额格式化，支持中文（style='zh'）和英文（style='en'）单位。
+
+    zh（默认）：亿 / 万 / 原始价格（小额用 fmt_px）
+    en          ：B / M / K / 原始价格
+
+    v=None → "?"（诚实标注缺失，不以 0 掩盖）。
+    """
+    if v is None:
+        return "?"
+    a = abs(v)
+    if style == "en":
+        if a >= 1e9:
+            return f"{v/1e9:.2f}B"
+        if a >= 1e6:
+            return f"{v/1e6:.2f}M"
+        if a >= 1e3:
+            return f"{v/1e3:.1f}K"
+        return fmt_px(v)
+    # 中文单位
+    if a >= 1e8:
+        return f"{v/1e8:.2f}亿"
+    if a >= 1e4:
+        return f"{v/1e4:.1f}万"
+    return fmt_px(v)
+
+
 def is_placeholder_addr(addr: str) -> bool:
     """占位/无效地址判别：空串 或 全零地址（0x0..0）→ True。
 

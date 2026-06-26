@@ -120,7 +120,11 @@ def smart_money_score(
     # 胜率项：用 Wilson 下界（样本守卫：小样本自动塌向 0）
     s += min(wr_lb, cfg.cap_winrate) / cfg.cap_winrate * cfg.w_winrate
     # ③ 做市商/刷量打折：成交额大但方向盈亏效率极低 → 非方向性 alpha → ×折扣
-    if vol > cfg.churn_vol_floor and abs(rp) / vol < cfg.churn_eff_max:
+    # n_closed=0 守卫（P1修复）：建仓鲸鱼无任何平仓时 realized_pnl 自然为 0，
+    # abs(0)/vol=0 本会误触发 churn 惩罚；n_closed=0 且 rp=0 时不应判刷量。
+    # rp≠0 时（有已实现盈亏，无论正负）仍允许触发——此时 n_closed 必然>0。
+    _is_pure_builder = n_closed == 0 and rp == 0.0
+    if not _is_pure_builder and vol > cfg.churn_vol_floor and abs(rp) / vol < cfg.churn_eff_max:
         s *= cfg.churn_penalty
 
     score = round(min(max(s, 0.0), 100.0), 1)

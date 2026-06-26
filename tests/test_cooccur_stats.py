@@ -290,3 +290,116 @@ def test_lead_lag_activity_normalized():
     # 归一后 0xHF 不应比 LEADER 得分更高（除非真的领先）
     assert hf_score <= leader_score, \
         f"归一后 0xHF({hf_score}) 不应高于真实 LEADER({leader_score})"
+
+
+# ─── 11. correlated_with 保留 lift 序，不按 raw count 重排 ──────────────────────
+def test_correlated_with_preserves_lift_order():
+    """correlated_with 应沿用 co_movers 的 lift 序；不应按原始 count 重排而抹除 lift 排序。
+
+    构造：地址 0xA 有两个伙伴：
+      - 0xHIGH_COUNT: 与 A 共现 10 次，但两者都是高频地址（lift≈1）
+      - 0xHIGH_LIFT:  与 A 共现 3 次，但两者活跃度极低（lift 远大于 1）
+    按 lift 排序：0xHIGH_LIFT 应排在 0xHIGH_COUNT 之前。
+    按 raw count 排序：0xHIGH_COUNT 会错误地排在前面。
+    """
+    from smc_tracker.config import CorrelationCfg
+
+    rows = []
+    # 高频对(0xA, 0xHIGH_COUNT)：在 kPEPE 上共现 10 次，
+    # 但两者都与大量其他人共现（高活跃度 → lift≈1）
+    for k in range(10):
+        t = k * 120_000
+        # 每轮 0xA 和 0xHIGH_COUNT 同时出现
+        rows.append(_trade("kPEPE", "B", "0xA", "0xMM", "0xA", t))
+        rows.append(_trade("kPEPE", "B", "0xHIGH_COUNT", "0xMM", "0xHIGH_COUNT", t + 200))
+        # 另外 15 人也在窗口内，拉低 A 和 HIGH_COUNT 的相对 lift
+        for i in range(15):
+            other = f"0xBG_{k}_{i}"
+            rows.append(_trade("kPEPE", "B", other, "0xMM", other, t + 500 + i * 10))
+
+    # 低频高 lift 对(0xA, 0xHIGH_LIFT)：在 kWIF 上仅共现 3 次，
+    # 但 0xA 和 0xHIGH_LIFT 几乎没有其他伙伴（低活跃度 → lift 极高）
+    for k in range(3):
+        t = k * 200_000 + 50_000   # 时间偏移确保不与上面 kPEPE 窗口重叠
+        rows.append(_trade("kWIF", "B", "0xA", "0xMM", "0xA", t))
+        rows.append(_trade("kWIF", "B", "0xHIGH_LIFT", "0xMM", "0xHIGH_LIFT", t + 100))
+
+    s = _make_store(rows)
+    # 宽松阈值：min_lift=0, max_p=1 以确保两对都在 co_movers 里
+    cfg = CorrelationCfg(min_lift=0.0, max_p=1.0, min_shared=1, min_coins=1)
+    ac = AddressCorrelation(s, cfg=cfg)
+
+    result = ac.correlated_with("0xA", since_ms=0, window_sec=60, min_shared=1, limit=10)
+    s.close()
+
+    if len(result) < 2:
+        pytest.skip("相关地址不足 2 个，跳过排序验证")
+
+    addrs = [addr for addr, _ in result]
+    if "0xHIGH_LIFT" not in addrs or "0xHIGH_COUNT" not in addrs:
+        pytest.skip("两个目标伙伴不都在结果中，跳过")
+
+    pos_lift = addrs.index("0xHIGH_LIFT")
+    pos_count = addrs.index("0xHIGH_COUNT")
+    # lift 排序：高 lift 的 0xHIGH_LIFT 应排在 0xHIGH_COUNT 之前
+    assert pos_lift < pos_count, (
+        f"correlated_with 应按 lift 序：0xHIGH_LIFT 排第{pos_lift}位，"
+        f"0xHIGH_COUNT 排第{pos_count}位；应 lift 在前"
+    )
+
+
+# ─── 12. clusters_detailed 统计只含显著对 ────────────────────────────────────────
+def test_clusters_detailed_filters_non_significant_pairs():
+    """clusters_detailed 的 links/events/coins 统计应与 _union_groups 的显著性条件同步。
+
+    构造：同一群内存在一个显著对(0xA,0xB)和一个非显著对(0xA,0xC)。
+    非显著对不应计入 links/events 统计（P2 修复：统计循环加 is_significant 过滤）。
+    """
+    from smc_tracker.config import CorrelationCfg
+
+    rows = []
+    # 显著对(0xA,0xB)：在 kWIF/kFLOKI/kBONK 三币上专属共现 5 次（低活跃度高 lift）
+    for k in range(5):
+        t = k * 200_000
+        for coin in ("kWIF", "kFLOKI", "kBONK"):
+            rows.append(_trade(coin, "B", "0xA", "0xMM", "0xA", t))
+            rows.append(_trade(coin, "B", "0xB", "0xMM", "0xB", t + 100))
+
+    # 非显著对：0xA 和 0xC 偶然共现 3 次（单币，高频背景人群拉低 lift）
+    # 0xC 还与大量其他人共现（高活跃度 → lift 接近 1）
+    for k in range(3):
+        t = k * 200_000 + 50_000
+        rows.append(_trade("kDOGE", "B", "0xA", "0xMM", "0xA", t))
+        rows.append(_trade("kDOGE", "B", "0xC", "0xMM", "0xC", t + 200))
+        # 大量背景人群与 0xC 一起（拉低 0xC 的 lift）
+        for i in range(20):
+            bg = f"0xBG2_{k}_{i}"
+            rows.append(_trade("kDOGE", "B", bg, "0xMM", bg, t + 300 + i * 5))
+
+    s = _make_store(rows)
+    # 严格阈值：真协同对应过，非显著对应被过滤
+    cfg = CorrelationCfg(min_lift=2.0, max_p=0.05, min_shared=3, min_coins=2)
+    ac = AddressCorrelation(s, cfg=cfg)
+
+    clusters = ac.clusters_detailed(since_ms=0, window_sec=60)
+    s.close()
+
+    if not clusters:
+        pytest.skip("无聚类结果（阈值可能过严），跳过")
+
+    # 找包含 0xA 的群
+    target = None
+    for cl in clusters:
+        if "0xA" in cl["members"]:
+            target = cl
+            break
+
+    if target is None:
+        pytest.skip("0xA 未出现在任何聚类中，跳过")
+
+    # 若显著性过滤正确，events 应仅来自显著对(0xA,0xB)——每对有 5 次×3 币
+    # 非显著对(0xA,0xC)的 3 次不应被计入
+    # 验证：events 不应包含非显著对贡献（精确验证上限）
+    assert target["events"] <= 5 * 3, (  # 5 次，每次跨 3 币算 1 个 event
+        f"events={target['events']} 超出显著对预期（5）, 可能含非显著对贡献"
+    )

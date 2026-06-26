@@ -57,16 +57,20 @@ def market_neutral_stats(
 
     返回 dict
     ---------
-    n          样本总数
-    hits       中性命中数
-    hit_rate   中性命中率（0.0~1.0）
-    edge       hit_rate − 0.5（纯 alpha 边际）
-    avg_excess 均方向调整超额收益（按预测方向，正值代表真正跑赢市场）
+    n                  样本总数
+    hits               中性命中数
+    hit_rate           中性命中率（0.0~1.0）
+    edge               hit_rate − 0.5（纯 alpha 边际）
+    avg_excess         均方向调整超额收益（按预测方向，正值代表真正跑赢市场）
+    single_bucket_frac 单样本桶占比（>0.5 时市场中性命中率可信度低，桶内无横截面可去均值）
 
     注：空 records 安全返回零值，不抛异常（诚实复盘：零样本=无信息）。
     """
     if not records:
-        return {"n": 0, "hits": 0, "hit_rate": 0.0, "edge": 0.0, "avg_excess": 0.0}
+        return {
+            "n": 0, "hits": 0, "hit_rate": 0.0,
+            "edge": 0.0, "avg_excess": 0.0, "single_bucket_frac": 0.0,
+        }
 
     # 1) 按时间桶分组，算每桶平均原始收益 = 同期市场漂移
     from collections import defaultdict
@@ -76,6 +80,11 @@ def market_neutral_stats(
     bucket_mean: dict[int, float] = {
         b: (sum(v) / len(v) if v else 0.0) for b, v in bucket_rets.items()
     }
+
+    # 单样本桶占比：桶内只有 1 条记录则横截面去均值退化为自减为 0，无真实 alpha 信息
+    n_buckets = len(bucket_rets)
+    n_single = sum(1 for v in bucket_rets.values() if len(v) == 1)
+    single_bucket_frac: float = n_single / n_buckets if n_buckets > 0 else 0.0
 
     # 2) 逐条计算中性命中 + 超额收益
     hits = 0
@@ -99,6 +108,7 @@ def market_neutral_stats(
         "hit_rate": hit_rate,
         "edge": hit_rate - 0.5,
         "avg_excess": excess_sum / n if n > 0 else 0.0,
+        "single_bucket_frac": single_bucket_frac,  # 单样本桶占比，可信度指标
     }
 
 # ---- 自管建表 DDL ----
@@ -309,8 +319,8 @@ class PredictionReview:
         rows = self.store.conn.execute(
             "SELECT ts, kind, correct, realized_ret, px_gap_pct, dt, coin, direction, horizon_ms"
             " FROM predictions"
-            " WHERE evaluated=1 AND ts>=?",
-            (since_ms,),
+            " WHERE evaluated=1 AND ts>=? AND ts<=?",
+            (since_ms, now_ms),
         ).fetchall()
 
         # 分类聚合
@@ -428,13 +438,14 @@ class PredictionReview:
                 "avg_ret": d["ret_sum"] / n if n > 0 else 0.0,
             }
 
-        # 最近 10 条（按 ts desc）
+        # 最近 10 条（按 ts desc）：过滤离群(|realized_ret|>_RET_OUTLIER)与「未来」行(ts>now_ms)
         recent_rows = self.store.conn.execute(
             "SELECT dt, coin, kind, direction, realized_ret, correct"
             " FROM predictions"
-            " WHERE evaluated=1 AND ts>=?"
+            " WHERE evaluated=1 AND ts>=? AND ts<=?"
+            " AND ABS(realized_ret)<=?"
             " ORDER BY ts DESC LIMIT 10",
-            (since_ms,),
+            (since_ms, now_ms, _RET_OUTLIER),
         ).fetchall()
         recent = [
             {
@@ -584,6 +595,12 @@ def fmt_accuracy(report: dict) -> str:
         if total_n < min_sample_val or mn_n < min_sample_val:
             mn_line += "（样本不足，仅供参考）"
         lines.append(mn_line)
+        # 单样本桶占比过高：桶内仅1条则横截面去均值退化(excess恒为0)，中性命中率失去意义
+        sbf = mn.get("single_bucket_frac", 0.0)
+        if sbf > 0.5:
+            lines.append(
+                f"  ⚠️大多数桶单样本({sbf * 100:.0f}%)，市场中性命中率不可信"
+            )
 
     # base-rate 校正：方向分布 + 同期净市场漂移，诚实区分趋势 beta 与选币 alpha
     n_long = report.get("n_long")

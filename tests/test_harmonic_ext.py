@@ -569,3 +569,18 @@ class TestDetectAllExt:
             results = detect_all_ext(pivots, tol=0.10)
             for r in results:
                 _assert_contract(r, completed=True)
+
+
+# ===========================================================================
+# P2 死代码验证：project_all_ext_prz 已删除，不应从 harmonic_ext 导入
+# ===========================================================================
+
+class TestProjectAllExtPrzDeleted:
+    """P2：project_all_ext_prz 是死代码（无调用者），应已删除。"""
+
+    def test_project_all_ext_prz_not_in_module(self) -> None:
+        """project_all_ext_prz 应不存在于 harmonic_ext 模块中（死代码删除）。"""
+        import smc_tracker.indicators.harmonic_ext as ext_mod
+        assert not hasattr(ext_mod, "project_all_ext_prz"), (
+            "project_all_ext_prz 是死代码，应已从 harmonic_ext 删除"
+        )

@@ -4,7 +4,7 @@ from __future__ import annotations
 import time
 from typing import Any
 
-from ..util import fmt_px as _fmt_px
+from ..util import fmt_px as _fmt_px, to_float as _to_float
 
 
 def _hms(ms: int) -> str:
@@ -35,8 +35,9 @@ def build_report(store: Any, since_ms: int, now_ms: int, title: str = "SMC 摘�
     lines.append(f"\n🔀 背离信号 {len(divs)} 条：")
     for d in divs:
         tag = "吸筹(看涨)" if d[2] == "bullish" else "分销(看跌)"
+        # d[4]/d[5] 可能为 NULL（DB 空值），用 to_float 拒 None/NaN/inf，避免崩溃
         lines.append(f"  [{_hms(d[0])}] {d[1]} {tag} 分{d[3]:.2f} "
-                     f"funding{d[4]*100:+.3f}% flow${d[5]:,.0f}")
+                     f"funding{_to_float(d[4])*100:+.3f}% flow${_to_float(d[5]):,.0f}")
     if not divs:
         lines.append("  （无）")
 

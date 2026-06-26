@@ -152,11 +152,18 @@ def reconstruct(fills: list["Fill"], now_ms: int) -> dict[str, PositionLifecycle
                 else:
                     # 缺陷1修复：超量平仓使 running 穿越0变号时，按新符号更新方向
                     # 例：long 100 → Close Long 150 → running=-50 → current_dir 应为 short
+                    prev_dir = current_dir
                     if running > _FLAT_ABS_EPS:
                         current_dir = "long"
                     elif running < -_FLAT_ABS_EPS:
                         current_dir = "short"
-                # 平仓笔不算开仓段笔数（n_fills 不变）
+                    # P1 越零路径：平仓后方向翻转（超量平仓穿越零），重置新段
+                    # 镜像 is_reversal 分支：open_ms/n_fills/seg_max_abs 从该笔重新起算
+                    if current_dir != prev_dir:
+                        open_ms = fill.time_ms
+                        n_fills = 1
+                        seg_max_abs = abs(running)
+                # 平仓笔在未越零时不计入开仓段笔数（n_fills 不变）
 
             else:
                 # 开仓 / 加仓 / 裸 'Buy'/'Sell'（HL dir 无 Open/Close/> 标注时）

@@ -314,3 +314,54 @@ def test_smart_score_cfg_defaults():
     assert cfg.churn_eff_max == 0.001
     assert cfg.churn_penalty == 0.85
     assert cfg.min_trades_winrate == 20
+
+
+# ─────────────────────────────────────────────
+# 9. P1 回归：n_closed=0 的建仓鲸鱼不应触发 churn 判别
+# ─────────────────────────────────────────────
+
+def test_churn_not_triggered_when_no_closed_trades():
+    """P1 回归：realized_pnl=0 且 n_closed=0 且 vol>1M → 不应触发 churn 折扣。
+
+    场景：大鲸建仓（全部开仓 fill，无任何平仓），realized_pnl 自然为 0，
+    vol 可能超过 churn_vol_floor($1M)，此时 abs(rp)/vol=0 本会触发 churn 惩罚。
+    修复后（n_closed=0 守卫）不应打折，分数应与同配置但 vol=0 的场景一致。
+    """
+    # 建仓鲸鱼：无平仓，realized_pnl=0，vol 大（模拟多笔开仓）
+    building_whale = {
+        "alltime_pnl": 5_000_000.0, "month_pnl": 1_000_000.0, "week_pnl": 500_000.0,
+        "realized_pnl": 0.0,          # 无平仓 → realized_pnl=0
+        "account_value": 10_000_000.0,
+        "win_rate": 0.0, "win_rate_lower": 0.0,
+        "n_closed": 0,                 # 关键：0 笔平仓
+        "volume_usd": 5_000_000.0,    # 大额成交额（开仓成本），超过 churn_vol_floor
+    }
+    # 与 n_closed=0 但 vol=0 的场景对比（基准，绝对不触发 churn）
+    no_vol_whale = dict(building_whale, volume_usd=0.0)
+
+    score_building = smart_money_score(building_whale)
+    score_no_vol = smart_money_score(no_vol_whale)
+
+    # n_closed=0 守卫：分数不应因 vol 大而被折扣（两者相等）
+    assert score_building == score_no_vol, (
+        f"n_closed=0 的建仓鲸鱼被误判 churn: building={score_building:.1f} ≠ no_vol={score_no_vol:.1f}"
+    )
+
+
+def test_churn_still_triggered_with_closed_trades():
+    """P1 正向：有平仓(n_closed>0)但 realized_pnl≈0 且 vol>1M → 仍触发 churn。
+
+    确保修复只豁免 n_closed=0 的建仓场景，不影响真正的做市商/刷量判别。
+    """
+    churn_maker = {
+        "alltime_pnl": 5_000_000.0, "month_pnl": 1_000_000.0, "week_pnl": 1_000_000.0,
+        "account_value": 10_000_000.0, "realized_pnl": 500.0, "win_rate": 0.5,
+        "volume_usd": 100_000_000.0,   # rp/vol = 5e-6 < churn_eff_max → churn
+        "n_closed": 500,               # 有大量平仓，是真实刷量做市商
+    }
+    # 成交额小，不触发 churn
+    clean = dict(churn_maker, volume_usd=100_000.0)
+    s_mm = smart_money_score(churn_maker)
+    s_clean = smart_money_score(clean)
+    # 真刷量做市商仍被折扣
+    assert s_mm < s_clean, "有平仓的做市商应继续触发 churn 折扣"

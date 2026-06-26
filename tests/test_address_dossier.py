@@ -108,6 +108,45 @@ def test_dossier_flagged_and_trajectory():
     s.close()
 
 
+def test_dossier_avg_hold_sec_computed():
+    """P0 回归：build_dossier 必须在返回 dict 中计算并写入 avg_hold_sec（供 classify_trader 使用）。
+
+    填入 2 笔已平仓 fills（有明确时间跨度），期望 avg_hold_sec > 0；
+    无 fills 时回退 0.0，不抛。
+    """
+    # 有 2 笔已平仓 fills，时间跨度 10000ms → avg_hold_sec ≈ 10000/2000=5.0s
+    fills_closed = [
+        Fill(coin="BTC", side=Side.SELL, px=60000.0, sz=0.5,
+             time_ms=NOW - 20_000,                     # 20s 前
+             start_position=0.5, dir="Close Long",
+             closed_pnl=100.0,                         # 有平仓 PnL → 算作已平仓
+             hash="h1", oid=1, crossed=True),
+        Fill(coin="BTC", side=Side.SELL, px=61000.0, sz=0.3,
+             time_ms=NOW - 10_000,                     # 10s 前
+             start_position=0.3, dir="Close Long",
+             closed_pnl=50.0,                          # 有平仓 PnL → 算作已平仓
+             hash="h2", oid=2, crossed=False),
+    ]
+    s = Store(Path(tempfile.mkdtemp()) / "hold.db")
+    d = asyncio.run(build_dossier(ADDR, _FakeInfo(fills=fills_closed), s, NOW))
+    # avg_hold_sec 必须存在于顶层 dict
+    assert "avg_hold_sec" in d, "build_dossier 未返回 avg_hold_sec"
+    # 有平仓 fills 时 avg_hold_sec 必须 > 0
+    assert d["avg_hold_sec"] > 0, (
+        f"有已平仓 fills 时 avg_hold_sec 应 > 0，实际={d['avg_hold_sec']}"
+    )
+    s.close()
+
+
+def test_dossier_avg_hold_sec_zero_without_fills():
+    """P0 边界：无 fills 时 avg_hold_sec 为 0.0，不抛异常。"""
+    s = Store(Path(tempfile.mkdtemp()) / "nofill.db")
+    d = asyncio.run(build_dossier(ADDR, _FakeInfo(), s, NOW))
+    assert "avg_hold_sec" in d
+    assert d["avg_hold_sec"] == 0.0
+    s.close()
+
+
 if __name__ == "__main__":
     for name, fn in list(globals().items()):
         if name.startswith("test_") and callable(fn):

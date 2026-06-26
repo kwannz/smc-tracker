@@ -53,10 +53,10 @@ def pnl_rows_from(leaderboard_rows: list[dict], top_n: int = 30,
             continue
         if acct < min_account:
             continue
-        at, _ = _window(r, "allTime")
-        day, _ = _window(r, "day")
-        week, _ = _window(r, "week")
-        month, _ = _window(r, "month")
+        at = _window(r, "allTime")
+        day = _window(r, "day")
+        week = _window(r, "week")
+        month = _window(r, "month")
         rows.append((addr.lower(), "", day, week, month, at, acct))
     rows.sort(key=lambda x: x[5], reverse=True)
     return rows[:top_n]

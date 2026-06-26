@@ -69,8 +69,11 @@ class TelegramNotifier:
                         ok_all = False
                         log.warning("Telegram 返回(%d/%d): %s", i + 1, n,
                                     body.get("description"))
-            self._last_sent_ms = now_ms
             if ok_all:
+                # 只在全部分段成功时才更新时间戳，避免部分失败也触发限速；
+                # now_ms=0 表示调用方未传时间，不写入（否则永久锁死限速）
+                if now_ms:
+                    self._last_sent_ms = now_ms
                 self.sent += 1
             else:
                 self.failed += 1

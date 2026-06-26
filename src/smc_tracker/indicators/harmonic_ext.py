@@ -697,40 +697,5 @@ def detect_all_ext(
     return results
 
 
-def project_all_ext_prz(
-    pivots: list[tuple[int, float, str]],
-    tol: float = 0.05,
-) -> list[dict]:
-    """对最后 4 枢轴（XABC）运行全部扩展前瞻投射。
-
-    Args:
-        pivots: ≥4 个枢轴
-        tol:    容差系数
-
-    Returns:
-        前瞻结果列表（completed=False），按 confidence 降序。
-    """
-    if len(pivots) < 4:
-        return []
-
-    last4 = pivots[-4:]
-    X_px = last4[0][1]
-    A_px = last4[1][1]
-    B_px = last4[2][1]
-    C_px = last4[3][1]
-
-    direction = "bull" if A_px > X_px else "bear"
-
-    results: list[dict] = []
-    results.extend(project_cypher_prz(X_px, A_px, B_px, C_px, direction, tol=tol))
-    results.extend(project_shark_prz(X_px, A_px, B_px, C_px, direction, tol=tol))
-
-    # ABCD 前瞻用 A(=last4[0]) / B / C；方向以 A→B 判断
-    A2_px = last4[0][1]
-    B2_px = last4[1][1]
-    C2_px = last4[2][1]
-    dir2 = "bull" if A2_px > B2_px else "bear"
-    results.extend(project_abcd_prz(A2_px, B2_px, C2_px, dir2, tol=tol))
-
-    results.sort(key=lambda r: r["confidence"], reverse=True)
-    return results
+# project_all_ext_prz 已删除（死代码，无调用者；调用方 harmonic_state._compute
+# 直接使用 project_cypher_prz + project_shark_prz，无需此便捷包装）。

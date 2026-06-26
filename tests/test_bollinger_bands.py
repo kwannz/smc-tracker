@@ -322,3 +322,71 @@ def test_aggregate_coin_mixed_with_neutral_not_polluting():
     assert agg["bull_n"] == 3
     assert agg["bear_n"] == 1
     assert agg["consensus_pct"] == 75  # round(100*3/4)=75
+
+
+# ---- E. P1/P2 修复专项测试 ----
+
+def test_pos_label_half_pct_b_returns_neutral():
+    """P2 修复：_pos_label(0.5) 应返回"横盘中性"，不再落入偏空分支。"""
+    from smc_tracker.indicators.bollinger_bands import _pos_label
+    assert _pos_label(0.5) == "横盘中性", (
+        "_pos_label(0.5) 应返回横盘中性（band_width=0 的中性兜底），"
+        "修复前错误落入'中轨下偏空'分支"
+    )
+
+
+def test_pos_label_just_above_half_returns_bullish():
+    """pct_b 刚过 0.5（非精确 0.5）应返回偏多标签，不被中性分支截断。"""
+    from smc_tracker.indicators.bollinger_bands import _pos_label
+    label = _pos_label(0.51)
+    assert "偏多" in label, f"pct_b=0.51 应返回中轨上偏多，实际: {label}"
+
+
+def test_pos_label_just_below_half_returns_bearish():
+    """pct_b 刚低于 0.5（非精确 0.5）应返回偏空标签。"""
+    from smc_tracker.indicators.bollinger_bands import _pos_label
+    label = _pos_label(0.49)
+    assert "偏空" in label, f"pct_b=0.49 应返回中轨下偏空，实际: {label}"
+
+
+def test_analyze_tf_exactly_period_candles_returns_result():
+    """P1 修复：恰好 period 根 K 线时，analyze_tf 应返回结果（不再返回 None）。
+
+    旧守卫：len < period+1，即 period 根时依然返回 None（多1根的 off-by-one bug）。
+    新守卫：len < period，即 period 根时 len==period 不满足 < period，正常计算。
+    """
+    from smc_tracker.indicators.bollinger_bands import analyze_tf
+    period = 20
+    closes = list(np.linspace(90.0, 110.0, period))  # 恰好 period 根
+    candles = _make_candles(closes)
+    result = analyze_tf(candles, period=period)
+    assert result is not None, (
+        f"恰好 {period} 根 K 线时应能计算布林带，"
+        f"旧代码(< period+1)错误返回 None（off-by-one）"
+    )
+    assert "pos_label" in result
+    assert "pct_b" in result
+
+
+def test_analyze_tf_exactly_period_minus_1_returns_none():
+    """period-1 根 K 线时（确实不足），analyze_tf 应返回 None。"""
+    from smc_tracker.indicators.bollinger_bands import analyze_tf
+    period = 20
+    closes = [100.0] * (period - 1)  # period-1=19 根
+    candles = _make_candles(closes)
+    assert analyze_tf(candles, period=period) is None, (
+        f"{period-1} 根 K 线（< period={period}）时应返回 None"
+    )
+
+
+def test_analyze_tf_constant_sequence_pos_label_neutral():
+    """完全常数序列（pct_b 兜底0.5）→ pos_label 应为"横盘中性"（P2联动验证）。"""
+    from smc_tracker.indicators.bollinger_bands import analyze_tf
+    closes = [100.0] * 50  # 常数序列 → std=0 → band_width=0 → pct_b=0.5
+    candles = _make_candles(closes)
+    result = analyze_tf(candles, period=20)
+    assert result is not None
+    assert result["pct_b"] == pytest.approx(0.5)
+    assert result["pos_label"] == "横盘中性", (
+        f"pct_b=0.5 时 pos_label 应为'横盘中性'，实际: {result['pos_label']}"
+    )

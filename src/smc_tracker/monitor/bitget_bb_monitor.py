@@ -14,7 +14,7 @@ import logging
 from typing import Any
 
 from ..bitget.rest import BitgetREST
-from ..indicators.bollinger_bands import analyze_tf, aggregate_coin
+from ..indicators.bollinger_bands import analyze_tf, aggregate_coin, _HAS_TALIB
 from ..util import fmt_px, fmt_ts
 
 log = logging.getLogger("bb_monitor")
@@ -83,8 +83,8 @@ class BitgetBBMonitor:
             """
             async with sema:
                 try:
-                    # BB 所需最小 K 线数（period+1 才能计算布林带）
-                    need_min: int = self.period + 1
+                    # BB 所需最小 K 线数（period 根即可触发 talib BBANDS 首根有效值）
+                    need_min: int = self.period
 
                     # 优先 DB 读取
                     candles = self.store.get_candles(coin, tf, self.bars) if self.store is not None else []
@@ -187,9 +187,11 @@ class BitgetBBMonitor:
         ts = fmt_ts(now_ms)
         n_coins = len(rows)
         n_tfs = len(self.timeframes)
+        # 动态标注数据源：talib 优先路径 vs numpy bollinger 回退
+        _src_label = "TA-Lib BBANDS" if _HAS_TALIB else "numpy bollinger"
 
         lines: list[str] = [
-            f"📐 Bitget 布林带多周期 压力/支撑 [{ts}] (数据源: Bitget永续 · TA-Lib BBANDS)",
+            f"📐 Bitget 布林带多周期 压力/支撑 [{ts}] (数据源: Bitget永续 · {_src_label})",
             f"近窗 {n_coins}币 × {n_tfs}周期 研判（上轨=压力 下轨=支撑，%B=带内位置；越偏=趋势越强）",
         ]
 
@@ -205,7 +207,8 @@ class BitgetBBMonitor:
             lean    = agg["lean_label"]
             sqz_n   = agg["squeeze_n"]
 
-            squeeze_note = f"  挤压{sqz_n}周期⚠" if sqz_n > 0 else ""
+            # 挤压判定基于内部启发式（bandwidth < 近窗中位数×0.6），非标准BB挤压
+            squeeze_note = f"  挤压{sqz_n}周期⚠(内部启发式,非标准BB挤压)" if sqz_n > 0 else ""
             line = (
                 f"  • {coin:<8} 🟢多{bull_n} 🔴空{bear_n} → {lean} {pct}%"
                 f"  现价 {fmt_px(price)}{squeeze_note}"

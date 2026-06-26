@@ -70,6 +70,149 @@ def test_report_empty():
     store.close()
 
 
+def test_report_null_funding_flow_no_crash():
+    """背离记录 funding/dex_flow_usd 为 NULL 时 build_report 不崩溃（P1 修复验证）。"""
+    store = Store(Path(tempfile.mkdtemp()) / "s.db")
+    # None 模拟 DB NULL 值：直接用 conn.execute 绕过 insert_divergence 类型守卫
+    store.conn.execute(
+        "INSERT INTO divergence(ts,coin,direction,score,funding,oi_change_pct,dex_flow_usd,reason)"
+        " VALUES(?,?,?,?,?,?,?,?)",
+        (500, "BTC", "bearish", 0.5, None, None, None, "分销"),
+    )
+    r = build_report(store, since_ms=0, now_ms=2000)
+    # 不崩溃，且背离行出现在报告中
+    assert "背离信号 1" in r and "BTC" in r
+    store.close()
+
+
+# ---------------------------------------------------------------------------
+# 以下测试直接调用真实 send() 并用 aiohttp mock 拦截网络层
+# ---------------------------------------------------------------------------
+
+class _FakeResp:
+    """模拟 aiohttp 响应。"""
+    def __init__(self, status: int, body: bytes) -> None:
+        self.status = status
+        self._body = body
+
+    async def read(self) -> bytes:
+        return self._body
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *_):
+        pass
+
+
+class _FakeSession:
+    """模拟 aiohttp.ClientSession，post() 按顺序返回预设响应。"""
+    def __init__(self, responses: list, **_kwargs) -> None:
+        self._resps = iter(responses)
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *_):
+        pass
+
+    def post(self, *_args, **_kwargs):
+        return next(self._resps)
+
+
+def test_webhook_partial_fail_does_not_update_timestamp():
+    """分块部分失败时 _last_sent_ms 不更新，sent 不增（P1 修复验证）。
+
+    构造两段消息（超过 _WH_LIMIT），第一段成功(200)，第二段失败(500)；
+    ok_all=False → _last_sent_ms 应保持 0。
+    """
+    import unittest.mock as mock
+    import orjson
+
+    n = WebhookNotifier("https://example.com/hook", min_interval_ms=500)
+    n._last_sent_ms = 0
+
+    # 构造两段消息：_WH_LIMIT=1900，发两段 "A"*1000 各段
+    long_text = "A" * 1000 + "\n" + "B" * 1000  # split_message 按行分成 2 段
+
+    resp_ok = _FakeResp(200, b"{}")
+    resp_fail = _FakeResp(500, b"{}")
+
+    fake_session = _FakeSession([resp_ok, resp_fail])
+    with mock.patch("aiohttp.ClientSession", return_value=fake_session):
+        result = asyncio.run(n.send(long_text, now_ms=9000))
+
+    # 部分失败 → False 且时间戳未更新
+    assert result is False
+    assert n._last_sent_ms == 0
+    assert n.sent == 0
+    assert n.failed == 1
+
+
+def test_webhook_now_ms_zero_success_does_not_update_timestamp():
+    """now_ms=0 成功后不更新 _last_sent_ms（P1 修复验证）。"""
+    import unittest.mock as mock
+    import orjson
+
+    n = WebhookNotifier("https://example.com/hook")
+    n._last_sent_ms = 3000  # 预设非零值
+
+    resp_ok = _FakeResp(200, b"{}")
+    fake_session = _FakeSession([resp_ok])
+    with mock.patch("aiohttp.ClientSession", return_value=fake_session):
+        result = asyncio.run(n.send("hello", now_ms=0))
+
+    # 成功但 now_ms=0 → 不写时间戳
+    assert result is True
+    assert n._last_sent_ms == 3000   # 保持原值，未被 0 覆盖
+    assert n.sent == 1
+
+
+def test_telegram_partial_fail_does_not_update_timestamp():
+    """Telegram 分块部分失败时 _last_sent_ms 不更新（P1 修复验证）。"""
+    import unittest.mock as mock
+    import orjson
+    from smc_tracker.notify import TelegramNotifier
+
+    t = TelegramNotifier("TOKEN", "@chan", min_interval_ms=500)
+    t._last_sent_ms = 0
+
+    # 两段消息：TG limit=4000，用 \n 分两段
+    long_text = "A" * 2000 + "\n" + "B" * 2000
+
+    # 第一段 ok，第二段返回 ok=false
+    resp_ok = _FakeResp(200, orjson.dumps({"ok": True}))
+    resp_fail = _FakeResp(200, orjson.dumps({"ok": False, "description": "bad"}))
+
+    fake_session = _FakeSession([resp_ok, resp_fail])
+    with mock.patch("aiohttp.ClientSession", return_value=fake_session):
+        result = asyncio.run(t.send(long_text, now_ms=8888))
+
+    assert result is False
+    assert t._last_sent_ms == 0   # 不更新
+    assert t.sent == 0
+    assert t.failed == 1
+
+
+def test_telegram_now_ms_zero_success_does_not_update_timestamp():
+    """Telegram now_ms=0 成功后不覆盖 _last_sent_ms（P1 修复验证）。"""
+    import unittest.mock as mock
+    import orjson
+    from smc_tracker.notify import TelegramNotifier
+
+    t = TelegramNotifier("TOKEN", "@chan")
+    t._last_sent_ms = 7777  # 预设值
+
+    resp_ok = _FakeResp(200, orjson.dumps({"ok": True}))
+    fake_session = _FakeSession([resp_ok])
+    with mock.patch("aiohttp.ClientSession", return_value=fake_session):
+        result = asyncio.run(t.send("hello", now_ms=0))
+
+    assert result is True
+    assert t._last_sent_ms == 7777  # 保持原值
+    assert t.sent == 1
+
+
 if __name__ == "__main__":
     for name, fn in list(globals().items()):
         if name.startswith("test_") and callable(fn):
