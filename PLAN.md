@@ -214,6 +214,13 @@ D 多空符号 · E 真实 userFills 解析/分类自洽 · F WS webData2==REST 
 > 据 codex-loop 反幻觉纪律保持开放，区别于「已实现但 backlog 写保守」的项（已核实证据后闭合）。
 
 ## 迭代日志
+- 2026-06-26 #147: **微观结构层(OFI/micro-price/queue)对 CKS2014/Stoikov 标准验证 → 全正确且已 golden 锁,无需改**（/loop；Opus 验证）。
+  微观结构是全系统**唯一声称前瞻**的层(订单流领先指标),正确性赌注最高。逐项对学术标准核对 signals/microprice.py:
+  ① queue_imbalance (bid-ask)/(bid+ask) ✅;② **micro_price 交叉加权** (bid_px·ask_sz+ask_px·bid_sz)/总=I·ask+(1-I)·bid 方向正确
+  ✅(数值验证 micro=100.833 匹配学术值 Δ1e-14、且≠同侧错误版 100.167——经典反直觉点没配反);③ ofi_delta bid/ask 三分支+e_b-e_a 完全合 CKS ✅。
+  数值验证:OFI bid+3→+3、ask下移→-4、queue→0.6 全对。覆盖核查:micro 交叉加权有 golden 锁、**14 个 OFI 分支 golden 测试**、queue golden。
+  **既学术正确、又已被 golden 全面锁住,无需任何改动**(强行造修复违背诚实)。全量 **2448 passed**。
+  教训:"确认无 bug"须与"发现 bug"同样严格基于证据;不能因前几轮找到问题就预设这轮也有、或为"有产出"造伪修复。
 - 2026-06-26 #146: **谐波 Fib 比率对 Carney 标准核对 → 主比率全合,收紧 Crab cd_bc 软项贴标准**（/loop；Opus 验证+对齐）。
   谐波是主子系统,正确性几乎全压在比率表魔数上。逐项对 Carney 标准核对 4 形态:**主识别比率全匹配**——
   Gartley(B0.618/D0.786)、Bat(D0.886)、Butterfly(D1.272-1.618)、Crab(D1.618 XA)✅。
