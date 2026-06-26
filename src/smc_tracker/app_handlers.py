@@ -217,10 +217,14 @@ class EventHandlersMixin:
             sig = self.ta_signal.evaluate(buf, None, now)
             if sig is not None:
                 self._ta_seen[coin] = now
-                print(f"[{_ts(now)}] 📐 {self.ta_signal.fmt(sig)}{self._price_tag(coin)}")
+                tmsg = f"[{_ts(now)}] 📐 {self.ta_signal.fmt(sig)}{self._price_tag(coin)}"
+                print(tmsg)                                    # pull:控制台/dashboard 全显
                 if self.cfg.digest.enabled:
                     self.hl_digest.add_bias(coin, sig["direction"] == "long", "TA")
-                self._emit("ta", f"[{_ts(now)}] {self.ta_signal.fmt(sig)}{self._price_tag(coin)}")
+                # 减噪#169:TA 含 KNN(≈随机)且未验证有 edge → push 严格(仅强共振 |score|≥0.6 才主动推),
+                # 弱信号留 pull(已 print);避免用 ≈随机成分驱动主动告警。
+                if abs(float(sig.get("score", 0.0))) >= 0.6:
+                    self._emit("ta", tmsg)
         ze = self.zones.get(coin)
         if ze is None:
             ze = ZoneEngine(min_gap_pct=self.cfg.smc.fvg_min_gap_pct)
