@@ -198,12 +198,14 @@ class EventHandlersMixin:
             if alert is not None:
                 self._pump_seen[coin] = now
                 ctx = fmt_analysis(coin, ta_analyze(buf, now))   # 附 TA 全景上下文
+                # 暴涨/暴跌分桶(修审计 P2:原 dump 也记入「暴涨」桶并贴「暴涨命中%」,分母语义错位)
+                kind_label = "暴涨" if alert.kind == "pump" else "暴跌"
                 msg = (f"[{_ts(now)}] {alert.fmt()}{self._price_tag(coin)}"
-                       + self.efficacy.label_of("暴涨")
+                       + self.efficacy.label_of(kind_label)
                        + f"\n{ctx}")
                 print(f"\n{'='*60}\n{msg}\n{'='*60}\n")
                 self._emit("pump", msg)
-                self._record_pred(coin, "暴涨", "up" if alert.kind == "pump" else "down")
+                self._record_pred(coin, kind_label, "up" if alert.kind == "pump" else "down")
         # 放量监控(成交量异动)
         vev = self.volume_monitor.update(coin, candle)
         if vev is not None:

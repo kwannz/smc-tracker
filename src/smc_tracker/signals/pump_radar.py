@@ -35,6 +35,21 @@ DUMP_RULES = [
      lambda f: f["atr_pct"] > 5 and f["ret24"] > 0.20 and not f["bull"], 0.039, 9.2),
 ]
 
+# 规则与 hr/lift 标定于 1h K 线(data/history/analysis/SUMMARY.md 回测)。喂入非 1h K 线时
+# 窗口实际跨度按周期换算(24 根≠24h)，且 hr/lift 未在该 TF 验证——fmt 据此诚实标注(修审计 P1)。
+_CALIB_TF_MS = 3_600_000
+
+
+def _bar_ms(candles: list[Any]) -> int:
+    """从最后两根 open_time_ms 推实际 K 线周期(ms);不足/异常→0。"""
+    if len(candles) < 2:
+        return 0
+    try:
+        d = int(candles[-1].open_time_ms) - int(candles[-2].open_time_ms)
+    except Exception:  # noqa: BLE001
+        return 0
+    return d if d > 0 else 0
+
 
 @dataclass(slots=True)
 class PumpAlert:
@@ -42,16 +57,28 @@ class PumpAlert:
     kind: str            # 'pump' / 'dump'
     rule: str
     hit_rate: float
-    lift: float
+    lift: float          # 实测回测 lift(不含妖币加权)
     rsi: float
     atr_pct: float
     ret24: float
     ts: int
+    bar_ms: int = 0      # 实际 K 线周期：诚实推真实窗口跨度 + 标定 TF 校验(修审计 P1)
+    boost: float = 1.0   # 妖币主观加权(先验,非实测 lift；修审计 P2 虚高)
 
     def fmt(self) -> str:
         tag = "🚀暴涨预警" if self.kind == "pump" else "💥暴跌预警"
-        return (f"{tag} {self.coin} [{self.rule}] 历史命中{self.hit_rate*100:.1f}%/lift{self.lift:g}x "
-                f"| RSI={self.rsi:.0f} ATR%={self.atr_pct:.1f} 24h={self.ret24*100:+.0f}%")
+        # ret24 实为「近 24 根」位移；真实跨度=24 根×周期(5m 下=2h，非硬编码 24h)
+        span_h = 24 * self.bar_ms / 3_600_000 if self.bar_ms > 0 else 0.0
+        span = f"{span_h:.0f}h" if span_h >= 1 else (f"{span_h*60:.0f}m" if span_h > 0 else "?")
+        # hr/lift 仅 1h 标定；非标定 TF 诚实标注「本 TF 未验证」，不冒充本 TF 胜率
+        calib = self.bar_ms > 0 and abs(self.bar_ms - _CALIB_TF_MS) <= _CALIB_TF_MS * 0.1
+        if calib:
+            stat = f"历史命中{self.hit_rate*100:.1f}%/lift{self.lift:g}x"
+        else:
+            stat = f"[1h标定命中{self.hit_rate*100:.1f}%/lift{self.lift:g}x·本{span}级TF未验证]"
+        boost = f" 妖币×{self.boost:g}(先验非实测)" if self.boost != 1.0 else ""
+        return (f"{tag} {self.coin} [{self.rule}]{boost} {stat} "
+                f"| RSI={self.rsi:.0f} ATR%={self.atr_pct:.1f} 近24根({span})={self.ret24*100:+.0f}%")
 
 
 def features(candles: list[Any]) -> dict[str, float] | None:
@@ -81,15 +108,17 @@ class PumpRadar:
         if f is None:
             return None
         canon = normalize(coin)
+        bar = _bar_ms(candles)
         # 暴涨：黑名单(只跌型)直接跳过
         if canon not in BLACKLIST:
             for name, cond, hr, lift in PUMP_RULES:
                 if cond(f):
                     boost = 2.0 if canon in WHITELIST else 1.0
-                    return PumpAlert(coin, "pump", name, hr, lift * boost,
-                                     f["rsi"], f["atr_pct"], f["ret24"], now_ms)
+                    # lift 存实测基值,boost 单独传(不再把×2折进 lift冒充历史lift)
+                    return PumpAlert(coin, "pump", name, hr, lift,
+                                     f["rsi"], f["atr_pct"], f["ret24"], now_ms, bar, boost)
         for name, cond, hr, lift in DUMP_RULES:
             if cond(f):
                 return PumpAlert(coin, "dump", name, hr, lift,
-                                 f["rsi"], f["atr_pct"], f["ret24"], now_ms)
+                                 f["rsi"], f["atr_pct"], f["ret24"], now_ms, bar, 1.0)
         return None

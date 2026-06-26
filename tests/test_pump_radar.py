@@ -40,10 +40,26 @@ def test_blacklist_no_pump():
     assert a is None or a.kind != "pump"
 
 
-def test_whitelist_lift_boost():
+def test_whitelist_lift_boost_separated():
+    """修审计P2:lift 存实测基值,妖币×2 走独立 boost 字段(不再把×2折进 lift 冒充历史 lift)。"""
     closes = [100 * (1.03 ** i) for i in range(40)]
     a = PumpRadar().evaluate("MOODENG", _candles(closes), 1000)
-    assert a is not None and a.lift >= 30        # 妖币 lift 翻倍(18×2=36)
+    assert a is not None
+    assert a.lift < 30 and a.boost == 2.0        # lift=实测基值(18)未翻倍, boost 单独=2.0
+    assert "妖币×2" in a.fmt()                    # fmt 诚实标注加权(先验非实测)
+
+
+def test_fmt_relabels_span_and_caveats_offcalib_tf():
+    """修审计P1:喂 5m K 线(非 1h 标定)→ fmt 真实跨度=2h(非24h)+ hr/lift 标注「本TF未验证」。"""
+    closes = [100 * (1.03 ** i) for i in range(40)]
+    cs = _candles(closes)
+    for i, c in enumerate(cs):                    # 改成 5m 周期(open_time_ms 间隔 300000)
+        c.open_time_ms = i * 300_000
+    a = PumpRadar().evaluate("kPEPE", cs, 1000)
+    assert a is not None
+    txt = a.fmt()
+    assert "近24根(2h)" in txt                     # 24根×5m=2h,非硬编码 24h
+    assert "未验证" in txt and "24h=" not in txt    # 命中率/lift 标注未验证;不再谎称 24h
 
 
 def test_features_none_on_short():
