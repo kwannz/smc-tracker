@@ -87,6 +87,33 @@ def test_retrace_expires_without_pullback():
     assert t.outcome == "expired"
 
 
+def test_freqtrade_style_metrics():
+    """#201 借鉴 freqtrade 绩效报告:total_r(总盈亏R)、expectancy(期望=avg_r)、max_drawdown(最大回撤R)。"""
+    res = BacktestResult("X")
+    # 时间序:+2, -1, -1, +2 → equity 曲线 0→2→1→0→2;峰 2 谷 0 → 回撤 2R
+    res.trades = [
+        Trade("X", "long", 100, 95, 110, 1, exit_idx=2, outcome="win", r=2.0),
+        Trade("X", "long", 100, 95, 110, 3, exit_idx=4, outcome="loss", r=-1.0),
+        Trade("X", "long", 100, 95, 110, 5, exit_idx=6, outcome="loss", r=-1.0),
+        Trade("X", "long", 100, 95, 110, 7, exit_idx=8, outcome="win", r=2.0),
+    ]
+    assert abs(res.total_r - 2.0) < 1e-9              # 2-1-1+2
+    assert abs(res.expectancy - 0.5) < 1e-9           # 2/4
+    assert abs(res.max_drawdown - 2.0) < 1e-9         # 峰2→谷0
+
+
+def test_run_setups_backtests_external_signals():
+    """#201 通用信号回测:谐波/任意来源 TradeSetup 经 run_setups 复用 fill 模拟器(去重)。
+    每信号自带 rr(谐波各 setup rr 不同)→ win 记账用各自 rr。"""
+    # 信号:idx0 入场 entry=100/stop=95/target=115(rr=3);价格冲到 115 → win +3R
+    cs = _candles([(100, 101, 99, 100), (100, 110, 100, 108),
+                   (108, 116, 107, 115), (115, 117, 114, 116)])
+    sigs = [{"entry_idx": 0, "direction": "long", "entry": 100.0,
+             "stop": 95.0, "target": 115.0, "rr": 3.0}]
+    res = Backtester("X").run_setups(cs, sigs)
+    assert res.wins == 1 and abs(res.avg_r - 3.0) < 1e-9   # 用信号自带 rr=3,非默认2
+
+
 if __name__ == "__main__":
     for name, fn in list(globals().items()):
         if name.startswith("test_") and callable(fn):

@@ -123,6 +123,54 @@ def _print_vol_skill(store, coins: list, tfs: list) -> None:
     print("   读法:GA>EW>rv 且为正=GARCH 预测有真技巧(#179在15m最强);近0=该周期/币集无可测波动结构。")
 
 
+def _cmd_backtest(args: argparse.Namespace) -> None:
+    """回测交易机器人(#201,freqtrade 式):用已存历史 K 线校验 SMC 结构信号胜率/期望/盈亏比/最大回撤。
+
+    谐波 edge(+0.5R #165)+ freqtrade 架构(external/freqtrade 蓝本)→ keyless 回测(无实盘下单)。
+    读 DB 无网络;--require-zone/--require-sweep 共振过滤检验"确认是否提升胜率"。
+    """
+    try:
+        from .storage import Store
+        from .backtest import Backtester, BacktestResult
+        from .monitor.volatility_monitor import pick_coins
+
+        store = Store(Path(args.db))
+        coins = pick_coins(store)
+        if not coins:
+            print("[backtest] 无可回测币（采集器尚未填 K 线；`watch add BTC ETH`）")
+            store.close()
+            return
+        flt = []
+        if args.require_zone:
+            flt.append("OB/FVG共振")
+        if args.require_sweep:
+            flt.append("扫荡共振")
+        print(f"📊 回测 SMC 结构信号 [{args.tf}] 目标{args.rr}R "
+              f"{'· ' + '+'.join(flt) if flt else '(无过滤)'} —— freqtrade 式绩效（keyless,无实盘）")
+        agg = BacktestResult("合计")
+        for coin in coins:
+            cs = store.get_candles(coin, args.tf, limit=args.bars)
+            if len(cs) < 100:
+                continue
+            res = Backtester(coin).run(
+                cs, target_rr=args.rr, require_zone=args.require_zone,
+                require_sweep=args.require_sweep)
+            if res.wins + res.losses > 0:
+                print("  " + res.summary())
+                agg.trades.extend(res.trades)
+        n = agg.wins + agg.losses
+        if n > 0:
+            print("  " + "─" * 56)
+            print("  " + agg.summary())
+            print("   读法:期望>0 且 盈亏比>1 才是正期望策略;最大回撤=连续亏损的R深度(风险)。")
+        else:
+            print("[backtest] 无足够已平交易（数据不足或无结构突破/被过滤）")
+        store.close()
+    except Exception as exc:
+        print(f"[backtest] 出错：{exc}", file=sys.stderr)
+        sys.exit(1)
+
+
 def _cmd_watch(args: argparse.Namespace) -> None:
     """监控币种清单增删查（写本地 SQLite，运行中监控进程周期对账热载入）。"""
     try:

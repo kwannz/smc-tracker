@@ -23,7 +23,7 @@ from typing import Any
 from .cli_commands import (  # noqa: F401
     _cmd_run, _cmd_report, _cmd_signals, _cmd_vol, _cmd_watch, _cmd_address,
     _cmd_discover, _cmd_bench, _cmd_llm, _cmd_wallet, _cmd_dashboard,
-    _cmd_okx, _cmd_health,
+    _cmd_okx, _cmd_health, _cmd_backtest,
 )
 
 # 项目根：src/smc_tracker/cli.py → parents[2] = repo 根
@@ -465,6 +465,16 @@ def build_parser() -> argparse.ArgumentParser:
     p_vol.add_argument("--db", default=_DEFAULT_DB, metavar="PATH",
                        help=f"SQLite 数据库路径（默认 {_DEFAULT_DB}）")
     p_vol.set_defaults(handler=_cmd_vol)
+
+    p_bt = sub.add_parser("backtest", help="回测交易机器人(SMC结构信号·freqtrade式绩效·keyless无实盘·读DB无网络)")
+    p_bt.add_argument("--tf", default="1H", metavar="TF", help="回测周期（默认 1H）")
+    p_bt.add_argument("--bars", type=int, default=2000, metavar="N", help="回测 K 线数（默认 2000）")
+    p_bt.add_argument("--rr", type=float, default=2.0, metavar="R", help="目标盈亏比（默认 2.0）")
+    p_bt.add_argument("--require-zone", action="store_true", help="要求 OB/FVG 区域共振过滤")
+    p_bt.add_argument("--require-sweep", action="store_true", help="要求流动性扫荡共振过滤")
+    p_bt.add_argument("--db", default=_DEFAULT_DB, metavar="PATH",
+                      help=f"SQLite 数据库路径（默认 {_DEFAULT_DB}）")
+    p_bt.set_defaults(handler=_cmd_backtest)
 
     # ---- discover ----
     p_disc = sub.add_parser("discover", help="从排行榜自动发现聪明钱地址")

@@ -34,6 +34,7 @@ class Trade:
     exit_idx: int = -1
     outcome: str = "open"   # 'win' / 'loss' / 'open' / 'expired'(回撤未触发)
     r: float = 0.0          # 实现盈亏（以 R 计）
+    rr: float = 0.0         # 该笔目标盈亏比（win 记 +rr R；0=回退 _simulate 的 target_rr，#201 支持谐波各自 rr）
 
 
 @dataclass(slots=True)
@@ -69,11 +70,35 @@ class BacktestResult:
         gross_loss = -sum(t.r for t in self.resolved if t.r < 0)
         return gross_win / gross_loss if gross_loss else float("inf")
 
+    # ---- freqtrade 式绩效(#201 借鉴 backtesting 报告) ----
+    @property
+    def total_r(self) -> float:
+        """总盈亏(以 R 计)= 净期望×笔数,反映策略整体盈利能力。"""
+        return sum(t.r for t in self.resolved)
+
+    @property
+    def expectancy(self) -> float:
+        """每笔期望 R(=avg_r,freqtrade 命名);>0 为正期望策略。"""
+        return self.avg_r
+
+    @property
+    def max_drawdown(self) -> float:
+        """最大回撤(R):按平仓时间序累计 R 的峰-谷最大跌幅(freqtrade 风险核心指标)。"""
+        seq = sorted((t for t in self.resolved), key=lambda t: t.exit_idx)
+        peak = equity = 0.0
+        mdd = 0.0
+        for t in seq:
+            equity += t.r
+            peak = max(peak, equity)
+            mdd = max(mdd, peak - equity)
+        return mdd
+
     def summary(self) -> str:
         n = self.wins + self.losses
         pf = self.profit_factor
         return (f"{self.coin:>8}: 交易{n:>3} 胜率{self.win_rate*100:5.1f}% "
-                f"期望{self.avg_r:+.2f}R 盈亏比{pf if pf != float('inf') else 99:5.2f} "
+                f"期望{self.expectancy:+.2f}R 盈亏比{pf if pf != float('inf') else 99:5.2f} "
+                f"总{self.total_r:+.1f}R 回撤{self.max_drawdown:.1f}R "
                 f"(胜{self.wins}/负{self.losses}/未平{len(self.trades)-n})")
 
 
@@ -146,6 +171,31 @@ class Backtester:
                         coin=self.coin, direction=direction, entry=rp.entry,
                         stop=rp.stop, target=rp.target, entry_idx=i, entry_mode="break"))
 
+        for t in result.trades:
+            t.rr = target_rr                  # 结构信号统一 target_rr;run_setups 可传各自 rr
+        self._simulate(candles, result.trades, target_rr, max_wait_bars)
+        return result
+
+    def run_setups(
+        self,
+        candles: list[Candle],
+        signals: list[dict],
+        *,
+        target_rr: float = 2.0,
+        max_wait_bars: int = 12,
+    ) -> BacktestResult:
+        """回测**外部信号**(谐波 TradeSetup / 任意来源),复用 _simulate fill 模拟器(去重)。
+
+        signals=[{entry_idx,direction,entry,stop,target, rr?, entry_mode?}]——谐波各 setup rr 不同,
+        win 记各自 rr(无 rr 回退 target_rr)。这是 freqtrade 式"策略产信号→引擎模拟成交"的解耦(#201)。
+        """
+        result = BacktestResult(self.coin)
+        for s in signals:
+            result.trades.append(Trade(
+                coin=self.coin, direction=s["direction"], entry=float(s["entry"]),
+                stop=float(s["stop"]), target=float(s["target"]),
+                entry_idx=int(s["entry_idx"]), entry_mode=s.get("entry_mode", "break"),
+                rr=float(s.get("rr", target_rr))))
         self._simulate(candles, result.trades, target_rr, max_wait_bars)
         return result
 
@@ -153,6 +203,7 @@ class Backtester:
     def _simulate(candles: list[Candle], trades: list[Trade], target_rr: float,
                   max_wait_bars: int = 12) -> None:
         for t in trades:
+            win_r = t.rr if t.rr > 0 else target_rr   # #201 每笔自带 rr(谐波各异),回退 target_rr
             triggered = t.entry_mode == "break"   # break 模式立即成交
             if triggered:
                 t.triggered_idx = t.entry_idx
@@ -173,14 +224,14 @@ class Backtester:
                         t.outcome, t.r, t.exit_idx = "loss", -1.0, j
                         break
                     if cj.h >= t.target:
-                        t.outcome, t.r, t.exit_idx = "win", target_rr, j
+                        t.outcome, t.r, t.exit_idx = "win", win_r, j
                         break
                 else:
                     if cj.h >= t.stop:
                         t.outcome, t.r, t.exit_idx = "loss", -1.0, j
                         break
                     if cj.l <= t.target:
-                        t.outcome, t.r, t.exit_idx = "win", target_rr, j
+                        t.outcome, t.r, t.exit_idx = "win", win_r, j
                         break
             if not triggered and t.outcome == "open":
                 t.outcome = "expired"
