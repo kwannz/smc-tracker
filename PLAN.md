@@ -214,6 +214,12 @@ D 多空符号 · E 真实 userFills 解析/分类自洽 · F WS webData2==REST 
 > 据 codex-loop 反幻觉纪律保持开放，区别于「已实现但 backlog 写保守」的项（已核实证据后闭合）。
 
 ## 迭代日志
+- 2026-06-27 #183: **一致性传导:dashboard 波动页补 GARCH 预测(σ→GA),纠"显示噪声(速度)藏信号(预测)"倒置**（/loop;Opus 发现即修,#174一致性）。
+  核查 #179 GARCH 升级是否传导到所有呈现面:CLI vol 板已有 GA%/EW%(#182),但 **dashboard /volatility 醒目显示 velocity 箭头(↑↓,#150-152已证~0噪声),却完全不显示 GARCH 预测(系统真 edge)**=口径倒置。
+  数据已在 state(vol_metrics 含 garch_vol,实证 by_tf 字段确认),只需渲染:cell 加蓝色"σ→GA%"(当前波动→GARCH一步预测)、表头标 GARCH 主前瞻量(#179,15m胜EWMA+0.078;水平可测非方向)+速度箭头标"回望/方向~0勿追涨"。
+  TDD:state 含 garch_vol 数据契约 + 页面呈现 GA/主前瞻量。全量2467 passed,114行≤800。
+  教训:升级核心能力后必须核查它传导到**所有**呈现面(#174);dashboard 醒目显示已证伪的方向噪声、却藏起真前瞻 edge=最该纠的口径分裂;诚实不只是不说假话,更是把真信号摆到和噪声同样显眼处。
+
 - 2026-06-27 #182: **操作化"生产 alpha 验证"(用户选向#1):`vol --skill` 在自己追踪币上实测 GARCH/EWMA 预测技巧**（/loop;Opus 功能+去重,TDD）。
   #177-181 把波动预测做透,但验证都活在一次性审计脚本(固定25币)。本轮把审计操作化为 runtime 能力:`forecast_skill(closes_seq)` 进生产模块
   (canonical 单一真相源,corr(在t的1步预测, 未来h-bar已实现波动),GARCH/EWMA/rv 三法,h=1用|单bar收益|);`_fc_series` 统一递推(GARCH 方差目标/EWMA 退化)。

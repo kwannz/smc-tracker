@@ -29,6 +29,15 @@ def test_volatility_state_structure():
     assert st["coins"][0]["coin"] == "BTC"
     assert "by_tf" in st["coins"][0] and "15m" in st["coins"][0]["by_tf"]
     assert "velocity" in st["coins"][0]["by_tf"]["15m"]
+    # #183 数据契约:state 含 GARCH 前瞻量(供 dashboard 渲染 σ→GA 预测,与 CLI/#179 一致)
+    assert "garch_vol" in st["coins"][0]["by_tf"]["15m"]
+
+
+def test_volatility_page_surfaces_garch_forecast():
+    """#183:dashboard 波动页呈现 GARCH 一步预测(σ→GA),与 CLI vol 板/#179 升级一致(非只显回望速度)。"""
+    html = render_volatility_page()
+    assert "GA" in html and "garch_vol" in html       # cell 渲染读 m.garch_vol → GA
+    assert "主前瞻量" in html                          # 表头标注 GARCH 为主前瞻量
 
 
 def test_pick_coins_prefers_monitored():
