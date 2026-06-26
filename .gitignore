@@ -7,3 +7,7 @@ config/config.yaml
 *.egg-info/
 build/
 dist/
+
+# ralph-wiggum 循环本地状态(不入 repo,#解决ralph hooks问题:状态文件曾被git跟踪污染历史)
+.claude/ralph-loop*.local.md
+.claude/*.local.md
