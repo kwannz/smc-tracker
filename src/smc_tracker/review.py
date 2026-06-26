@@ -164,8 +164,9 @@ class PredictionReview:
         bg_px: float,
         horizon_ms: int = 3_600_000,
         note: str = "",
-    ) -> None:
-        """记录一条前瞻预测到 predictions 表。
+    ) -> bool:
+        """记录一条前瞻预测到 predictions 表。返回 True=已插入 / False=无效价跳过(供 record_mtf 累加,
+        免 14 次全表 COUNT(*) 判断是否插入,修审计 P2)。
 
         px_emit：hl_px > 0 时用 hl_px，否则 bg_px；两者都 <= 0 则跳过，不记录。
         px_gap_pct：两源都 > 0 时计算 |hl-bg|/mid，否则 NULL（数据质量指标）。
@@ -184,7 +185,7 @@ class PredictionReview:
         elif bg > 0:
             px_emit = bg
         else:
-            return  # 无有效价格，不落库
+            return False  # 无有效价格，不落库
 
         # 两源价差（数据质量指标）：先消除 k 计价币的 10 的幂单位倍数，避免假性 199% 告警（#100）
         px_gap_pct = aligned_px_gap(hl, bg) if (hl > 0 and bg > 0) else None
@@ -199,6 +200,7 @@ class PredictionReview:
              bg if bg > 0 else None,
              px_gap_pct, horizon_ms, note or None),
         )
+        return True
 
     # ---- 多时间段批量记录 ----
     def record_mtf(
@@ -222,17 +224,11 @@ class PredictionReview:
         """
         count = 0
         for hz in horizons_ms:
-            before = self.store.conn.execute(
-                "SELECT COUNT(*) FROM predictions"
-            ).fetchone()[0]
-            self.record(
+            # 据 record() 返回的 bool 累加(修审计 P2:原每水平线前后各 1 次 COUNT(*)=14 次全表扫描)
+            if self.record(
                 ts=ts, coin=coin, kind=kind, direction=direction,
                 hl_px=hl_px, bg_px=bg_px, horizon_ms=hz, note=note,
-            )
-            after = self.store.conn.execute(
-                "SELECT COUNT(*) FROM predictions"
-            ).fetchone()[0]
-            if after > before:
+            ):
                 count += 1
         return count
 

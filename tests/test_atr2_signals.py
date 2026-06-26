@@ -190,7 +190,11 @@ class TestAtrValues:
         candles = _make_trending_up(n=60, start=1000.0, step=1.0)
         r = atr2_confirmation(candles)
         assert r is not None
-        assert r["atr"] < r["atr"] * 10 + 1000.0, "ATR 应远小于价格量级"
+        # 修审计 nit:原 atr < atr*10+1000 恒真=无断言。改有意义:ATR 应远小于末价(<10%)且为正。
+        last_close = candles[-1].c
+        assert 0.0 < r["atr"] < last_close * 0.1, (
+            f"ATR={r['atr']:.4f} 应为正且 <末价{last_close:.1f}的10%(否则放大bug)"
+        )
         # atr_pct = atr/price，应在合理范围
         assert r["atr_pct"] < 0.5, f"atr_pct={r['atr_pct']:.4f} 不应大于50%"
 

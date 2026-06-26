@@ -295,7 +295,7 @@ def build_coin_detail(store: Any, coin: str, tf: str | None = None) -> dict:
     """组装指定 coin（和 tf）的详情数据：蜡烛/setup/S/R/历史/多周期共振。
 
     tf 缺省时取该币在 recent_harmonic_setups 中首个 setup 的 tf。
-    tfs_available 固定返回 7 周期（15m/30m/1H/4H/12H/1D/1W），无论该周期是否有形态。
+    tfs_available 固定返回 CANONICAL_TIMEFRAMES 7 周期（15m/1H/4H/6H/12H/1D/1W），无论该周期是否有形态。
     无形态周期的 setups=[]，candles 仍尝试拉取（让前端显示 K 线）。
     表缺/空时各字段返回 []，不抛。
 

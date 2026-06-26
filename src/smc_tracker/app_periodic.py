@@ -417,7 +417,8 @@ class PeriodicTasksMixin:
                 if coins:
                     mon = VolatilityMonitor(coins, list(mc.timeframes), self.store)
                     now = int(time.time() * 1000)
-                    rows = mon.rank(now)
+                    # rank() 是全币×7周期 numpy + 逐(coin,tf)DB 读，移出事件循环避免阻塞(修审计P2)
+                    rows = await asyncio.to_thread(mon.rank, now)
                     card = mon.render(rows, now)
                     if card:
                         print(card)
