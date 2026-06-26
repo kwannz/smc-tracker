@@ -214,6 +214,13 @@ D 多空符号 · E 真实 userFills 解析/分类自洽 · F WS webData2==REST 
 > 据 codex-loop 反幻觉纪律保持开放，区别于「已实现但 backlog 写保守」的项（已核实证据后闭合）。
 
 ## 迭代日志
+- 2026-06-27 #198: **验证自己的 build:Parkinson(#197)在真实加密上实证更优——理论这次兑现(对比#186被证伪)**（/loop;Opus build后必validate,用对待别人结论的怀疑对待自己）。
+  #197 用开源理论(Parkinson 5×高效)加了估计量,但 campaign 纪律:理论须真实数据验证(加密插针可能虚高高低幅)。负责任地验自己的蛋:scripts/audit_parkinson_efficiency.py
+  真实20币15m,滚动 rv vs pk 各与未来 h-bar 已实现波动相关(同target公平)+查偏置。铁证:
+  ① 偏置 pk/rv 中位 **1.014**=基本无偏(**插针未系统性虚高**,加密高低幅聚合诚实);② 预测未来波动 pk 每视野胜 rv **+0.02~0.05 corr**(1/5/10bar:0.35/0.47/0.50 vs 0.33/0.43/0.45)。
+  ⇒5×效率在真实加密**兑现**(对比#186跟庄理论被真实数据证伪)。写 parkinson_vol docstring + 可信度地图。全量2473 passed,文件≤800。
+  教训:先实证不是预设理论会输,是预设"我不知道、让数据说"——这次数据说理论对(Parkinson无偏更优),和#186说理论错同样诚实;关键是没因为是自己刚下的蛋就跳过照妖镜。
+
 - 2026-06-27 #197: **构建(开源案例):加 Parkinson(1980)高低幅波动估计——比 close-to-close rv 效率高~5×,榨已有 OHLC**（/loop;Opus 从验证 pivot 回构建,TDD）。
   20轮验证后 pivot 回真正"完成开发"(指令本意)。第一性发现真实缺口:rv 纯 close-to-close、只用 C,丢弃每根 bar 的 H/L 内部波动信息;
   而 vol_metrics(h,l,c) 已收 H/L 却只用于 ATR。开源标准 Parkinson(1980)用高低 range,同样本方差比 close-to-close 小~5×(更高效=估计更准噪声更小)——

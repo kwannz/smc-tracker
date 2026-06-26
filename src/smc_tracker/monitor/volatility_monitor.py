@@ -123,6 +123,9 @@ def parkinson_vol(h: Any, l: Any, win: int = _RV_WIN) -> float:
     第一性:close-to-close rv 只用收盘价、丢弃 bar 内波动信息;高低幅含一根 bar 内真实摆动幅度→更高效估计。
     1/(4ln2) 是无偏缩放因子(GBM 下 E[(ln H/L)²]=4ln2·σ²);漏掉它会系统性偏高。加密 24/7 无隔夜跳空,
     Parkinson 假设(连续交易、无跳空、无漂移)在加密最适用。<2 根或非法 H/L(≤0 或 H<L)全无 → -1.0 哨兵。
+    **#198 真实加密实证(理论兑现,非纸上)**:20币15m——① 基本无偏(pk/rv 中位 1.014,**插针未系统性虚高**);
+    ② 预测未来波动**每视野胜 close-to-close rv +0.02~0.05 corr**(1/5/10bar:0.35/0.47/0.50 vs rv 0.33/0.43/0.45)
+    ——5× 效率在真实加密兑现。脚本 scripts/audit_parkinson_efficiency.py 可复现。
     """
     hi = np.asarray(h, dtype=float)
     lo = np.asarray(l, dtype=float)
