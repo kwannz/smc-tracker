@@ -53,7 +53,9 @@ def harmonic_backtest(
     """对一段历史 K 线回测谐波 completed setup。返回 BacktestResult（含 freqtrade 式绩效）。
 
     min_conf：仅回测综合置信 ≥ 此阈值的 setup（对齐 #169 谐波推送 min_conf≥0.75 的减噪门控）。
-    require_sfg：要求 **SFG 10 因子共识** 与 setup 方向一致才入场（充分使用 SFG;回测可对比是否提升 edge）。
+    require_sfg：要求 **SFG 10 因子共识** 与 setup 方向一致才入场（充分使用 SFG）。
+        ⚠#205 真实数据验证(3币600bar 1H)：SFG 确认**不提升反略降** edge(胜率 61%→57.5%、期望 +0.83→+0.72R)
+        ——SFG 喂 KNN≈随机,作确认也≈随机,只随机删好 setup。故**默认 off**,留可选;勿默认开(小样本 n≈40,scripts/validate_harmonic_sfg.py 可复现)。
     no-repaint：每个 setup 的 entry_idx = 其形态在重放中**首次完成的那根**,模拟从下一根起;SFG 共识零前视尾对齐。
     """
     state = HarmonicState(order=order, tol=tol)
@@ -67,7 +69,7 @@ def harmonic_backtest(
         # 性能:build_setups 只用近窗算 KNN/ATR(形态用绝对价格,非 candle 索引)→ bound 近 _BT_WINDOW 根,
         # 避免每个完成 bar 重算全增长窗的 O(n²)(KNN feature_matrix 是主瓶颈)。entry_idx 仍用全表 i 供模拟。
         win_lo = max(0, i + 1 - _BT_WINDOW)
-        setups = build_setups(coin, tf, candles[win_lo:i + 1], res, target_rr=target_rr)
+        setups = build_setups(coin, tf, candles[win_lo:i + 1], res, target_rr=target_rr, skip_knn=True)
         for s in setups:
             # 仅 completed(src_key 前缀 'C|')、首现去重、置信达标
             if not s.src_key.startswith("C|") or s.src_key in seen:

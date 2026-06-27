@@ -214,6 +214,13 @@ D 多空符号 · E 真实 userFills 解析/分类自洽 · F WS webData2==REST 
 > 据 codex-loop 反幻觉纪律保持开放，区别于「已实现但 backlog 写保守」的项（已核实证据后闭合）。
 
 ## 迭代日志
+- 2026-06-27 #205: **skip_knn 性能修复 + 真实数据验证:谐波 edge 真(回测61%胜/+0.83R)、SFG确认不帮忙(数据裁决)**（ralph loop 续;Opus build+validate 闭环）。
+  #204 bound 后残余 KNN 瓶颈(≈随机却每setup算10 SFG series):给 build_setups/`_build_one` 加 `skip_knn`(默认False不改生产;回测传True),谐波回测去掉≈随机KNN后秒出。
+  **真实数据验证(scripts/validate_harmonic_sfg.py,3币600bar 1H)**:① 谐波 setup 回测 **61%胜率/+0.83R期望/3.12盈亏比**——谐波 edge 扎实(验#165、证谐波bot可行);
+  ② SFG共识确认(#203 --require-sfg)**不提升反略降**(胜61%→57.5%、期望+0.83→+0.72R)——SFG喂KNN≈随机,作确认也≈随机只随机删好setup。
+  诚实结论:SFG确认建成可用但**默认off**(数据裁决非直觉);谐波bot本身正期望。小样本n≈40。全量2491 passed,文件≤800,零孤儿。
+  教训:build(#203 SFG确认)→validate(真实数据)→让数据定默认值;skip_knn既修性能又印证"KNN无edge故可弃";谐波edge经回测确认真实=bot方向有据。
+
 - 2026-06-27 #204: **谐波回测性能修复:build_setups 近窗 bound(O(n²)→O(n×300))+ 揭示残余 KNN 瓶颈**（ralph loop 续;Opus 发现即修）。
   验证 #203(SFG 确认增益)时发现谐波回测在真实规模(1500bar×8币)跑不动:`build_setups(candles[:i+1])` 每个完成 bar 重算增长窗=O(n²),主因是其内部 `validate_direction`(KNN)对全窗算 10 个 SFG series。
   修:谐波形态用**绝对价格**(D±1.5%/X失效位)非 candle 索引→build_setups 只需近窗算 KNN/ATR;harmonic_backtest 传 candles[i+1-300:i+1](_BT_WINDOW=300,覆盖暖机),entry_idx 仍用全表 i 供模拟。15回测测试全过=正确性不变。

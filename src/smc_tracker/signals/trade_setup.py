@@ -148,6 +148,7 @@ def _build_one(
     account_usd: float,
     risk_pct: float,
     target_rr: float,
+    skip_knn: bool = False,
 ) -> TradeSetup | None:
     """从单个形态 dict 构建 TradeSetup；劣质 setup 返回 None。"""
     # ── 1. 方向映射 ──────────────────────────────────────────────────────────
@@ -355,7 +356,8 @@ def _build_one(
     notional: float | None = pos.notional if pos is not None else None
 
     # ── 5. KNN 历史验证 ───────────────────────────────────────────────────────
-    verdict = validate_direction(candles, direction)
+    # skip_knn:回测大规模时跳过 KNN(≈随机无 edge #185-193,且 feature_matrix 是性能瓶颈 #204)
+    verdict = None if skip_knn else validate_direction(candles, direction)
     if verdict is None:
         knn_supports: bool | None = None
         knn_note = "样本不足"
@@ -439,6 +441,7 @@ def build_setups(
     account_usd: float = 10_000.0,
     risk_pct: float = 0.01,
     target_rr: float = 2.0,
+    skip_knn: bool = False,
 ) -> list[TradeSetup]:
     """从谐波分析结果构建可执行交易 setup 列表。
 
@@ -483,6 +486,7 @@ def build_setups(
             account_usd=account_usd,
             risk_pct=risk_pct,
             target_rr=target_rr,
+            skip_knn=skip_knn,
         )
         if setup is not None:
             completed_setups.append(setup)
@@ -496,6 +500,7 @@ def build_setups(
             account_usd=account_usd,
             risk_pct=risk_pct,
             target_rr=target_rr,
+            skip_knn=skip_knn,
         )
         if setup is not None:
             forming_setups.append(setup)
