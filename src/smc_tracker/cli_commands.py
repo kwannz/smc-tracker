@@ -155,7 +155,8 @@ def _cmd_backtest(args: argparse.Namespace) -> None:
             if args.harmonic:
                 res = harmonic_backtest(coin, args.tf, cs, target_rr=args.rr,
                                         min_conf=args.min_conf,
-                                        require_sfg=args.require_sfg)
+                                        require_sfg=args.require_sfg,
+                                        require_sr=args.require_sr)
             else:
                 res = Backtester(coin).run(
                     cs, target_rr=args.rr, require_zone=args.require_zone,

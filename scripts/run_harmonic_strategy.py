@@ -60,14 +60,22 @@ async def main() -> None:
     print(_line("合计", agg))
     print("-" * 70)
 
-    print("【② 置信分层(验 #165 校准:高置信→高胜率?)】")
-    print(f"  {'min_conf':<14}{'交易':>5}{'胜率':>8}{'期望':>9}{'盈亏比':>7}{'总R':>8}{'回撤':>8}")
-    for mc in (0.0, 0.5, 0.75):
-        tier = BacktestResult(f"≥{mc}")
+    print("【② 多因子汇合对比(谐波 × Fib已含 × SFG × S/R × 置信门控)——数据裁决哪个真提升】")
+    print(f"  {'配置':<14}{'交易':>5}{'胜率':>8}{'期望':>9}{'盈亏比':>7}{'总R':>8}{'回撤':>8}")
+    configs = [
+        ("谐波(基线)", dict()),
+        ("+S/R确认", dict(require_sr=True)),
+        ("+SFG共识", dict(require_sfg=True)),
+        ("+置信≥0.75", dict(min_conf=0.75)),
+        ("+S/R+置信", dict(require_sr=True, min_conf=0.75)),
+        ("全汇合", dict(require_sr=True, require_sfg=True, min_conf=0.75)),
+    ]
+    for name, kw in configs:
+        agg2 = BacktestResult(name)
         for c, cs in cand.items():
-            r = harmonic_backtest(c, _TF, cs, target_rr=2.0, min_conf=mc)
-            tier.trades.extend(r.trades)
-        print(_line(f"≥{mc}", tier))
+            r = harmonic_backtest(c, _TF, cs, target_rr=2.0, **kw)
+            agg2.trades.extend(r.trades)
+        print(_line(name, agg2))
     print("-" * 70)
     print(f"回测耗时 {time.perf_counter()-t0:.1f}s（{len(cand)}币×{_BARS}bar×4配置）")
     n = agg.wins + agg.losses

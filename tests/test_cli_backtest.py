@@ -65,6 +65,12 @@ def test_sfg_consensus_and_require_sfg_filter():
     base = harmonic_backtest("BTC", "1H", cs)
     filt = harmonic_backtest("BTC", "1H", cs, require_sfg=True)
     assert len(filt.trades) <= len(base.trades)        # SFG 确认只减不增入场
+    # #208 S/R 确认同为过滤器(只减不增);_near_sr 同向匹配
+    from smc_tracker.backtest.harmonic import _near_sr
+    sr = harmonic_backtest("BTC", "1H", cs, require_sr=True)
+    assert len(sr.trades) <= len(base.trades)
+    assert _near_sr(100.0, "long", {"support": [(100.3, 2)], "resistance": []})       # 0.3%内
+    assert not _near_sr(100.0, "long", {"support": [(105.0, 2)], "resistance": []})   # 5%外
 
 
 def test_backtest_harmonic_flag(tmp_path, capsys):

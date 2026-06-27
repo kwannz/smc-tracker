@@ -14,11 +14,18 @@ from typing import Any
 import numpy as np
 
 from ..indicators.harmonic_state import HarmonicState
+from ..indicators.levels import support_resistance
 from ..indicators.sfg import (lrsd_series, gpi_series, vap_series, pdbb_series,
                               pivot_series, ami_series, atr2_series, msfvg_series,
                               ai_st_series, dmha_series)
 from ..signals.trade_setup import build_setups
 from .engine import Backtester, BacktestResult
+
+
+def _near_sr(entry: float, direction: str, sr: dict, tol_pct: float = 0.006) -> bool:
+    """谐波入场是否近同向 S/R(long 近支撑/short 近压力)——S/R 与谐波 D 反转位汇合。"""
+    levels = sr.get("support" if direction == "long" else "resistance", [])
+    return any(abs(entry - p) <= tol_pct * entry for p, _ in levels)
 
 # 充分使用 SFG(用户#):10 因子各 [-1,+1],reversal 系与谐波反转入场对齐;ai_st 趋势系
 _SFG_FACTORS = (lrsd_series, gpi_series, vap_series, pdbb_series, pivot_series,
@@ -49,6 +56,7 @@ def harmonic_backtest(
     order: int = 2,
     tol: float = 0.07,
     require_sfg: bool = False,
+    require_sr: bool = False,
 ) -> BacktestResult:
     """对一段历史 K 线回测谐波 completed setup。返回 BacktestResult（含 freqtrade 式绩效）。
 
@@ -81,8 +89,12 @@ def harmonic_backtest(
                 b = float(bias[i])
                 if (s.direction == "long" and b <= 0) or (s.direction == "short" and b >= 0):
                     continue
-            seen.add(s.src_key)
             entry = (s.entry_lo + s.entry_hi) / 2.0
+            # S/R 确认:入场近同向支撑/压力(谐波 D 反转位与经典 S/R 汇合;近窗算零前视)
+            if require_sr and not _near_sr(entry, s.direction,
+                                           support_resistance(candles[win_lo:i + 1])):
+                continue
+            seen.add(s.src_key)
             signals.append({
                 "entry_idx": i, "direction": s.direction, "entry": entry,
                 "stop": s.stop, "target": s.target1, "rr": s.rr or target_rr,

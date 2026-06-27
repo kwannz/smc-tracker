@@ -474,6 +474,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_bt.add_argument("--require-sweep", action="store_true", help="要求流动性扫荡共振过滤")
     p_bt.add_argument("--harmonic", action="store_true", help="回测谐波 setup(no-repaint 增量重放,#165 edge)而非 SMC 结构")
     p_bt.add_argument("--require-sfg", action="store_true", help="谐波入场要求 SFG 10因子共识同向(充分使用SFG,对比是否提升edge)")
+    p_bt.add_argument("--require-sr", action="store_true", help="谐波入场要求近同向支撑/压力位(S/R∩谐波D汇合,对比是否提升edge)")
     p_bt.add_argument("--min-conf", type=float, default=0.0, metavar="C",
                       help="谐波回测最低置信(对齐推送门控 0.75;默认 0=全收)")
     p_bt.add_argument("--db", default=_DEFAULT_DB, metavar="PATH",
