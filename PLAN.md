@@ -214,6 +214,12 @@ D 多空符号 · E 真实 userFills 解析/分类自洽 · F WS webData2==REST 
 > 据 codex-loop 反幻觉纪律保持开放，区别于「已实现但 backlog 写保守」的项（已核实证据后闭合）。
 
 ## 迭代日志
+- 2026-06-27 #206: **量化回测效率:#204/#205 优化后 3000bar<0.5s(无SFG),O(n²)→近O(n)**（ralph loop 续;用户"查看backtest效率";Opus 基准）。
+  写 scripts/bench_backtest.py 合成数据纯计算基准。结果:无SFG **6k-28k bar/s**(1000/2000/3000bar=0.06/0.22/0.48s,近线性);
+  SFG-on 2k-2.8k bar/s(sfg_consensus 算10因子全序列;500bar 1.38s 是首调预热伪影)。对比优化前 8币×1500bar 几分钟跑不完=量级跳变。
+  实务:2000bar×10币 无SFG≈2-3s/有SFG≈10-15s,真实规模回测验证现完全可行(此前被迫缩样本的规模)。纯脚本,无src改动。
+  结论:#204 bound(build_setups O(i)→O(300))+ #205 skip_knn(去≈随机KNN全窗算10 SFG series瓶颈)叠加=回测从不可用变高效;残余略超线性是 HarmonicState 枢轴检测,可接受。
+
 - 2026-06-27 #205: **skip_knn 性能修复 + 真实数据验证:谐波 edge 真(回测61%胜/+0.83R)、SFG确认不帮忙(数据裁决)**（ralph loop 续;Opus build+validate 闭环）。
   #204 bound 后残余 KNN 瓶颈(≈随机却每setup算10 SFG series):给 build_setups/`_build_one` 加 `skip_knn`(默认False不改生产;回测传True),谐波回测去掉≈随机KNN后秒出。
   **真实数据验证(scripts/validate_harmonic_sfg.py,3币600bar 1H)**:① 谐波 setup 回测 **61%胜率/+0.83R期望/3.12盈亏比**——谐波 edge 扎实(验#165、证谐波bot可行);
