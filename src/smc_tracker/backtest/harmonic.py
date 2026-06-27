@@ -23,6 +23,8 @@ from .engine import Backtester, BacktestResult
 # 充分使用 SFG(用户#):10 因子各 [-1,+1],reversal 系与谐波反转入场对齐;ai_st 趋势系
 _SFG_FACTORS = (lrsd_series, gpi_series, vap_series, pdbb_series, pivot_series,
                 ami_series, atr2_series, msfvg_series, ai_st_series, dmha_series)
+# build_setups 近窗上限(覆盖 SFG/KNN 暖机 ~46 + ATR + 余量);形态用绝对价格,bound 不影响正确性
+_BT_WINDOW = 300
 
 
 def sfg_consensus(candles: list[Any]) -> np.ndarray:
@@ -62,7 +64,10 @@ def harmonic_backtest(
         res = state.update(c)
         if not res.get("completed"):
             continue
-        setups = build_setups(coin, tf, candles[:i + 1], res, target_rr=target_rr)
+        # 性能:build_setups 只用近窗算 KNN/ATR(形态用绝对价格,非 candle 索引)→ bound 近 _BT_WINDOW 根,
+        # 避免每个完成 bar 重算全增长窗的 O(n²)(KNN feature_matrix 是主瓶颈)。entry_idx 仍用全表 i 供模拟。
+        win_lo = max(0, i + 1 - _BT_WINDOW)
+        setups = build_setups(coin, tf, candles[win_lo:i + 1], res, target_rr=target_rr)
         for s in setups:
             # 仅 completed(src_key 前缀 'C|')、首现去重、置信达标
             if not s.src_key.startswith("C|") or s.src_key in seen:

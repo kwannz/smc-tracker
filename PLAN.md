@@ -214,6 +214,12 @@ D 多空符号 · E 真实 userFills 解析/分类自洽 · F WS webData2==REST 
 > 据 codex-loop 反幻觉纪律保持开放，区别于「已实现但 backlog 写保守」的项（已核实证据后闭合）。
 
 ## 迭代日志
+- 2026-06-27 #204: **谐波回测性能修复:build_setups 近窗 bound(O(n²)→O(n×300))+ 揭示残余 KNN 瓶颈**（ralph loop 续;Opus 发现即修）。
+  验证 #203(SFG 确认增益)时发现谐波回测在真实规模(1500bar×8币)跑不动:`build_setups(candles[:i+1])` 每个完成 bar 重算增长窗=O(n²),主因是其内部 `validate_direction`(KNN)对全窗算 10 个 SFG series。
+  修:谐波形态用**绝对价格**(D±1.5%/X失效位)非 candle 索引→build_setups 只需近窗算 KNN/ATR;harmonic_backtest 传 candles[i+1-300:i+1](_BT_WINDOW=300,覆盖暖机),entry_idx 仍用全表 i 供模拟。15回测测试全过=正确性不变。
+  诚实标注残余:KNN(≈随机无 edge)仍是每 setup 算 10 SFG series 的瓶颈;大规模回测可加 build_setups skip-KNN(KNN 对 setup 无 edge,#185-193)——留待下轮。全量2491 passed,86行≤800。
+  教训:验证一个 build(#203 SFG确认)时撞上更基础的性能问题(回测跑不动)——一个跑不动的回测=未完成的开发,先修地基再验上层。
+
 - 2026-06-27 #203: **充分使用 SFG(用户#):10 因子共识作谐波入场确认过滤器(非仅喂≈随机KNN)**（ralph loop 续;Opus build+待回测裁决）。
   用户指令"充分使用SFG"——原 SFG 10因子只喂 KNN(≈随机方向,无edge)。本轮让 SFG 产生真实价值:`sfg_consensus(candles)` 对全 10 因子(各[-1,1],reversal系与谐波反转对齐)
   做 nan-safe 共识 bias(零前视尾对齐);谐波回测 `--require-sfg`:仅当 SFG 共识与 setup 方向一致才入场。回测可对比 require_sfg on/off 是否提升谐波 edge(诚实:数据裁决,不预设)。
